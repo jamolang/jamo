@@ -1,16 +1,28 @@
-## Hi there 👋
+# Jamo
 
-<!--
-**jamolang/jamolang** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+Jamo is a small programming language for Windows, built for making real things.
+Its goal is simple: one download, code that's easy to read, and real `.exe` files.
 
-Here are some ideas to get you started:
+**Jamo is in early development and isn't ready to use yet.**
 
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: ...
--->
+## What it will look like
+
+    func add(a: int, b: int): int
+        return a + b
+    end
+
+    func main()
+        var total = add(2, 3)
+        print(total)
+    end
+
+This example shows the planned language. It doesn't run yet.
+
+## The plan
+
+- A compiler that writes real x86-64 Windows programs by itself
+- Strings, floats, arrays, structs, modules and files
+- Automatic memory cleanup
+- Clear error messages, a VS Code extension and a guide
+- Graphics, UI, sound and internet
+- A compiler written in Jamo itself
