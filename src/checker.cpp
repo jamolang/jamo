@@ -623,6 +623,7 @@ private:
         program.functions.push_back(std::move(copy));
         functions[name] = made;
         copy_of[made] = &pattern;
+        made_from[name] = {current ? current->name : "", spot};
         for (const Input& input : made->inputs) check_type_exists(input.type, spot);
         check_type_exists(made->return_type, spot);
         return made;
@@ -673,6 +674,13 @@ private:
             return Type::Unknown;
         }
         if (!types_given) {
+            // An input that gives back nothing can't tell what a type is, so that's the mistake to show
+            for (size_t i = 0; i < given.size(); i++) {
+                if (given[i] == Type::Nothing) {
+                    errors.add(expr.inputs[i]->spot, "This doesn't give back a value, so it can't be an input.");
+                    return Type::Unknown;
+                }
+            }
             for (size_t i = 0; i < given.size(); i++) work_out_types(pattern.inputs[i].type, given[i], params, found);
             for (size_t i = 0; i < params.size(); i++) {
                 if (found[i] != Type::Nothing) continue;
@@ -744,9 +752,7 @@ private:
 
     // A struct holding itself would need another inside that, forever. An array can start out empty, so it's fine
     void check_struct_isnt_endless(Type struct_type, const std::string& struct_name, Spot struct_spot) {
-        const Type decl_type = struct_type;
-        const std::string& decl_name = struct_name;
-        std::vector<Type> to_visit = {decl_type};
+        std::vector<Type> to_visit = {struct_type};
         std::vector<Type> visited;
         while (!to_visit.empty()) {
             const Type type = to_visit.back();
@@ -754,8 +760,8 @@ private:
             if (!program.types.is_struct(type) || std::find(visited.begin(), visited.end(), type) != visited.end()) continue;
             visited.push_back(type);
             for (const StructField& field : program.types.fields_of(type)) {
-                if (field.type == decl_type) {
-                    errors.add(struct_spot, decl_name + " can't contain itself, since each one would need another one inside it, forever.", "An array is fine, because it can be empty: [" + decl_name + "]");
+                if (field.type == struct_type) {
+                    errors.add(struct_spot, struct_name + " can't contain itself, since each one would need another one inside it, forever.", "An array is fine, because it can be empty: [" + struct_name + "]");
                     return;
                 }
                 to_visit.push_back(field.type);
@@ -796,6 +802,7 @@ private:
         }
         current = &function;
         user = function.name;
+        const size_t errors_before = errors.count();
         next_slot = 0;
         loops_open = 0;
         scopes.clear();
@@ -830,6 +837,26 @@ private:
         function.slot_count = next_slot;
         if (function.return_type != Type::Nothing && !always_returns(function.body)) {
             errors.add(function.spot, function.name + " must return " + with_article(function.return_type) + " on every path, but it can reach its end without one.", "Add a return before its end. A while doesn't count, and an if needs an else that returns too.");
+        }
+        if (copy_of.count(&function) && errors.count() > errors_before) point_at_use(function.name);
+    }
+
+    // A mistake inside a copy of a generic, maybe in a library, also points at the line in the program's own code
+    // that asked for it. A copy made by another copy follows that one back, until it reaches code that isn't a copy
+    void point_at_use(const std::string& name) {
+        std::string at = name;
+        for (int steps = 0; steps < MOST_GENERIC_COPIES; steps++) {
+            const auto found = made_from.find(at);
+            if (found == made_from.end()) return;
+            const auto maker = functions.find(found->second.first);
+            if (maker == functions.end() || !copy_of.count(maker->second)) {
+                if (std::find(pointed_at.begin(), pointed_at.end(), at) == pointed_at.end()) {
+                    pointed_at.push_back(at);
+                    errors.add(found->second.second, at + " doesn't work with these types, because of the mistake above.");
+                }
+                return;
+            }
+            at = found->second.first;
         }
     }
 
@@ -1738,6 +1765,8 @@ private:
     std::map<const Function*, const Function*> copy_of;  // Each copy's generic
     std::vector<const Function*> warned_patterns;
     int copies_made = 0;
+    std::map<std::string, std::pair<std::string, Spot>> made_from;  // Each copy: the function that asked for it, and where
+    std::vector<std::string> pointed_at;
     Function* setup = nullptr;                           // The function that sets up the variables outside functions
     std::deque<Variable> global_vars;
     std::map<std::string, size_t> global_places;         // The ones set up so far

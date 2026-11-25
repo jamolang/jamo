@@ -2,6 +2,13 @@
 
 What changed in each version of Jamo.
 
+## Not released yet
+
+- A mistake inside a generic copy also points at the line that asked for it, like `Map<float, int>.set doesn't work with these types, because of the mistake above.`, so a mistake inside a library says which line of the program caused it.
+- A generic call given an input that gives back nothing says so, instead of saying it can't work out the type.
+- `math.jamo` and `time.jamo` keep their state in variables outside functions, instead of a trick with the `.exe`'s header. Nothing changes for programs.
+- Review, second pass: 3,000 random programs checked against Python and 3,000 broken programs, with no crashes and the two compilers always agreeing. See REVIEW.md.
+
 ## 0.2.0
 
 - `jamo watch file.jamo` runs a program, then builds and runs it again each time one of its files is saved. A mistake shows straight away, and the last version that worked keeps running until it's fixed.

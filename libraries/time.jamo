@@ -1,15 +1,12 @@
 # time: seconds since the program started, today's date and time, and waiting. use "time.jamo"
 #
-# Jamo has no program-wide variables, so the clock count when the program started is kept in bytes 24
-# to 47 of the .exe's DOS header in memory, which Windows never reads once the program is loaded (see
-# math.jamo, which uses 8 to 23). The first call works it out from when Windows made the process, so
-# it counts from the real start, and later calls only read the performance counter, with no memory.
+# The performance counter's value when the program started is kept in time_start, and its speed in
+# time_speed. The first call works them out from when Windows made the process, so it counts from the
+# real start, and later calls only read the counter into time_reading, made once, so they need no memory.
 
 extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
 extern "kernel32.dll" func QueryPerformanceFrequency(place: int): bool
 extern "kernel32.dll" func Sleep(milliseconds: i32)
-extern "kernel32.dll" func GetModuleHandleW(name: int): int
-extern "kernel32.dll" func VirtualProtect(place: int, size: int, protect: i32, old: int): bool
 extern "kernel32.dll" func GetCurrentProcess(): int
 extern "kernel32.dll" func GetProcessTimes(process: int, created: int, ended: int, kernel: int, user: int): bool
 extern "kernel32.dll" func GetSystemTimePreciseAsFileTime(place: int)
@@ -28,34 +25,35 @@ end
 
 # --- Seconds ---
 
+var time_start = 0
+var time_speed = 0
+var time_reading = memory(8)
+
 # Works out the counter's value when the program started, on the first call. The counter's speed
-# never changes while Windows runs, so it's kept at 40, and 32 is room for the counter to write to
-func time_setup(header: int)
-    if not VirtualProtect(header, 64, 4, memory(8))
-        fail("time couldn't set up its clock.")
-    end
-    QueryPerformanceFrequency(header + 40)
+# never changes while Windows runs
+func time_setup()
+    QueryPerformanceFrequency(time_reading)
+    time_speed = peek_i64(time_reading, 0)
     var created = memory(8)
     var unused = memory(8)
     var clock = memory(8)
     GetProcessTimes(GetCurrentProcess(), created, unused, unused, unused)
     GetSystemTimePreciseAsFileTime(clock)
-    QueryPerformanceCounter(header + 32)
+    QueryPerformanceCounter(time_reading)
     var ticks = peek_i64(clock, 0) - peek_i64(created, 0)
     if ticks < 0
         ticks = 0
     end
-    poke_i64(header, 24, peek_i64(header, 32) - int(float(ticks) / 10000000.0 * float(peek_i64(header, 40))))
+    time_start = peek_i64(time_reading, 0) - int(float(ticks) / 10000000.0 * float(time_speed))
 end
 
 # Seconds since the program started, as a float with better than a microsecond's detail. It only goes up
 func seconds_since_start(): float
-    var header = GetModuleHandleW(0)
-    if peek_i64(header, 24) == 0
-        time_setup(header)
+    if time_speed == 0
+        time_setup()
     end
-    QueryPerformanceCounter(header + 32)
-    var seconds = float(peek_i64(header, 32) - peek_i64(header, 24)) / float(peek_i64(header, 40))
+    QueryPerformanceCounter(time_reading)
+    var seconds = float(peek_i64(time_reading, 0) - time_start) / float(time_speed)
     if seconds < 0.0
         return 0.0
     end

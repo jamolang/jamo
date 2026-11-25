@@ -1,0 +1,6 @@
+map.jamo (built in) line 32: hash_of takes an int, string, bool or enum, but this is a float.
+        var place = hash_of(key) % size
+                            ^^^
+generic_copy_points_at_use.jamo line 5: Map<float, int>.set doesn't work with these types, because of the mistake above.
+        prices.set(1.5, 3)
+        ^^^^^^^^^^^^^^^^^^

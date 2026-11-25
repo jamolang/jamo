@@ -176,3 +176,31 @@ The machine times are real. How long a person takes, reading the README and clic
 - SmartScreen's warning on a downloaded `.exe` can only be avoided with a paid code-signing certificate.
 - The end of input still looks like an empty line.
 
+# Jamo review, second pass
+
+A look at the compiler's own code, after a day that added generics, variables outside functions, `jamo watch` and new libraries. Written on 2026-11-25, while the user was away. The same caveat applies: Claude wrote most of this code, so this finds what tools and careful reading can find, not what a fresh pair of eyes would.
+
+## How it was checked
+
+- **Random programs with a Python twin** (measured): `_claude_tools/jamo_review/fuzz_programs.py` writes programs that mix variables outside functions, a generic `Box<T>` and `pick<T>`, loops with `continue` and `break`, `+=` and `-=`, and calls that change a variable outside functions in the middle of a sum. Each one is built by both compilers and with `--no-optimize`. 3,000 programs: every answer matched Python, the two compilers made the same `.exe` every time, and `--no-optimize` always agreed.
+- **Broken programs** (measured): `fuzz_checker.py` breaks the generics, globals and library tests at random (lines deleted, copied or swapped, types and names changed, brackets removed). 3,000 broken programs: neither compiler crashed, and the checker written in Jamo reported exactly what the C++ one did every time.
+- **Reading the new code** for cases the tests don't reach.
+
+## What was found and fixed
+
+| Found | Fixed |
+|---|---|
+| A mistake inside a generic copy pointed only inside the copy. With a library generic, like `new_map<float, int>()` (floats can't be keys), the only error was in `map.jamo`, saying nothing about which line of the program caused it | Such a mistake now also points at the program's own line: `Map<float, int>.set doesn't work with these types, because of the mistake above.` A copy made by another copy follows the chain back to the program's code. A new test pins it |
+| `math.jamo` and `time.jamo` kept their state in the `.exe`'s DOS header, unlocked with `VirtualProtect`, a trick that breaks if the compiler ever writes those bytes. It was there because Jamo had no variables outside functions | They use variables outside functions now. Same random numbers for a seed, and asking the time still needs no new memory |
+| Two library comments said Jamo has no program-wide variables | Updated |
+| A generic call given an input that gives back nothing, like `first(nothing())`, said it couldn't work out the type | It says the input gives back no value, like any other call. A new test pins it |
+| The C++ check for a struct holding itself renamed its inputs for no reason | Tidied |
+| (Found while building today) The C++ checker held a reference into the type table while checking a struct literal's values, which can add types and move the table | It copies the fields first |
+| (Found while building today) The last variable outside functions sat one word outside what the memory cleaner looks at, so its value could be freed | Fixed with a spare word, and a strict-cleaner test with 20,000 rounds of garbage guards it |
+
+## Still open
+
+- Errors inside a generic copy can repeat once for each copy that has them, though they point at the same line.
+- A generic that's never used isn't checked, so a typo in one only shows when something uses it, like in C++.
+- `f(a < b, c > (d))` reads as a call with types. It's documented, and the error gives a hint, but it can surprise.
+

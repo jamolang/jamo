@@ -1,0 +1,11 @@
+func first<T>(x: T): T
+    return x
+end
+
+func nothing()
+    print(1)
+end
+
+func main()
+    print(first(nothing()))
+end

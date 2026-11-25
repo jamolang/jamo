@@ -3341,10 +3341,7 @@ end
 )JAMOLIBRARY";
     if (name == "math.jamo") return R"JAMOLIBRARY(# math: square roots, angles, powers, rounding, smallest and largest, and random numbers. use "math.jamo"
 #
-# Jamo has no program-wide variables, so the random generator keeps its state in the .exe's own header
-# in memory: Jamo writes bytes 2 to 59 of the DOS header as zeros, and Windows never reads them once the
-# program is loaded. math uses bytes 8 to 23 (the state at 8, and 1 at 16 once it's seeded), and
-# time.jamo uses 24 to 47. That page is read-only at first, so the first write makes it writable.
+# The random generator keeps its state in math_state, and math_seeded says whether it has been seeded yet.
 #
 # The generator is a 64-bit LCG with Knuth's MMIX numbers, which wraps the way Jamo's ints do. Jamo has
 # no bit operators, so xorshift would be slow. An LCG's low bits repeat quickly, so only the top 32 bits
@@ -3357,8 +3354,6 @@ extern "msvcrt.dll" func tan(value: float): float
 extern "msvcrt.dll" func atan2(y: float, x: float): float
 extern "msvcrt.dll" func pow(base: float, power: float): float
 extern "msvcrt.dll" func fabs(value: float): float
-extern "kernel32.dll" func GetModuleHandleW(name: int): int
-extern "kernel32.dll" func VirtualProtect(place: int, size: int, protect: i32, old: int): bool
 extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
 extern "kernel32.dll" func GetCurrentProcessId(): i32
 
@@ -3486,22 +3481,13 @@ end
 
 # --- Random numbers ---
 
-func math_header(): int
-    return GetModuleHandleW(0)
-end
-
-func math_header_writable(header: int)
-    if not VirtualProtect(header, 64, 4, memory(8))
-        fail("math couldn't set up its random numbers.")
-    end
-end
+var math_state = 0
+var math_seeded = false
 
 # Starts the same numbers over again: the same seed always gives the same numbers
 func random_seed(seed: int)
-    var header = math_header()
-    math_header_writable(header)
-    poke_i64(header, 8, seed)
-    poke_i64(header, 16, 1)
+    math_state = seed
+    math_seeded = true
 end
 
 func math_seed_from_clock()
@@ -3524,13 +3510,11 @@ end
 
 # The generator's next 32 random bits
 func math_random_bits(): int
-    var header = math_header()
-    if peek_i64(header, 16) == 0
+    if not math_seeded
         math_seed_from_clock()
     end
-    var state = peek_i64(header, 8) * 6364136223846793005 + 1442695040888963407
-    poke_i64(header, 8, state)
-    return math_top_bits(state)
+    math_state = math_state * 6364136223846793005 + 1442695040888963407
+    return math_top_bits(math_state)
 end
 
 # A whole number from low to high, both included. Every number is equally likely
@@ -6239,16 +6223,13 @@ end
 )JAMOLIBRARY";
     if (name == "time.jamo") return R"JAMOLIBRARY(# time: seconds since the program started, today's date and time, and waiting. use "time.jamo"
 #
-# Jamo has no program-wide variables, so the clock count when the program started is kept in bytes 24
-# to 47 of the .exe's DOS header in memory, which Windows never reads once the program is loaded (see
-# math.jamo, which uses 8 to 23). The first call works it out from when Windows made the process, so
-# it counts from the real start, and later calls only read the performance counter, with no memory.
+# The performance counter's value when the program started is kept in time_start, and its speed in
+# time_speed. The first call works them out from when Windows made the process, so it counts from the
+# real start, and later calls only read the counter into time_reading, made once, so they need no memory.
 
 extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
 extern "kernel32.dll" func QueryPerformanceFrequency(place: int): bool
 extern "kernel32.dll" func Sleep(milliseconds: i32)
-extern "kernel32.dll" func GetModuleHandleW(name: int): int
-extern "kernel32.dll" func VirtualProtect(place: int, size: int, protect: i32, old: int): bool
 extern "kernel32.dll" func GetCurrentProcess(): int
 extern "kernel32.dll" func GetProcessTimes(process: int, created: int, ended: int, kernel: int, user: int): bool
 extern "kernel32.dll" func GetSystemTimePreciseAsFileTime(place: int)
@@ -6267,34 +6248,35 @@ end
 
 # --- Seconds ---
 
+var time_start = 0
+var time_speed = 0
+var time_reading = memory(8)
+
 # Works out the counter's value when the program started, on the first call. The counter's speed
-# never changes while Windows runs, so it's kept at 40, and 32 is room for the counter to write to
-func time_setup(header: int)
-    if not VirtualProtect(header, 64, 4, memory(8))
-        fail("time couldn't set up its clock.")
-    end
-    QueryPerformanceFrequency(header + 40)
+# never changes while Windows runs
+func time_setup()
+    QueryPerformanceFrequency(time_reading)
+    time_speed = peek_i64(time_reading, 0)
     var created = memory(8)
     var unused = memory(8)
     var clock = memory(8)
     GetProcessTimes(GetCurrentProcess(), created, unused, unused, unused)
     GetSystemTimePreciseAsFileTime(clock)
-    QueryPerformanceCounter(header + 32)
+    QueryPerformanceCounter(time_reading)
     var ticks = peek_i64(clock, 0) - peek_i64(created, 0)
     if ticks < 0
         ticks = 0
     end
-    poke_i64(header, 24, peek_i64(header, 32) - int(float(ticks) / 10000000.0 * float(peek_i64(header, 40))))
+    time_start = peek_i64(time_reading, 0) - int(float(ticks) / 10000000.0 * float(time_speed))
 end
 
 # Seconds since the program started, as a float with better than a microsecond's detail. It only goes up
 func seconds_since_start(): float
-    var header = GetModuleHandleW(0)
-    if peek_i64(header, 24) == 0
-        time_setup(header)
+    if time_speed == 0
+        time_setup()
     end
-    QueryPerformanceCounter(header + 32)
-    var seconds = float(peek_i64(header, 32) - peek_i64(header, 24)) / float(peek_i64(header, 40))
+    QueryPerformanceCounter(time_reading)
+    var seconds = float(peek_i64(time_reading, 0) - time_start) / float(time_speed)
     if seconds < 0.0
         return 0.0
     end

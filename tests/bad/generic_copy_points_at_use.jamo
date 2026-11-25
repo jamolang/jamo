@@ -1,0 +1,7 @@
+use "map.jamo"
+
+func main()
+    var prices = new_map<float, int>()
+    prices.set(1.5, 3)
+    print(prices.get(1.5))
+end

@@ -1,0 +1,3 @@
+generic_input_gives_nothing.jamo line 10: This doesn't give back a value, so it can't be an input.
+        print(first(nothing()))
+                    ^^^^^^^^^

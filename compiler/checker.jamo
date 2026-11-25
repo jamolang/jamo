@@ -62,6 +62,13 @@ struct Checker
     warned_patterns: [int]
     copies_made: int
     quiet: bool
+    made_from: Dict
+    made_by: [string]
+    made_lines: [int]
+    made_columns: [int]
+    made_lengths: [int]
+    made_files: [int]
+    pointed_at: [string]
     global_vars: [Variable]
     global_places: Dict
     global_order: Dict
@@ -203,7 +210,7 @@ end
 # --- Starting ---
 
 func check_program(program: Program, errors: Errors)
-    var c = Checker{program: program, errors: errors, names: new_dict(), claims: [], function_places: new_dict(), function_list: [], constants: new_dict(), constant_state: new_dict(), structs: new_dict(), enums: new_dict(), scopes: [], current: new_function(), next_slot: 0, loops_open: 0, generic_structs: new_dict(), generic_functions: new_dict(), generic_methods: new_dict(), generic_list: [], copy_of: new_dict(), warned_patterns: [], copies_made: 0, quiet: false, global_vars: [], global_places: new_dict(), global_order: new_dict(), setting_up: -1, user: "", calls_by: new_dict(), call_lists: [], reads_by: new_dict(), read_lists: []}
+    var c = Checker{program: program, errors: errors, names: new_dict(), claims: [], function_places: new_dict(), function_list: [], constants: new_dict(), constant_state: new_dict(), structs: new_dict(), enums: new_dict(), scopes: [], current: new_function(), next_slot: 0, loops_open: 0, generic_structs: new_dict(), generic_functions: new_dict(), generic_methods: new_dict(), generic_list: [], copy_of: new_dict(), warned_patterns: [], copies_made: 0, quiet: false, made_from: new_dict(), made_by: [], made_lines: [], made_columns: [], made_lengths: [], made_files: [], pointed_at: [], global_vars: [], global_places: new_dict(), global_order: new_dict(), setting_up: -1, user: "", calls_by: new_dict(), call_lists: [], reads_by: new_dict(), read_lists: []}
     c.check()
 end
 
@@ -1082,6 +1089,12 @@ func Checker.make_generic_copy(pattern_place: int, args: [int], name: string, li
     self.function_places.set(name, len(self.function_list))
     self.function_list.add(made)
     self.copy_of.set(name, pattern_place)
+    self.made_from.set(name, len(self.made_by))
+    self.made_by.add(self.current.name)
+    self.made_lines.add(line)
+    self.made_columns.add(column)
+    self.made_lengths.add(length)
+    self.made_files.add(file)
     for input in made.inputs
         self.check_type_exists(input.type, line, column, length, file)
     end
@@ -1148,6 +1161,13 @@ func Checker.check_generic_call(place: int, pattern_place: int): int
         return TYPE_UNKNOWN
     end
     if not types_given
+        # An input that gives back nothing can't tell what a type is, so that's the mistake to show
+        for i in 0..len(given)
+            if given[i] == TYPE_NOTHING
+                self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't be an input.", "")
+                return TYPE_UNKNOWN
+            end
+        end
         for i in 0..len(given)
             self.work_out_types(pattern.inputs[i].type, given[i], params, found)
         end
@@ -1327,6 +1347,7 @@ func Checker.check_function(function: Function)
     end
     self.current = function
     self.user = function.name
+    var errors_before = self.errors.count()
     self.next_slot = 0
     self.loops_open = 0
     self.scopes = [new_scope()]
@@ -1368,6 +1389,33 @@ func Checker.check_function(function: Function)
     function.slot_count = self.next_slot
     if function.return_type != TYPE_NOTHING and not self.always_returns(function.body)
         self.add(function.line, function.column, function.length, function.file, function.name + " must return " + self.with_article(function.return_type) + " on every path, but it can reach its end without one.", "Add a return before its end. A while doesn't count, and an if needs an else that returns too.")
+    end
+    if self.copy_of.has(function.name) and self.errors.count() > errors_before
+        self.point_at_use(function.name)
+    end
+end
+
+# A mistake inside a copy of a generic, maybe in a library, also points at the line in the program's own code
+# that asked for it. A copy made by another copy follows that one back, until it reaches code that isn't a copy
+func Checker.point_at_use(name: string)
+    var at = name
+    for steps in 0..MOST_GENERIC_COPIES
+        if not self.made_from.has(at)
+            return
+        end
+        var place = self.made_from.get(at)
+        var maker = self.made_by[place]
+        if not self.has_function(maker) or not self.copy_of.has(maker)
+            for done in self.pointed_at
+                if done == at
+                    return
+                end
+            end
+            self.pointed_at.add(at)
+            self.add(self.made_lines[place], self.made_columns[place], self.made_lengths[place], self.made_files[place], at + " doesn't work with these types, because of the mistake above.", "")
+            return
+        end
+        at = maker
     end
 end
 

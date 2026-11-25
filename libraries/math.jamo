@@ -1,9 +1,6 @@
 # math: square roots, angles, powers, rounding, smallest and largest, and random numbers. use "math.jamo"
 #
-# Jamo has no program-wide variables, so the random generator keeps its state in the .exe's own header
-# in memory: Jamo writes bytes 2 to 59 of the DOS header as zeros, and Windows never reads them once the
-# program is loaded. math uses bytes 8 to 23 (the state at 8, and 1 at 16 once it's seeded), and
-# time.jamo uses 24 to 47. That page is read-only at first, so the first write makes it writable.
+# The random generator keeps its state in math_state, and math_seeded says whether it has been seeded yet.
 #
 # The generator is a 64-bit LCG with Knuth's MMIX numbers, which wraps the way Jamo's ints do. Jamo has
 # no bit operators, so xorshift would be slow. An LCG's low bits repeat quickly, so only the top 32 bits
@@ -16,8 +13,6 @@ extern "msvcrt.dll" func tan(value: float): float
 extern "msvcrt.dll" func atan2(y: float, x: float): float
 extern "msvcrt.dll" func pow(base: float, power: float): float
 extern "msvcrt.dll" func fabs(value: float): float
-extern "kernel32.dll" func GetModuleHandleW(name: int): int
-extern "kernel32.dll" func VirtualProtect(place: int, size: int, protect: i32, old: int): bool
 extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
 extern "kernel32.dll" func GetCurrentProcessId(): i32
 
@@ -145,22 +140,13 @@ end
 
 # --- Random numbers ---
 
-func math_header(): int
-    return GetModuleHandleW(0)
-end
-
-func math_header_writable(header: int)
-    if not VirtualProtect(header, 64, 4, memory(8))
-        fail("math couldn't set up its random numbers.")
-    end
-end
+var math_state = 0
+var math_seeded = false
 
 # Starts the same numbers over again: the same seed always gives the same numbers
 func random_seed(seed: int)
-    var header = math_header()
-    math_header_writable(header)
-    poke_i64(header, 8, seed)
-    poke_i64(header, 16, 1)
+    math_state = seed
+    math_seeded = true
 end
 
 func math_seed_from_clock()
@@ -183,13 +169,11 @@ end
 
 # The generator's next 32 random bits
 func math_random_bits(): int
-    var header = math_header()
-    if peek_i64(header, 16) == 0
+    if not math_seeded
         math_seed_from_clock()
     end
-    var state = peek_i64(header, 8) * 6364136223846793005 + 1442695040888963407
-    poke_i64(header, 8, state)
-    return math_top_bits(state)
+    math_state = math_state * 6364136223846793005 + 1442695040888963407
+    return math_top_bits(math_state)
 end
 
 # A whole number from low to high, both included. Every number is equally likely
