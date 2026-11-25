@@ -182,7 +182,7 @@ A look at the compiler's own code, after a day that added generics, variables ou
 
 ## How it was checked
 
-- **Random programs with a Python twin** (measured): `_claude_tools/jamo_review/fuzz_programs.py` writes programs that mix variables outside functions, a generic `Box<T>` and `pick<T>`, loops with `continue` and `break`, `+=` and `-=`, and calls that change a variable outside functions in the middle of a sum. Each one is built by both compilers and with `--no-optimize`. 3,000 programs: every answer matched Python, the two compilers made the same `.exe` every time, and `--no-optimize` always agreed.
+- **Random programs with a Python twin** (measured): `tests/fuzz/fuzz_programs.py` writes programs that mix variables outside functions, a generic `Box<T>` and `pick<T>`, loops with `continue` and `break`, `+=` and `-=`, and calls that change a variable outside functions in the middle of a sum. Each one is built by both compilers and with `--no-optimize`. 3,000 programs: every answer matched Python, the two compilers made the same `.exe` every time, and `--no-optimize` always agreed.
 - **Broken programs** (measured): `fuzz_checker.py` breaks the generics, globals and library tests at random (lines deleted, copied or swapped, types and names changed, brackets removed). 3,000 broken programs: neither compiler crashed, and the checker written in Jamo reported exactly what the C++ one did every time.
 - **Reading the new code** for cases the tests don't reach.
 
