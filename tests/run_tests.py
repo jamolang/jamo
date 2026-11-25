@@ -4109,6 +4109,50 @@ def json_cases(rng):
 
 
 # --- The other commands ---
+# --- jamo watch: builds and runs again on each change, and keeps the last working version on a mistake ---
+def test_watch(work):
+    folder = work / "watch test"
+    folder.mkdir()
+    main = folder / "main.jamo"
+    part = folder / "part.jamo"
+    log = folder / "log.txt"
+    part.write_text('func word(): string\n    return "one"\nend\n', encoding="utf-8")
+    main.write_text('use "part.jamo"\n\nfunc main()\n    print("v1 " + word())\nend\n', encoding="utf-8")
+    with log.open("wb") as out:
+        watcher = subprocess.Popen([str(JAMO), "watch", str(main)], stdout=out, stderr=subprocess.STDOUT, cwd=folder)
+
+    def wait_for(words, seconds=20):
+        end = time.time() + seconds
+        while time.time() < end:
+            if words in log.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n"):
+                return True
+            time.sleep(0.1)
+        return False
+
+    def change(path, text):
+        time.sleep(0.6)
+        path.write_text(text, encoding="utf-8")
+
+    try:
+        report("watch runs the program", wait_for("v1 one"))
+        report("watch says when the program finished", wait_for("(It finished with exit code 0. Waiting for a change.)"))
+        change(main, 'use "part.jamo"\n\nfunc main()\n    print("v2 " + word())\nend\n')
+        report("watch builds and runs again on a change", wait_for("v2 one"))
+        change(part, 'func word(): string\n    return "two"\nend\n')
+        report("watch notices a change in a file the program uses", wait_for("v2 two"))
+        change(main, 'func main()\n    print("looping")\n    var n = 0\n    while true\n        n += 1\n    end\nend\n')
+        report("watch starts a program that keeps going", wait_for("looping"))
+        change(main, 'func main()\n    print(nope)\nend\n')
+        report("watch shows a mistake and keeps the last working version", wait_for("nothing has this name: nope") and wait_for("The last version that worked is still running."))
+        running = subprocess.run(["tasklist", "/fi", "imagename eq main.exe"], capture_output=True, text=True).stdout
+        report("the last working version really is still running", "main.exe" in running, running)
+        change(main, 'func main()\n    print("fixed")\nend\n')
+        report("watch stops the old one and runs the fixed one", wait_for("fixed"))
+    finally:
+        subprocess.run(["taskkill", "/f", "/t", "/pid", str(watcher.pid)], capture_output=True)
+        subprocess.run(["taskkill", "/f", "/im", "main.exe"], capture_output=True)
+
+
 def test_commands(work):
     folder = work / "windows words"
     folder.mkdir()
@@ -5129,6 +5173,7 @@ def main():
         test_cleaner_modes(work)
         test_cleaner_long_runs(work)
         test_commands(work)
+        test_watch(work)
         test_gfx(work)
         test_sound(work)
         test_ui(work)

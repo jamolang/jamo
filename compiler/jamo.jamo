@@ -20,12 +20,14 @@ extern "kernel32.dll" func WaitForSingleObject(handle: int, milliseconds: i32): 
 extern "kernel32.dll" func GetExitCodeProcess(process: int, code: int): bool
 extern "kernel32.dll" func GetLastError(): i32
 extern "kernel32.dll" func Sleep(milliseconds: i32)
+extern "kernel32.dll" func TerminateProcess(process: int, code: i32): bool
+extern "kernel32.dll" func GetFileAttributesExW(name: int, level: i32, data: int): bool
 
 const FAILED = 1
 const CLEANER_CHECKS = 2
 const CLEANER_OFF = 4
-const VERSION = "0.1.0"
-const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
+const VERSION = "0.2.0"
+const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
 # The game jamo new --game starts from: a player that moves, a coin to catch, and a score
 const NEW_GAME = "use \"gfx.jamo\"\nuse \"math.jamo\"\n\nconst WIDTH = 640\nconst HEIGHT = 480\nconst SIZE = 32.0\nconst SPEED = 4.0\n\n# Everything the game keeps track of lives in one struct, passed to the functions that need it\nstruct Game\n    x: float\n    y: float\n    coin_x: float\n    coin_y: float\n    score: int\nend\n\nfunc Game.move(window: Window)\n    if window.key_down(\"left\")\n        self.x -= SPEED\n    end\n    if window.key_down(\"right\")\n        self.x += SPEED\n    end\n    if window.key_down(\"up\")\n        self.y -= SPEED\n    end\n    if window.key_down(\"down\")\n        self.y += SPEED\n    end\n    self.x = clamp(self.x, 0.0, float(WIDTH) - SIZE)\n    self.y = clamp(self.y, 0.0, float(HEIGHT) - SIZE)\nend\n\n# Touching the coin scores a point, and the coin jumps somewhere new\nfunc Game.catch_coin()\n    if abs(self.x + SIZE / 2.0 - self.coin_x) < 24.0 and abs(self.y + SIZE / 2.0 - self.coin_y) < 24.0\n        self.score += 1\n        self.coin_x = 20.0 + random_float() * float(WIDTH - 40)\n        self.coin_y = 60.0 + random_float() * float(HEIGHT - 80)\n    end\nend\n\nfunc Game.draw(screen: Gfx)\n    screen.clear(rgb(24, 28, 44))\n    screen.circle(self.coin_x, self.coin_y, 10.0, rgb(255, 210, 60))\n    screen.rect(self.x, self.y, SIZE, SIZE, rgb(90, 200, 255))\n    screen.text(f\"Coins: {self.score}\", 16.0, 16.0, 24.0, rgb(255, 255, 255))\nend\n\nfunc main()\n    var window = open_window(\"My game\", WIDTH, HEIGHT)\n    var screen = start_gfx(window)\n    var game = Game{x: 300.0, y: 220.0, coin_x: 120.0, coin_y: 120.0, score: 0}\n    while window.is_open()\n        if window.key_pressed(\"escape\")\n            window.close()\n        end\n        game.move(window)\n        game.catch_coin()\n        game.draw(screen)\n        screen.show()\n        window.wait_frame(60)\n    end\nend\n"
 const NEW_PROGRAM = "func main()\n    print(\"Hello from Jamo!\")\nend\n"
@@ -40,6 +42,9 @@ const PROCESS_INFO_SIZE = 24
 const WAIT_FOREVER = -1
 const RENAME_ATTEMPTS = 20
 const RENAME_WAIT_MS = 50
+const WATCH_WAIT_MS = 250
+const WATCH_SETTLE_MS = 150
+const FILE_DATA_SIZE = 40
 
 # --- Writing ---
 
@@ -138,6 +143,11 @@ func build(source_path: string, cleaner_mode: int): string
     if not load_and_check(source_path, program)
         return ""
     end
+    return write_program(program, source_path, cleaner_mode)
+end
+
+# Writes the .exe for a program that's already checked, and answers its path, or nothing if it can't
+func write_program(program: Program, source_path: string, cleaner_mode: int): string
     var exe = build_exe(generate_code(program, file_name(source_path), cleaner_mode))
     var exe_path = slice(source_path, 0, len(source_path) - len(".jamo")) + ".exe"
     if not write_exe(exe_path, exe)
@@ -169,6 +179,27 @@ func add_to_command(command: string, input: string): string
     end
     out += repeat("\\", backslashes * 2)
     return out + "\""
+end
+
+# Starts the program without waiting for it. Answers its process, or 0 if Windows wouldn't start it
+func start_program(exe_path: string, inputs: [string]): int
+    var full = full_path(exe_path)
+    if full == ""
+        full = exe_path
+    end
+    var command = "\"" + full + "\""
+    for input in inputs
+        command = add_to_command(command, input)
+    end
+    var startup = memory(STARTUP_INFO_SIZE)
+    poke_i32(startup, 0, STARTUP_INFO_SIZE)
+    var process = memory(PROCESS_INFO_SIZE)
+    if not CreateProcessW(0, wide(command), 0, 0, true, 0, 0, 0, startup, process)
+        complain(f"I built {exe_path}, but Windows wouldn't start it (error {GetLastError()}).\n")
+        return 0
+    end
+    CloseHandle(peek_i64(process, 8))
+    return peek_i64(process, 0)
 end
 
 func run(exe_path: string, inputs: [string]): int
@@ -226,6 +257,81 @@ func make_new_program(folder: string, game: bool): int
     say("Made " + main_file + "\nRun it with: jamo run \"" + main_file + "\"\n")
     if game
         say("When it's ready to share: jamo build --window \"" + main_file + "\"\n")
+    end
+    return 0
+end
+
+# --- jamo watch ---
+
+# How the program's own files look now: each one's last change and size. Built-in libraries never change
+func files_now(main_file: string, names: [string]): string
+    var root = parent_path(canonical_path(main_file))
+    var paths = [main_file]
+    for name in names
+        if not ends_with(name, " (built in)")
+            paths.add(join_path(root, name))
+        end
+    end
+    var out = ""
+    var data = memory(FILE_DATA_SIZE)
+    for path in paths
+        if not GetFileAttributesExW(wide(path), 0, data)
+            out = out + "missing;"
+            continue
+        end
+        var high = peek_i32(data, 24)
+        var low = peek_i32(data, 20)
+        out = out + string(high) + ":" + string(low) + ":" + string(peek_i32(data, 32)) + ";"
+    end
+    return out
+end
+
+func stop_program(running: int)
+    if running == 0
+        return
+    end
+    TerminateProcess(running, FAILED)
+    WaitForSingleObject(running, WAIT_FOREVER)
+    CloseHandle(running)
+end
+
+# Builds and runs the program, then again each time one of its files changes. A build with mistakes shows
+# them and leaves the last version that worked running, since its .exe is only replaced once the code checks out
+func watch(main_file: string, cleaner_mode: int, inputs: [string]): int
+    say("Watching " + main_file + ". Save a change to build and run it again, and press Ctrl+C to stop.\n")
+    var running = 0
+    var told_end = true
+    while true
+        var program = new_program()
+        var checked = load_and_check(main_file, program)
+        var seen = files_now(main_file, program.file_names)
+        if checked
+            stop_program(running)
+            running = 0
+            var exe_path = write_program(program, main_file, cleaner_mode)
+            if exe_path != ""
+                running = start_program(exe_path, inputs)
+                told_end = running == 0
+            end
+        elif running != 0 and not told_end
+            say("The last version that worked is still running.\n")
+        end
+        while true
+            Sleep(WATCH_WAIT_MS)
+            if running != 0 and not told_end and WaitForSingleObject(running, 0) == 0
+                var exit_code = memory(8)
+                poke_i32(exit_code, 0, FAILED)
+                GetExitCodeProcess(running, exit_code)
+                say("(It finished with exit code " + string(peek_i32(exit_code, 0)) + ". Waiting for a change.)\n")
+                told_end = true
+            end
+            if files_now(main_file, program.file_names) != seen
+                break
+            end
+        end
+        # An editor can save a file in more than one step, so this waits for it to finish
+        Sleep(WATCH_SETTLE_MS)
+        say("\n(A file changed, so it's building again.)\n")
     end
     return 0
 end
@@ -295,9 +401,16 @@ func command_answer(words: [string]): int
         end
         first += 1
     end
-    if first >= count or (first + 1 < count and command != "run")
+    if first >= count or (first + 1 < count and command != "run" and command != "watch")
         complain(USAGE)
         return FAILED
+    end
+    if command == "watch"
+        var watch_inputs: [string] = []
+        for i in first..len(words)
+            watch_inputs.add(words[i])
+        end
+        return watch(words[first - 1], cleaner_mode, watch_inputs)
     end
     if command != "build" and command != "run"
         complain(USAGE)

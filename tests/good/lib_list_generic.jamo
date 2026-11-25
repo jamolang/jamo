@@ -1,0 +1,57 @@
+# list.jamo's tools for every kind of array, and math.jamo's pick and shuffle
+use "list.jamo"
+use "math.jamo"
+use "text.jamo"
+
+enum Suit
+    HEARTS
+    SPADES
+end
+
+func main()
+    var numbers = [5, 3, 5, 9]
+    print(has_item(numbers, 9))
+    print(has_item(numbers, 4))
+    print(find_item(numbers, 5))
+    print(find_item(numbers, 4))
+    print(count_item(numbers, 5))
+    print(reversed(numbers))
+    print(numbers)
+    swap_items(numbers, 0, 3)
+    print(numbers)
+    print(last_item(numbers))
+    var suits = [Suit.SPADES, Suit.HEARTS, Suit.SPADES]
+    print(count_item(suits, Suit.SPADES))
+    print(find_item(["a", "b"], "b"))
+    print(reversed([1.5, 2.5]))
+    var empty: [string] = []
+    print(reversed(empty))
+    random_seed(7)
+    var deck: [int] = []
+    for i in 0..52
+        deck.add(i)
+    end
+    shuffle(deck)
+    var same = 0
+    for i in 0..52
+        if deck[i] == i
+            same += 1
+        end
+    end
+    print(same < 52)
+    sort_ints(deck)
+    var back = true
+    for i in 0..52
+        back = back and deck[i] == i
+    end
+    print(back)
+    var picked_all = true
+    for i in 0..200
+        picked_all = picked_all and has_item(numbers, pick(numbers))
+    end
+    print(picked_all)
+    var one = [8]
+    shuffle(one)
+    print(one)
+    print(pick(one))
+end

@@ -223,3 +223,25 @@ func random_float(): float
     var bits = math_random_bits() * 2097152 + math_random_bits() / 2048
     return float(bits) / 9007199254740992.0
 end
+
+# --- Random items ---
+
+# One item, picked at random
+func pick<T>(items: [T]): T
+    if len(items) == 0
+        fail("pick needs an array with something in it, but this one is empty.")
+    end
+    return items[random_int(0, len(items) - 1)]
+end
+
+# Puts the items in a random order, in place, with every order as likely (Fisher-Yates)
+func shuffle<T>(items: [T])
+    var i = len(items) - 1
+    while i > 0
+        var other = random_int(0, i)
+        var keep = items[i]
+        items[i] = items[other]
+        items[other] = keep
+        i -= 1
+    end
+end

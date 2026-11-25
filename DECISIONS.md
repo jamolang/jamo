@@ -126,7 +126,7 @@ Each important choice about Jamo, and why it was made. Newest first.
 - **Warnings never show for the built-in libraries.** They're tested already.
 
 - **Added `\r`, though the spec listed no new features for Phase 4.** The user chose this after the clean PC test showed programs couldn't handle Windows line endings in files.
-- **The version is 0.1.0 until the first public release.**
+- **The version was 0.1.0 until the first release.** 0.2.0 (2026-11-25) added jamo watch, the _or functions, list tools for every type and Snake.
 - **Warnings don't stop a build, and they only show when there are no errors.** Errors matter first, and warnings about half-broken code are often wrong.
 - **Only a `var` gets the unused warning.** Inputs and loop variables are often left unused on purpose.
 - **After a syntax mistake, the compiler carries on from the next line, but only checks types if the structure was clean.** A broken structure would cause a flood of follow-on errors.

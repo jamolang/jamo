@@ -19,5 +19,9 @@ func main()
         end
     end
     print(primes)
-    print(f"Found {len(primes)} primes.")
+    if len(primes) == 1
+        print("Found 1 prime.")
+    else
+        print(f"Found {len(primes)} primes.")
+    end
 end

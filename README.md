@@ -145,11 +145,11 @@ end
 
 ## What's in the box
 
-The [examples](examples) folder has twelve programs to play with and change:
+The [examples](examples) folder has thirteen programs to play with and change:
 
 | In the console | In a window |
 |---|---|
-| Guessing game, calculator, to-do list | Breakout (with sound) |
+| Guessing game, calculator, to-do list | Breakout (with sound) and Snake |
 | Text adventure, word counter, prime finder | Bouncing balls |
 | Lunar lander, web page fetcher | A sign-up form, a spinning 3D scene |
 
@@ -164,9 +164,9 @@ And these libraries come built in. Write `use "name.jamo"` at the top of a file 
 | `vec`, `grid`, `timer` | Game helpers: 2D points and directions, boards and tile maps, cooldowns and repeating timers |
 | `net` | Web requests, and links between programs for multiplayer |
 | `math`, `time` | Square roots, angles, random numbers, the clock and waiting |
-| `map`, `dict`, `list` | Looking things up by key, and working with arrays |
+| `map`, `dict`, `list` | Looking things up by key, and arrays: finding, counting, reversing, shuffling and picking items of any type |
 | `text`, `builder`, `json`, `bytes` | Working with text, JSON files and binary data |
-| `files`, `term`, `log`, `test` | Folders and files, colors in the console, log files, and checking your own code |
+| `files`, `term`, `log`, `test` | Folders and files (with `read_file_or` that never stops the program), colors in the console, log files, and checking your own code |
 | `png` | Saving images |
 
 ## The language at a glance
@@ -213,6 +213,7 @@ The compiler is written in Jamo too. A second copy written in C++ lives in [src]
 | Command | What it does |
 |---|---|
 | `jamo run file.jamo` | Builds the program and runs it. Anything after the file goes to the program |
+| `jamo watch file.jamo` | Runs it, then builds and runs it again every time you save. A mistake shows straight away, and the last version that worked keeps running |
 | `jamo build file.jamo` | Writes `file.exe` beside the code |
 | `jamo build --window file.jamo` | Writes a window program with no console, for sharing games |
 | `jamo check file.jamo` | Finds mistakes without making an `.exe` |
@@ -221,13 +222,13 @@ The compiler is written in Jamo too. A second copy written in C++ lives in [src]
 
 ## VS Code
 
-The [vscode](vscode) folder holds an extension that colors Jamo code and underlines mistakes in red as you type. `python vscode/make_vsix.py` packs it into one file, and `code --install-extension vscode/jamo.vsix` installs it.
+The extension colors Jamo code and underlines mistakes in red as you type. Download `jamo.vsix` from the **Releases** page, then in VS Code open the Extensions panel, click the `...` menu at its top, and choose **Install from VSIX**. Its source is in the [vscode](vscode) folder, and `python vscode/make_vsix.py` builds it.
 
 ## What Jamo can't do yet
 
 - It only runs on Windows.
 - Functions can't be passed around as values yet.
-- There's no way to catch an error yourself: a missing file or a bad number stops the program, so check with `exists` or `is_int` first.
+- There's no way to catch an error yourself yet. For the common cases, `read_file_or`, `try_write_file`, `int_or` and `float_or` give a fallback instead of stopping.
 - There are no add-on packages to download yet.
 
 The end of the [guide](GUIDE.md#what-jamo-cant-do-yet) has the full list.

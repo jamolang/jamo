@@ -26,6 +26,8 @@ Hello!
 
 Every program starts at `main`. `print` shows a value and starts a new line. `end` closes what `func` opened.
 
+While you're working on a program, `jamo watch hello.jamo` runs it, then builds and runs it again every time you save. A mistake shows up straight away, and the last version that worked keeps running until it's fixed. Press Ctrl+C to stop watching.
+
 **Try it:** make it print your name on a second line.
 
 ## 2. Values and variables
@@ -493,6 +495,29 @@ lots
 How many lives?
 lots isn't a whole number
 ```
+
+Or, when a fallback is all you need, the `_or` versions never stop the program. `int_or` and `float_or` are in `text.jamo`, and `read_file_or` and `try_write_file` in `files.jamo`:
+
+```jamo
+use "text.jamo"
+use "files.jamo"
+
+func main()
+    var lives = int_or("lots", 3)
+    print(lives)
+    var saved = read_file_or("no save yet.txt", "new game")
+    print(saved)
+    print(try_write_file("no such folder\\save.txt", "level 2"))
+end
+```
+
+```output
+3
+new game
+false
+```
+
+`read_file_or` gives the fallback when the file is missing, is a folder or is in use, and `try_write_file` answers `false` instead of stopping.
 
 `args()` gives you anything typed after the program's name, as an array of strings.
 
@@ -1089,7 +1114,7 @@ When someone downloads an `.exe` from the internet, Windows may show "Windows pr
 
 These come with Jamo too. Each is one `use` line away.
 
-`list.jamo` finds, puts in and takes out items. Jamo has no way to write one function for every kind of array, so each comes in an int and a string version:
+`list.jamo` finds, puts in and takes out items. These came first, so they come in an int and a string version:
 
 ```jamo
 use "list.jamo"
@@ -1110,6 +1135,43 @@ true
 30
 [99, 10, 20]
 ```
+
+And these work on every kind of array, since they're generics (section 26). `pick` and `shuffle` are in `math.jamo`, next to the other random things:
+
+```jamo
+use "list.jamo"
+use "math.jamo"
+
+enum Fruit
+    APPLE
+    PEAR
+end
+
+func main()
+    var basket = [Fruit.PEAR, Fruit.APPLE, Fruit.PEAR]
+    print(has_item(basket, Fruit.APPLE))
+    print(find_item(basket, Fruit.APPLE))
+    print(count_item(basket, Fruit.PEAR))
+    print(reversed([1.5, 2.5, 3.5]))
+    print(last_item(["a", "b", "c"]))
+    var deck = [1, 2, 3, 4]
+    shuffle(deck)
+    print(len(deck))
+    print(has_item(deck, pick(deck)))
+end
+```
+
+```output
+true
+1
+2
+[3.5, 2.5, 1.5]
+c
+4
+true
+```
+
+`swap_items(items, a, b)` swaps two places too.
 
 `files.jamo` works with folders: `make_folder`, `list_files`, `is_folder`, `file_size`, `copy_file`, `move_file`, `delete_file` and `delete_folder`, and paths: `path_join`, `path_name`, `path_folder`, `path_ending` and `current_folder`. The ones that change things answer `true` when they worked, so a program can carry on when one doesn't:
 
@@ -1395,7 +1457,7 @@ Try it: make a 10 by 10 `Grid<bool>`, set a few cells to `true`, and print how m
 Jamo is young, so it's better to know this up front:
 
 - It only runs on Windows.
-- There's no way to handle errors yourself. A bad number or a missing file stops the program, so check with `exists`, `is_int` or `is_float` first.
+- There's no way to handle errors yourself yet. A bad number or a missing file stops the program, so check with `exists`, `is_int` or `is_float` first, or use `int_or`, `float_or`, `read_file_or` and `try_write_file` (section 11).
 - Only arrays of ints and strings can be sorted, searched and changed with `list.jamo` and `text.jamo`. Arrays of other things need a loop of your own.
 - The text tools treat text as bytes, and only change English letters to capitals and back.
 - Non-English text can look garbled in a console window, though files get it exactly right.
@@ -1403,4 +1465,4 @@ Jamo is young, so it's better to know this up front:
 
 ## Where to go next
 
-The `examples` folder has twelve small programs to read and change. In the console: a guessing game, a calculator, a to-do list, a text adventure, a word counter, a prime finder and a lunar lander game. In a window: bouncing balls with sound, Breakout, a sign-up form and a spinning 3D scene. And `fetch_page.jamo` downloads a web page. `LANGUAGE.md` has the exact rules of the language.
+The `examples` folder has thirteen small programs to read and change. In the console: a guessing game, a calculator, a to-do list, a text adventure, a word counter, a prime finder and a lunar lander game. In a window: bouncing balls with sound, Breakout, Snake, a sign-up form and a spinning 3D scene. And `fetch_page.jamo` downloads a web page. `LANGUAGE.md` has the exact rules of the language.

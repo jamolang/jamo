@@ -16,12 +16,24 @@ extern "kernel32.dll" func FindClose(handle: int): bool
 extern "kernel32.dll" func GetFileAttributesW(name: int): i32
 extern "kernel32.dll" func GetFileAttributesExW(name: int, level: i32, data: int): bool
 extern "kernel32.dll" func GetCurrentDirectoryW(size: i32, place: int): i32
+extern "kernel32.dll" func CreateFileW(name: int, access: i32, share: i32, security: int, how: i32, flags: i32, template: int): int
+extern "kernel32.dll" func ReadFile(file: int, data: int, size: i32, done: int, overlapped: int): bool
+extern "kernel32.dll" func WriteFile(file: int, data: int, size: i32, written: int, overlapped: int): bool
+extern "kernel32.dll" func GetFileSizeEx(file: int, size: int): bool
+extern "kernel32.dll" func CloseHandle(handle: int): bool
 
 const FILES_FOLDER_BIT = 16
 const FILES_FIND_DATA_SIZE = 600
 const FILES_NAME_AT = 44
 # MOVEFILE_REPLACE_EXISTING and MOVEFILE_COPY_ALLOWED, so a move can go to another drive and replace what's there
 const FILES_MOVE_FLAGS = 3
+const FILES_READ_ACCESS = -2147483648
+const FILES_WRITE_ACCESS = 1073741824
+const FILES_SHARE_ALL = 7
+const FILES_OPEN_EXISTING = 3
+const FILES_CREATE_ALWAYS = 2
+const FILES_NORMAL = 128
+const FILES_CHUNK = 1048576
 
 # --- Text from Windows ---
 
@@ -212,4 +224,64 @@ end
 # Moves or renames a file or folder, replacing a file that's already at to
 func move_file(from: string, to: string): bool
     return MoveFileExW(wide(from), wide(to), FILES_MOVE_FLAGS)
+end
+
+# --- Reading and writing without stopping ---
+# read_file and write_file stop the program when they can't. These say so instead
+
+# The file's text, or fallback when it can't be read: it's missing, a folder, or in use
+func read_file_or(path: string, fallback: string): string
+    var file = CreateFileW(wide(path), FILES_READ_ACCESS, FILES_SHARE_ALL, 0, FILES_OPEN_EXISTING, FILES_NORMAL, 0)
+    if file == -1
+        return fallback
+    end
+    var size_place = memory(8)
+    if not GetFileSizeEx(file, size_place)
+        CloseHandle(file)
+        return fallback
+    end
+    var size = peek_i64(size_place, 0)
+    var data = memory(size + 1)
+    var done = memory(8)
+    var at = 0
+    while at < size
+        var part = size - at
+        if part > FILES_CHUNK
+            part = FILES_CHUNK
+        end
+        if not ReadFile(file, data + at, part, done, 0) or peek_i32(done, 0) == 0
+            CloseHandle(file)
+            return fallback
+        end
+        at += peek_i32(done, 0)
+    end
+    CloseHandle(file)
+    return memory_text(data, size)
+end
+
+# Replaces the file with the text, and answers whether it worked
+func try_write_file(path: string, text: string): bool
+    var file = CreateFileW(wide(path), FILES_WRITE_ACCESS, 0, 0, FILES_CREATE_ALWAYS, FILES_NORMAL, 0)
+    if file == -1
+        return false
+    end
+    var size = len(text)
+    var data = memory(size + 1)
+    for i in 0..size
+        poke_u8(data, i, byte(text, i))
+    end
+    var written = memory(8)
+    var at = 0
+    while at < size
+        var part = size - at
+        if part > FILES_CHUNK
+            part = FILES_CHUNK
+        end
+        if not WriteFile(file, data + at, part, written, 0) or peek_i32(written, 0) == 0
+            CloseHandle(file)
+            return false
+        end
+        at += peek_i32(written, 0)
+    end
+    return CloseHandle(file)
 end

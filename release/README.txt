@@ -16,13 +16,14 @@ Your first program
 
   jamo new hello            Makes a folder called hello with a program in it
   jamo run hello\main.jamo  Builds it and runs it
+  jamo watch hello\main.jamo  Runs it again every time you save a change (Ctrl+C stops)
 
 Or start from a small game that already works:
 
   jamo new --game my_game
   jamo run my_game\main.jamo
 
-GUIDE.md teaches the whole language step by step, and the examples folder has twelve programs to read and change.
+GUIDE.md teaches the whole language step by step, and the examples folder has thirteen programs to read and change.
 GUIDE.md is plain text, so any text editor can open it.
 
 Sharing a game

@@ -1,0 +1,162 @@
+# Snake: steer with the arrow keys, eat the apples and grow, and don't run into yourself or a wall.
+# Each apple makes the snake a little faster. Press Space to play again after a crash.
+#
+# The board is a Grid from grid.jamo, the steps come from a Timer in timer.jamo, and apples land on a free
+# cell picked with pick from math.jamo.
+
+use "gfx.jamo"
+use "grid.jamo"
+use "timer.jamo"
+use "math.jamo"
+
+const COLUMNS = 24
+const ROWS = 18
+const CELL = 28
+const TOP = 48
+const FIRST_STEP = 0.14
+const FASTEST_STEP = 0.06
+
+enum Square
+    EMPTY
+    SNAKE
+    APPLE
+end
+
+struct Game
+    board: Grid<Square>
+    body: [Cell]
+    dx: int
+    dy: int
+    next_dx: int
+    next_dy: int
+    steps: Timer
+    score: int
+    over: bool
+end
+
+var best = 0
+
+func new_game(): Game
+    var board = new_grid<Square>(COLUMNS, ROWS, Square.EMPTY)
+    var body: [Cell] = []
+    for i in 0..3
+        body.add(Cell{x: 6 - i, y: ROWS / 2})
+        board.set(6 - i, ROWS / 2, Square.SNAKE)
+    end
+    var game = Game{board: board, body: body, dx: 1, dy: 0, next_dx: 1, next_dy: 0, steps: new_timer(FIRST_STEP), score: 0, over: false}
+    game.place_apple()
+    return game
+end
+
+func Game.place_apple()
+    var free: [Cell] = []
+    for y in 0..ROWS
+        for x in 0..COLUMNS
+            if self.board.get(x, y) == Square.EMPTY
+                free.add(Cell{x: x, y: y})
+            end
+        end
+    end
+    if len(free) > 0
+        var spot = pick(free)
+        self.board.set(spot.x, spot.y, Square.APPLE)
+    end
+end
+
+# A turn waits for the next step, and can't go straight back into the snake's own neck
+func Game.steer(window: Window)
+    if window.key_pressed("left") and self.dx != 1
+        self.next_dx = -1
+        self.next_dy = 0
+    elif window.key_pressed("right") and self.dx != -1
+        self.next_dx = 1
+        self.next_dy = 0
+    elif window.key_pressed("up") and self.dy != 1
+        self.next_dx = 0
+        self.next_dy = -1
+    elif window.key_pressed("down") and self.dy != -1
+        self.next_dx = 0
+        self.next_dy = 1
+    end
+end
+
+func Game.step()
+    self.dx = self.next_dx
+    self.dy = self.next_dy
+    var head = self.body[0]
+    var x = head.x + self.dx
+    var y = head.y + self.dy
+    var ahead = self.board.get_or(x, y, Square.SNAKE)
+    var tail = self.body[len(self.body) - 1]
+    # The tail moves out of the way this step, unless an apple makes the snake grow
+    if ahead == Square.SNAKE and not (x == tail.x and y == tail.y)
+        self.over = true
+        best = max_int(best, self.score)
+        return
+    end
+    var grows = ahead == Square.APPLE
+    var keep = len(self.body)
+    if grows
+        self.score += 1
+        self.steps = new_timer(max(FASTEST_STEP, FIRST_STEP - float(self.score) * 0.004))
+    else
+        keep -= 1
+        self.board.set(tail.x, tail.y, Square.EMPTY)
+    end
+    # The new head goes first, then the rest of the body, leaving off the tail unless it grew
+    var moved = [Cell{x: x, y: y}]
+    for i in 0..keep
+        moved.add(self.body[i])
+    end
+    self.body = moved
+    self.board.set(x, y, Square.SNAKE)
+    if grows
+        self.place_apple()
+    end
+end
+
+func draw(screen: Gfx, game: Game)
+    screen.clear(rgb(16, 20, 28))
+    screen.text(f"Score: {game.score}", 16.0, 12.0, 24.0, rgb(235, 240, 245))
+    screen.text(f"Best: {best}", 200.0, 12.0, 24.0, rgb(150, 160, 180))
+    for y in 0..ROWS
+        for x in 0..COLUMNS
+            var left = float(x * CELL)
+            var top = float(TOP + y * CELL)
+            var square = game.board.get(x, y)
+            if square == Square.SNAKE
+                screen.rect(left + 2.0, top + 2.0, float(CELL) - 4.0, float(CELL) - 4.0, rgb(90, 200, 120))
+            elif square == Square.APPLE
+                screen.rect(left + 5.0, top + 5.0, float(CELL) - 10.0, float(CELL) - 10.0, rgb(235, 80, 70))
+            elif (x + y) % 2 == 0
+                screen.rect(left, top, float(CELL), float(CELL), rgb(22, 27, 37))
+            end
+        end
+    end
+    var head = game.body[0]
+    screen.rect(float(head.x * CELL) + 2.0, float(TOP + head.y * CELL) + 2.0, float(CELL) - 4.0, float(CELL) - 4.0, rgb(150, 240, 170))
+    if game.over
+        screen.text("Crash! Press Space to play again", 150.0, float(TOP + ROWS * CELL / 2 - 12), 28.0, rgb(255, 220, 120))
+    end
+    screen.show()
+end
+
+func main()
+    var window = open_window("Snake", COLUMNS * CELL, TOP + ROWS * CELL)
+    var screen = start_gfx(window)
+    var game = new_game()
+    while window.is_open()
+        if game.over
+            if window.key_pressed("space")
+                game = new_game()
+            end
+        else
+            game.steer(window)
+            if game.steps.ready()
+                game.step()
+            end
+        end
+        draw(screen, game)
+        window.wait_frame(60)
+    end
+end

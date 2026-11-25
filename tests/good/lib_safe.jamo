@@ -1,0 +1,28 @@
+# Reading, writing and turning text into numbers without stopping the program
+use "files.jamo"
+use "text.jamo"
+
+func main()
+    print(read_file_or("no such file.txt", "missing"))
+    print(read_file_or(".", "a folder"))
+    print(try_write_file("safe test.txt", "line one\nline two"))
+    print(read_file_or("safe test.txt", "missing"))
+    print(len(read_file_or("safe test.txt", "")))
+    print(try_write_file("safe test.txt", ""))
+    print(len(read_file_or("safe test.txt", "missing")))
+    print(try_write_file("no such folder/x.txt", "x"))
+    var big = "0123456789"
+    for i in 0..18
+        big = big + big
+    end
+    print(try_write_file("safe test.txt", big))
+    print(read_file_or("safe test.txt", "") == big)
+    print(delete_file("safe test.txt"))
+    print(int_or("42", 0))
+    print(int_or("-7", 0))
+    print(int_or("4x", -1))
+    print(int_or("", -1))
+    print(int_or("99999999999999999999", -1))
+    print(float_or("2.5", 0.0))
+    print(float_or("abc", 1.5))
+end

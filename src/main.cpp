@@ -28,10 +28,13 @@ const int NO_OPTIMIZING = 8;
 const int WINDOW_PROGRAM = 16;
 const int RENAME_ATTEMPTS = 20;
 const DWORD RENAME_WAIT_MS = 50;
-const char* const VERSION = "0.1.0";
+const char* const VERSION = "0.2.0";
+const DWORD WATCH_WAIT_MS = 250;    // How often jamo watch looks for a change
+const DWORD WATCH_SETTLE_MS = 150;  // How long it waits after one
 const char* const USAGE =
     "Usage:\n"
     "  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n"
+    "  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n"
     "  jamo build file.jamo   Writes file.exe beside the source\n"
     "  jamo build --window file.jamo   Writes a window program, with no console behind it\n"
     "  jamo check file.jamo   Finds mistakes without writing an .exe\n"
@@ -161,9 +164,8 @@ bool load_and_check(const fs::path& source_path, Program& program) {
     return true;
 }
 
-bool build(const fs::path& source_path, fs::path& exe_path, int cleaner_mode) {
-    Program program;
-    if (!load_and_check(source_path, program)) return false;
+// Writes the .exe for a program that's already checked
+bool write_program(const Program& program, const fs::path& source_path, fs::path& exe_path, int cleaner_mode) {
     const std::vector<uint8_t> exe = build_exe(generate_code(program, as_text(source_path.filename()), cleaner_mode));
     exe_path = source_path;
     exe_path.replace_extension(L".exe");
@@ -172,6 +174,11 @@ bool build(const fs::path& source_path, fs::path& exe_path, int cleaner_mode) {
         return false;
     }
     return true;
+}
+
+bool build(const fs::path& source_path, fs::path& exe_path, int cleaner_mode) {
+    Program program;
+    return load_and_check(source_path, program) && write_program(program, source_path, exe_path, cleaner_mode);
 }
 
 int make_new_program(const fs::path& folder, bool game) {
@@ -209,6 +216,23 @@ void add_to_command(std::wstring& command, const std::wstring& input) {
     }
     command.append(backslashes * 2, L'\\');
     command.push_back(L'"');
+}
+
+// Starts the program without waiting for it. Answers its process, or nullptr if Windows wouldn't start it
+HANDLE start_program(const fs::path& exe_path, const std::vector<std::wstring>& inputs) {
+    std::error_code problem;
+    const fs::path full_path = fs::absolute(exe_path, problem);
+    std::wstring command = L"\"" + (problem ? exe_path : full_path).wstring() + L"\"";
+    for (const std::wstring& input : inputs) add_to_command(command, input);
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process = {};
+    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process)) {
+        std::fprintf(stderr, "I built %s, but Windows wouldn't start it (error %lu).\n", as_text(exe_path).c_str(), GetLastError());
+        return nullptr;
+    }
+    CloseHandle(process.hThread);
+    return process.hProcess;
 }
 
 int run(const fs::path& exe_path, const std::vector<std::wstring>& inputs) {
@@ -466,6 +490,77 @@ int print_tree(const fs::path& path) {
     return 0;
 }
 
+// --- jamo watch ---
+// How the program's own files look now: each one's last change and size. Built-in libraries never change
+std::string files_now(const fs::path& main_file, const std::vector<std::string>& names) {
+    std::error_code problem;
+    const fs::path root = fs::canonical(main_file, problem).parent_path();
+    std::vector<fs::path> paths = {main_file};
+    for (const std::string& name : names) {
+        if (name.size() > 11 && name.compare(name.size() - 11, 11, " (built in)") == 0) continue;
+        paths.push_back(root / fs::path(std::u8string(name.begin(), name.end())));
+    }
+    std::string out;
+    for (const fs::path& path : paths) {
+        WIN32_FILE_ATTRIBUTE_DATA data = {};
+        if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
+            out += "missing;";
+            continue;
+        }
+        out += std::to_string(data.ftLastWriteTime.dwHighDateTime) + ":" + std::to_string(data.ftLastWriteTime.dwLowDateTime) + ":" + std::to_string(data.nFileSizeLow) + ";";
+    }
+    return out;
+}
+
+void stop_program(HANDLE& running) {
+    if (!running) return;
+    TerminateProcess(running, FAILED);
+    WaitForSingleObject(running, INFINITE);
+    CloseHandle(running);
+    running = nullptr;
+}
+
+void say_now(const std::string& words) {
+    std::fputs(words.c_str(), stdout);
+    std::fflush(stdout);
+}
+
+// Builds and runs the program, then again each time one of its files changes. A build with mistakes shows
+// them and leaves the last version that worked running, since its .exe is only replaced once the code checks out
+int watch(const fs::path& main_file, int cleaner_mode, const std::vector<std::wstring>& inputs) {
+    say_now("Watching " + as_text(main_file) + ". Save a change to build and run it again, and press Ctrl+C to stop.\n");
+    HANDLE running = nullptr;
+    bool told_end = true;
+    while (true) {
+        Program program;
+        const bool checked = load_and_check(main_file, program);
+        const std::string seen = files_now(main_file, program.file_names);
+        if (checked) {
+            stop_program(running);
+            fs::path exe_path;
+            if (write_program(program, main_file, exe_path, cleaner_mode)) {
+                running = start_program(exe_path, inputs);
+                told_end = running == nullptr;
+            }
+        } else if (running && !told_end) {
+            say_now("The last version that worked is still running.\n");
+        }
+        while (true) {
+            Sleep(WATCH_WAIT_MS);
+            if (running && !told_end && WaitForSingleObject(running, 0) == WAIT_OBJECT_0) {
+                DWORD exit_code = FAILED;
+                GetExitCodeProcess(running, &exit_code);
+                say_now("(It finished with exit code " + std::to_string(static_cast<int>(exit_code)) + ". Waiting for a change.)\n");
+                told_end = true;
+            }
+            if (files_now(main_file, program.file_names) != seen) break;
+        }
+        // An editor can save a file in more than one step, so this waits for it to finish
+        Sleep(WATCH_SETTLE_MS);
+        say_now("\n(A file changed, so it's building again.)\n");
+    }
+}
+
 }  // namespace
 
 int wmain(int count, wchar_t** words) {
@@ -514,10 +609,11 @@ int wmain(int count, wchar_t** words) {
                 break;
             }
         }
-        if (first >= count || (first + 1 < count && command != L"run")) {
+        if (first >= count || (first + 1 < count && command != L"run" && command != L"watch")) {
             std::fputs(USAGE, stderr);
             return FAILED;
         }
+        if (command == L"watch") return watch(fs::path(words[first]), cleaner_mode, std::vector<std::wstring>(words + first + 1, words + count));
         if (command != L"build" && command != L"run") {
             std::fputs(USAGE, stderr);
             return FAILED;

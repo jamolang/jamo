@@ -1,7 +1,7 @@
 # list: finding, putting in and taking out items of int and string arrays. use "list.jamo"
 #
 # Sorting and turning arrays around are in text.jamo: sort_ints, sort_strings, reverse_ints and reverse_strings.
-# Jamo has no way to write one function for every kind of array, so each comes in an int and a string version.
+# The _int and _string versions came first. The ones at the end work on every kind of array, using generics.
 
 func list_check_place(at: int, count: int, word: string)
     if at < 0 or at > count
@@ -82,4 +82,57 @@ func remove_string(items: [string], at: int): string
     end
     items.pop()
     return removed
+end
+
+# --- For every kind of array ---
+# T must work with == for has_item, find_item and count_item: ints, floats, strings, bools and enums
+
+func has_item<T>(items: [T], value: T): bool
+    return find_item(items, value) >= 0
+end
+
+# Where the first one equal to value is, or -1
+func find_item<T>(items: [T], value: T): int
+    for i in 0..len(items)
+        if items[i] == value
+            return i
+        end
+    end
+    return -1
+end
+
+func count_item<T>(items: [T], value: T): int
+    var total = 0
+    for item in items
+        if item == value
+            total += 1
+        end
+    end
+    return total
+end
+
+# A new array with the items the other way round. The array itself stays as it was
+func reversed<T>(items: [T]): [T]
+    var out: [T] = []
+    var i = len(items) - 1
+    while i >= 0
+        out.add(items[i])
+        i -= 1
+    end
+    return out
+end
+
+func swap_items<T>(items: [T], a: int, b: int)
+    list_check_place(a, len(items) - 1, "swap_items")
+    list_check_place(b, len(items) - 1, "swap_items")
+    var keep = items[a]
+    items[a] = items[b]
+    items[b] = keep
+end
+
+func last_item<T>(items: [T]): T
+    if len(items) == 0
+        fail("last_item needs an array with something in it, but this one is empty.")
+    end
+    return items[len(items) - 1]
 end

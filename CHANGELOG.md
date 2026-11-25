@@ -2,7 +2,16 @@
 
 What changed in each version of Jamo.
 
-## Not released yet
+## 0.2.0
+
+- `jamo watch file.jamo` runs a program, then builds and runs it again each time one of its files is saved. A mistake shows straight away, and the last version that worked keeps running until it's fixed.
+- Safe versions of things that stop a program: `read_file_or` and `try_write_file` in `files.jamo`, and `int_or` and `float_or` in `text.jamo`. `read_file_or` reads big files in parts, and gives the fallback for a missing file, a folder or a file in use.
+- List tools for every kind of array: `has_item`, `find_item`, `count_item`, `reversed`, `swap_items` and `last_item` in `list.jamo`, and `pick` and `shuffle` in `math.jamo`.
+- A Snake example, using `grid`, `timer` and `pick`.
+- The prime finder says "Found 1 prime." instead of "1 primes".
+- The VS Code extension comes as `jamo.vsix` on the Releases page.
+
+## 0.1.0
 
 ### Game helpers
 

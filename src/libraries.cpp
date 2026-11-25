@@ -526,12 +526,24 @@ extern "kernel32.dll" func FindClose(handle: int): bool
 extern "kernel32.dll" func GetFileAttributesW(name: int): i32
 extern "kernel32.dll" func GetFileAttributesExW(name: int, level: i32, data: int): bool
 extern "kernel32.dll" func GetCurrentDirectoryW(size: i32, place: int): i32
+extern "kernel32.dll" func CreateFileW(name: int, access: i32, share: i32, security: int, how: i32, flags: i32, template: int): int
+extern "kernel32.dll" func ReadFile(file: int, data: int, size: i32, done: int, overlapped: int): bool
+extern "kernel32.dll" func WriteFile(file: int, data: int, size: i32, written: int, overlapped: int): bool
+extern "kernel32.dll" func GetFileSizeEx(file: int, size: int): bool
+extern "kernel32.dll" func CloseHandle(handle: int): bool
 
 const FILES_FOLDER_BIT = 16
 const FILES_FIND_DATA_SIZE = 600
 const FILES_NAME_AT = 44
 # MOVEFILE_REPLACE_EXISTING and MOVEFILE_COPY_ALLOWED, so a move can go to another drive and replace what's there
 const FILES_MOVE_FLAGS = 3
+const FILES_READ_ACCESS = -2147483648
+const FILES_WRITE_ACCESS = 1073741824
+const FILES_SHARE_ALL = 7
+const FILES_OPEN_EXISTING = 3
+const FILES_CREATE_ALWAYS = 2
+const FILES_NORMAL = 128
+const FILES_CHUNK = 1048576
 
 # --- Text from Windows ---
 
@@ -722,6 +734,66 @@ end
 # Moves or renames a file or folder, replacing a file that's already at to
 func move_file(from: string, to: string): bool
     return MoveFileExW(wide(from), wide(to), FILES_MOVE_FLAGS)
+end
+
+# --- Reading and writing without stopping ---
+# read_file and write_file stop the program when they can't. These say so instead
+
+# The file's text, or fallback when it can't be read: it's missing, a folder, or in use
+func read_file_or(path: string, fallback: string): string
+    var file = CreateFileW(wide(path), FILES_READ_ACCESS, FILES_SHARE_ALL, 0, FILES_OPEN_EXISTING, FILES_NORMAL, 0)
+    if file == -1
+        return fallback
+    end
+    var size_place = memory(8)
+    if not GetFileSizeEx(file, size_place)
+        CloseHandle(file)
+        return fallback
+    end
+    var size = peek_i64(size_place, 0)
+    var data = memory(size + 1)
+    var done = memory(8)
+    var at = 0
+    while at < size
+        var part = size - at
+        if part > FILES_CHUNK
+            part = FILES_CHUNK
+        end
+        if not ReadFile(file, data + at, part, done, 0) or peek_i32(done, 0) == 0
+            CloseHandle(file)
+            return fallback
+        end
+        at += peek_i32(done, 0)
+    end
+    CloseHandle(file)
+    return memory_text(data, size)
+end
+
+# Replaces the file with the text, and answers whether it worked
+func try_write_file(path: string, text: string): bool
+    var file = CreateFileW(wide(path), FILES_WRITE_ACCESS, 0, 0, FILES_CREATE_ALWAYS, FILES_NORMAL, 0)
+    if file == -1
+        return false
+    end
+    var size = len(text)
+    var data = memory(size + 1)
+    for i in 0..size
+        poke_u8(data, i, byte(text, i))
+    end
+    var written = memory(8)
+    var at = 0
+    while at < size
+        var part = size - at
+        if part > FILES_CHUNK
+            part = FILES_CHUNK
+        end
+        if not WriteFile(file, data + at, part, written, 0) or peek_i32(written, 0) == 0
+            CloseHandle(file)
+            return false
+        end
+        at += peek_i32(written, 0)
+    end
+    return CloseHandle(file)
 end
 )JAMOLIBRARY";
     if (name == "g3d.jamo") return R"JAMOLIBRARY(# g3d: 3D drawing with a camera, lights, fog, textures and meshes, on top of gfx. use "g3d.jamo"
@@ -2888,7 +2960,7 @@ end
     if (name == "list.jamo") return R"JAMOLIBRARY(# list: finding, putting in and taking out items of int and string arrays. use "list.jamo"
 #
 # Sorting and turning arrays around are in text.jamo: sort_ints, sort_strings, reverse_ints and reverse_strings.
-# Jamo has no way to write one function for every kind of array, so each comes in an int and a string version.
+# The _int and _string versions came first. The ones at the end work on every kind of array, using generics.
 
 func list_check_place(at: int, count: int, word: string)
     if at < 0 or at > count
@@ -2969,6 +3041,59 @@ func remove_string(items: [string], at: int): string
     end
     items.pop()
     return removed
+end
+
+# --- For every kind of array ---
+# T must work with == for has_item, find_item and count_item: ints, floats, strings, bools and enums
+
+func has_item<T>(items: [T], value: T): bool
+    return find_item(items, value) >= 0
+end
+
+# Where the first one equal to value is, or -1
+func find_item<T>(items: [T], value: T): int
+    for i in 0..len(items)
+        if items[i] == value
+            return i
+        end
+    end
+    return -1
+end
+
+func count_item<T>(items: [T], value: T): int
+    var total = 0
+    for item in items
+        if item == value
+            total += 1
+        end
+    end
+    return total
+end
+
+# A new array with the items the other way round. The array itself stays as it was
+func reversed<T>(items: [T]): [T]
+    var out: [T] = []
+    var i = len(items) - 1
+    while i >= 0
+        out.add(items[i])
+        i -= 1
+    end
+    return out
+end
+
+func swap_items<T>(items: [T], a: int, b: int)
+    list_check_place(a, len(items) - 1, "swap_items")
+    list_check_place(b, len(items) - 1, "swap_items")
+    var keep = items[a]
+    items[a] = items[b]
+    items[b] = keep
+end
+
+func last_item<T>(items: [T]): T
+    if len(items) == 0
+        fail("last_item needs an array with something in it, but this one is empty.")
+    end
+    return items[len(items) - 1]
 end
 )JAMOLIBRARY";
     if (name == "log.jamo") return R"JAMOLIBRARY(# log: messages with levels, to the screen, a file or both. use "log.jamo"
@@ -3438,6 +3563,28 @@ end
 func random_float(): float
     var bits = math_random_bits() * 2097152 + math_random_bits() / 2048
     return float(bits) / 9007199254740992.0
+end
+
+# --- Random items ---
+
+# One item, picked at random
+func pick<T>(items: [T]): T
+    if len(items) == 0
+        fail("pick needs an array with something in it, but this one is empty.")
+    end
+    return items[random_int(0, len(items) - 1)]
+end
+
+# Puts the items in a random order, in place, with every order as likely (Fisher-Yates)
+func shuffle<T>(items: [T])
+    var i = len(items) - 1
+    while i > 0
+        var other = random_int(0, i)
+        var keep = items[i]
+        items[i] = items[other]
+        items[other] = keep
+        i -= 1
+    end
 end
 )JAMOLIBRARY";
     if (name == "net.jamo") return R"JAMOLIBRARY(# net: web requests over HTTP and HTTPS, with WinHTTP. use "net.jamo"
@@ -6071,6 +6218,23 @@ func reverse_strings(items: [string])
         items[i] = items[last - i]
         items[last - i] = keep
     end
+end
+
+# --- Numbers from text, without stopping ---
+
+# The text as an int, or fallback when it isn't one, like int_or(input(), 0)
+func int_or(text: string, fallback: int): int
+    if is_int(text)
+        return int(text)
+    end
+    return fallback
+end
+
+func float_or(text: string, fallback: float): float
+    if is_float(text)
+        return float(text)
+    end
+    return fallback
 end
 )JAMOLIBRARY";
     if (name == "time.jamo") return R"JAMOLIBRARY(# time: seconds since the program started, today's date and time, and waiting. use "time.jamo"

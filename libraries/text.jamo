@@ -459,3 +459,20 @@ func reverse_strings(items: [string])
         items[last - i] = keep
     end
 end
+
+# --- Numbers from text, without stopping ---
+
+# The text as an int, or fallback when it isn't one, like int_or(input(), 0)
+func int_or(text: string, fallback: int): int
+    if is_int(text)
+        return int(text)
+    end
+    return fallback
+end
+
+func float_or(text: string, fallback: float): float
+    if is_float(text)
+        return float(text)
+    end
+    return fallback
+end
