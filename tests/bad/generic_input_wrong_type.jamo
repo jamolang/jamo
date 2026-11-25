@@ -1,0 +1,7 @@
+func pick<T>(a: T, b: T): T
+    return a
+end
+
+func main()
+    print(pick(1, "two"))
+end

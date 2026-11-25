@@ -1,0 +1,14 @@
+func grow(items: [int]): int
+    for i in 0..100
+        items.add(i)
+    end
+    return 7
+end
+
+func main()
+    var items = [1]
+    items[0] = grow(items)
+    print(items[0])
+    items[0] += grow(items)
+    print(items[0])
+end

@@ -1,0 +1,3 @@
+function_named_like_builtin.jamo line 1: input is built into Jamo, so this needs a different name.
+    func input()
+         ^^^^^

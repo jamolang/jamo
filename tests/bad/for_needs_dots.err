@@ -1,0 +1,4 @@
+for_needs_dots.jamo line 2: A for loop needs an array or a range, but this is an int.
+        for i in 3
+                 ^
+Like this: for i in 0..10

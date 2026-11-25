@@ -1,0 +1,4 @@
+global_name_taken.jamo line 1: There's already a function called main, on line 3.
+    var main = 1
+        ^^^^
+Give this one a different name.

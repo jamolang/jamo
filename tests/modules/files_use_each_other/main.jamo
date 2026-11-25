@@ -1,0 +1,7 @@
+use "a.jamo"
+use "b.jamo"
+use "a.jamo"
+
+func main()
+    print(from_a(3))
+end

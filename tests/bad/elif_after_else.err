@@ -1,0 +1,3 @@
+elif_after_else.jamo line 6: An elif must go before the else.
+        elif false
+        ^^^^

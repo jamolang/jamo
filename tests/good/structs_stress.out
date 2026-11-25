@@ -1,0 +1,14 @@
+55
+66
+4000
+Item{id: 3999, tags: ["last"]}
+3999
+3998
+123
+1123
+1066
+5
+3999
+Box{items: [Item{id: 1, tags: ["a", "b"]}], children: [Box{items: [Item{id: 2, tags: ["deep"]}], children: []}]}
+Box{items: [Item{id: 1, tags: ["a", "b"]}], children: [Box{items: [Item{id: 2, tags: ["deep"]}], children: []}, ...]}
+2

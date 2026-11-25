@@ -1,0 +1,10 @@
+struct Mood
+    a: int
+end
+
+enum Mood
+    CALM
+end
+
+func main()
+end

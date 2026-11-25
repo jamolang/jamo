@@ -1,0 +1,6 @@
+var a = 1
+var a = 2
+
+func main()
+    print(1)
+end

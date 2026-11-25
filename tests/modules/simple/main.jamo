@@ -1,0 +1,8 @@
+use "enemy.jamo"
+
+func main()
+    var e = make_enemy(3)
+    e.hit(1)
+    print(e)
+    print(Mood.CALM)
+end

@@ -1,0 +1,4 @@
+func main()
+    var items = [1]
+    var x = items.add(1)
+end

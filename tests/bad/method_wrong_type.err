@@ -1,0 +1,3 @@
+method_wrong_type.jamo line 10: The input damage must be an int, but this is a string.
+        e.hit("a")
+              ^^^

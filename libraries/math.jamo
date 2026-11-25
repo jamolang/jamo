@@ -1,0 +1,225 @@
+# math: square roots, angles, powers, rounding, smallest and largest, and random numbers. use "math.jamo"
+#
+# Jamo has no program-wide variables, so the random generator keeps its state in the .exe's own header
+# in memory: Jamo writes bytes 2 to 59 of the DOS header as zeros, and Windows never reads them once the
+# program is loaded. math uses bytes 8 to 23 (the state at 8, and 1 at 16 once it's seeded), and
+# time.jamo uses 24 to 47. That page is read-only at first, so the first write makes it writable.
+#
+# The generator is a 64-bit LCG with Knuth's MMIX numbers, which wraps the way Jamo's ints do. Jamo has
+# no bit operators, so xorshift would be slow. An LCG's low bits repeat quickly, so only the top 32 bits
+# of each step are used.
+
+extern "msvcrt.dll" func sqrt(value: float): float
+extern "msvcrt.dll" func sin(value: float): float
+extern "msvcrt.dll" func cos(value: float): float
+extern "msvcrt.dll" func tan(value: float): float
+extern "msvcrt.dll" func atan2(y: float, x: float): float
+extern "msvcrt.dll" func pow(base: float, power: float): float
+extern "msvcrt.dll" func fabs(value: float): float
+extern "kernel32.dll" func GetModuleHandleW(name: int): int
+extern "kernel32.dll" func VirtualProtect(place: int, size: int, protect: i32, old: int): bool
+extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
+extern "kernel32.dll" func GetCurrentProcessId(): i32
+
+# --- Numbers ---
+
+func pi(): float
+    return 3.141592653589793
+end
+
+# The size of a float, without its sign
+func abs(value: float): float
+    return fabs(value)
+end
+
+# The size of an int, without its sign. The smallest int has no positive partner, so it comes back as it is
+func abs_int(value: int): int
+    if value < 0
+        return -value
+    end
+    return value
+end
+
+# --- Rounding, from float to int ---
+
+func math_check_fits(value: float, name: string)
+    if not (value >= -9223372036854775808.0 and value < 9223372036854775808.0)
+        fail(f"{name} needs a float that fits in an int, but this is {value}.")
+    end
+end
+
+# The nearest int at or below
+func floor(value: float): int
+    math_check_fits(value, "floor")
+    var whole = int(value)
+    if float(whole) > value
+        return whole - 1
+    end
+    return whole
+end
+
+# The nearest int at or above
+func ceil(value: float): int
+    math_check_fits(value, "ceil")
+    var whole = int(value)
+    if float(whole) < value
+        return whole + 1
+    end
+    return whole
+end
+
+# The nearest int. Halves round away from zero, so 2.5 gives 3 and -2.5 gives -3
+func round(value: float): int
+    math_check_fits(value, "round")
+    var whole = int(value)
+    var part = value - float(whole)
+    if part >= 0.5
+        return whole + 1
+    end
+    if part <= -0.5
+        return whole - 1
+    end
+    return whole
+end
+
+# --- Smallest and largest ---
+
+func min(a: float, b: float): float
+    if b < a
+        return b
+    end
+    return a
+end
+
+func max(a: float, b: float): float
+    if b > a
+        return b
+    end
+    return a
+end
+
+func clamp(value: float, low: float, high: float): float
+    if not (low <= high)
+        fail(f"clamp needs low <= high, but they're {low} and {high}.")
+    end
+    if value < low
+        return low
+    end
+    if value > high
+        return high
+    end
+    return value
+end
+
+# The value part of the way from a to b: lerp(0.0, 10.0, 0.25) is 2.5. Past 0.0 to 1.0 it goes beyond them
+func lerp(a: float, b: float, part: float): float
+    return a + (b - a) * part
+end
+
+func min_int(a: int, b: int): int
+    if b < a
+        return b
+    end
+    return a
+end
+
+func max_int(a: int, b: int): int
+    if b > a
+        return b
+    end
+    return a
+end
+
+func clamp_int(value: int, low: int, high: int): int
+    if low > high
+        fail(f"clamp_int needs low <= high, but they're {low} and {high}.")
+    end
+    if value < low
+        return low
+    end
+    if value > high
+        return high
+    end
+    return value
+end
+
+# --- Random numbers ---
+
+func math_header(): int
+    return GetModuleHandleW(0)
+end
+
+func math_header_writable(header: int)
+    if not VirtualProtect(header, 64, 4, memory(8))
+        fail("math couldn't set up its random numbers.")
+    end
+end
+
+# Starts the same numbers over again: the same seed always gives the same numbers
+func random_seed(seed: int)
+    var header = math_header()
+    math_header_writable(header)
+    poke_i64(header, 8, seed)
+    poke_i64(header, 16, 1)
+end
+
+func math_seed_from_clock()
+    var count = memory(8)
+    QueryPerformanceCounter(count)
+    random_seed(peek_i64(count, 0) * 31 + GetCurrentProcessId())
+end
+
+# The top 32 bits of a 64-bit value, as a number from 0 to 4294967295
+func math_top_bits(value: int): int
+    var top = value / 4294967296
+    if value % 4294967296 < 0
+        top = top - 1
+    end
+    if top < 0
+        top = top + 4294967296
+    end
+    return top
+end
+
+# The generator's next 32 random bits
+func math_random_bits(): int
+    var header = math_header()
+    if peek_i64(header, 16) == 0
+        math_seed_from_clock()
+    end
+    var state = peek_i64(header, 8) * 6364136223846793005 + 1442695040888963407
+    poke_i64(header, 8, state)
+    return math_top_bits(state)
+end
+
+# A whole number from low to high, both included. Every number is equally likely
+func random_int(low: int, high: int): int
+    if low > high
+        fail(f"random_int needs low <= high, but they're {low} and {high}.")
+    end
+    var span = high - low
+    if span >= 0 and span < 9223372036854775807
+        var count = span + 1
+        var extra = (9223372036854775807 % count + 1) % count
+        while true
+            var bits = math_random_bits() * 2147483648 + math_random_bits() / 2
+            if bits <= 9223372036854775807 - extra
+                return low + bits % count
+            end
+        end
+    end
+    # More than half of all ints: draw any int until one lands inside
+    while true
+        var any = math_random_bits() * 4294967296 + math_random_bits()
+        if any >= low and any <= high
+            return any
+        end
+    end
+    return low
+end
+
+# A float from 0.0 up to, but not including, 1.0
+func random_float(): float
+    var bits = math_random_bits() * 2097152 + math_random_bits() / 2048
+    return float(bits) / 9007199254740992.0
+end

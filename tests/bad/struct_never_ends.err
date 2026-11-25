@@ -1,0 +1,4 @@
+struct_never_ends.jamo line 1: This struct never gets its end.
+    struct Enemy
+    ^^^^^^
+Add a line with end to finish it.

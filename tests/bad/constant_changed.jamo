@@ -1,0 +1,5 @@
+const LIMIT = 10
+
+func main()
+    LIMIT = 20
+end

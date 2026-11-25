@@ -1,0 +1,3 @@
+callback_float_input.jamo line 5: A callback's inputs must be ints or bools, but a is a float.
+        print(callback(takes))
+                       ^^^^^

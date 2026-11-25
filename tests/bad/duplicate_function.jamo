@@ -1,0 +1,8 @@
+func f()
+end
+
+func f()
+end
+
+func main()
+end

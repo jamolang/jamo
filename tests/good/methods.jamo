@@ -1,0 +1,70 @@
+struct Enemy
+    health: int
+    names: [string]
+end
+
+func Enemy.hit(damage: int)
+    self.health -= damage
+end
+
+func Enemy.is_dead(): bool
+    return self.health <= 0
+end
+
+func Enemy.rename(name: string): Enemy
+    self.names.add(name)
+    return self
+end
+
+func Enemy.finish()
+    self.hit(self.health)
+end
+
+func Enemy.count_down(left: int): int
+    if left == 0
+        return self.health
+    end
+    self.health += 1
+    return self.count_down(left - 1)
+end
+
+struct Other
+    health: int
+end
+
+func Other.hit(damage: int)
+    self.health += damage
+end
+
+func hit(damage: int): int
+    return damage * 100
+end
+
+func main()
+    var e = Enemy{health: 3, names: []}
+    e.hit(1)
+    print(e.health)
+    var same = e
+    same.hit(1)
+    print(e.health)
+    print(e.is_dead())
+    e.rename("a").rename("b")
+    print(e.names)
+    e.finish()
+    print(e.is_dead())
+    print(e.count_down(5))
+
+    var enemies = [e, Enemy{health: 9, names: []}]
+    enemies[1].hit(2)
+    print(enemies[1].health)
+    for enemy in enemies
+        enemy.hit(1)
+    end
+    print(enemies[0].health)
+    print(f"{enemies[1].is_dead()}")
+
+    var other = Other{health: 1}
+    other.hit(1)
+    print(other.health)
+    print(hit(2))
+end

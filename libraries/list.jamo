@@ -1,0 +1,85 @@
+# list: finding, putting in and taking out items of int and string arrays. use "list.jamo"
+#
+# Sorting and turning arrays around are in text.jamo: sort_ints, sort_strings, reverse_ints and reverse_strings.
+# Jamo has no way to write one function for every kind of array, so each comes in an int and a string version.
+
+func list_check_place(at: int, count: int, word: string)
+    if at < 0 or at > count
+        fail(f"{word} needs a place from 0 to {count}, not {at}.")
+    end
+end
+
+# --- Finding ---
+
+# Where value first is in items, counting from 0, or -1 when it isn't there
+func index_of_int(items: [int], value: int): int
+    for i in 0..len(items)
+        if items[i] == value
+            return i
+        end
+    end
+    return -1
+end
+
+func index_of_string(items: [string], value: string): int
+    for i in 0..len(items)
+        if items[i] == value
+            return i
+        end
+    end
+    return -1
+end
+
+func contains_int(items: [int], value: int): bool
+    return index_of_int(items, value) >= 0
+end
+
+func contains_string(items: [string], value: string): bool
+    return index_of_string(items, value) >= 0
+end
+
+# --- Putting in and taking out. These change the array itself ---
+
+# Puts value at place at, moving the items from there on along by one. at can be len(items), to add at the end
+func insert_int(items: [int], at: int, value: int)
+    list_check_place(at, len(items), "insert_int")
+    items.add(value)
+    var i = len(items) - 1
+    while i > at
+        items[i] = items[i - 1]
+        i -= 1
+    end
+    items[at] = value
+end
+
+func insert_string(items: [string], at: int, value: string)
+    list_check_place(at, len(items), "insert_string")
+    items.add(value)
+    var i = len(items) - 1
+    while i > at
+        items[i] = items[i - 1]
+        i -= 1
+    end
+    items[at] = value
+end
+
+# Takes out the item at place at, moving the ones after it back by one, and gives it back
+func remove_int(items: [int], at: int): int
+    list_check_place(at, len(items) - 1, "remove_int")
+    var removed = items[at]
+    for i in at..len(items) - 1
+        items[i] = items[i + 1]
+    end
+    items.pop()
+    return removed
+end
+
+func remove_string(items: [string], at: int): string
+    list_check_place(at, len(items) - 1, "remove_string")
+    var removed = items[at]
+    for i in at..len(items) - 1
+        items[i] = items[i + 1]
+    end
+    items.pop()
+    return removed
+end

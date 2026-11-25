@@ -1,0 +1,3 @@
+syntax_error_no_flood.jamo line 3: print doesn't give back a value, so it can only be its own statement.
+            print(1)
+            ^^^^^

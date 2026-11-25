@@ -1,0 +1,903 @@
+# net: web requests over HTTP and HTTPS, with WinHTTP. use "net.jamo"
+#
+# A request waits until the answer has come, or the time runs out. Problems along the way, like a server
+# that can't be reached or takes too long, don't stop the program: the response's error says what went
+# wrong, and its status is 0. Only mistakes in the program itself, like a web address that isn't one,
+# stop it.
+#
+# Background requests don't wait: start_get and start_post give back a Request at once, and done() checks
+# on it each frame. WinHTTP tells us about progress by calling net_signal on its own threads, so that
+# function only writes numbers into the request's block, which is memory from LocalAlloc that the memory
+# cleaner never sees. Everything else happens on the program's own thread, in done(). A block is only
+# given back once WinHTTP says the request's handle is closed, since it may still write there until
+# then. The block: sent at 0, headers at 4, data waiting at 8 with how much at 12, read done at 16,
+# failed at 20 with the error at 24, closed at 28. The 64 KB from 64 take each piece of the answer, and
+# what's sent with a post follows at 65600. After that come the server name, the method, the path and the
+# headers as Windows text, since WinHTTP may read them after the call that took them has returned.
+#
+# Links are TCP connections between programs, for multiplayer games. One program listens on a port and
+# others connect to it. Each send() is one whole message: it goes out with its length in front, as 4
+# bytes, so messages() gives back exactly what was sent, however TCP splits it up on the way. Sockets
+# never wait: messages() sends what's waiting to go and reads what has come, once a frame.
+
+extern "winhttp.dll" func WinHttpOpen(agent: int, access: i32, proxy: int, bypass: int, flags: i32): int
+extern "winhttp.dll" func WinHttpSetTimeouts(handle: int, resolve: i32, connect: i32, send: i32, receive: i32): bool
+extern "winhttp.dll" func WinHttpConnect(session: int, host: int, port: i32, reserved: i32): int
+extern "winhttp.dll" func WinHttpOpenRequest(connection: int, verb: int, path: int, version: int, referrer: int, accept: int, flags: i32): int
+extern "winhttp.dll" func WinHttpSendRequest(request: int, headers: int, headers_length: i32, data: int, data_length: i32, total_length: i32, context: int): bool
+extern "winhttp.dll" func WinHttpReceiveResponse(request: int, reserved: int): bool
+extern "winhttp.dll" func WinHttpQueryHeaders(request: int, level: i32, name: int, buffer: int, length: int, index: int): bool
+extern "winhttp.dll" func WinHttpQueryDataAvailable(request: int, size: int): bool
+extern "winhttp.dll" func WinHttpReadData(request: int, buffer: int, size: i32, read: int): bool
+extern "winhttp.dll" func WinHttpCloseHandle(handle: int): bool
+extern "winhttp.dll" func WinHttpSetOption(handle: int, option: i32, buffer: int, length: i32): bool
+extern "winhttp.dll" func WinHttpSetStatusCallback(handle: int, callback: int, flags: i32, reserved: int): int
+extern "kernel32.dll" func GetLastError(): i32
+extern "kernel32.dll" func Sleep(milliseconds: i32)
+extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
+extern "kernel32.dll" func QueryPerformanceFrequency(place: int): bool
+extern "winmm.dll" func timeBeginPeriod(period: i32): i32
+extern "winmm.dll" func timeEndPeriod(period: i32): i32
+extern "ws2_32.dll" func WSAStartup(version: i32, data: int): i32
+extern "ws2_32.dll" func WSAGetLastError(): i32
+extern "ws2_32.dll" func socket(family: i32, kind: i32, protocol: i32): int
+extern "ws2_32.dll" func closesocket(s: int): i32
+extern "ws2_32.dll" func ioctlsocket(s: int, command: i32, value: int): i32
+extern "ws2_32.dll" func setsockopt(s: int, level: i32, name: i32, value: int, length: i32): i32
+extern "ws2_32.dll" func bind(s: int, address: int, length: i32): i32
+extern "ws2_32.dll" func listen(s: int, backlog: i32): i32
+extern "ws2_32.dll" func accept(s: int, address: int, length: int): int
+extern "ws2_32.dll" func connect(s: int, address: int, length: i32): i32
+extern "ws2_32.dll" func send(s: int, data: int, length: i32, flags: i32): i32
+extern "ws2_32.dll" func recv(s: int, data: int, length: i32, flags: i32): i32
+extern "ws2_32.dll" func WSAPoll(places: int, count: i32, wait: i32): i32
+extern "ws2_32.dll" func getsockopt(s: int, level: i32, name: i32, value: int, length: int): i32
+extern "kernel32.dll" func LocalAlloc(flags: i32, size: int): int
+extern "kernel32.dll" func LocalFree(memory: int): int
+
+struct Response
+    status: int
+    text: string
+    error: string
+end
+
+struct Net
+    agent: int
+    session: int
+    background: int
+    closing: [int]
+    seconds: float
+    sockets_started: bool
+    open: bool
+end
+
+# A program waiting for others to connect, on one port
+struct Listener
+    socket: int
+    port: int
+    open: bool
+end
+
+# A connection to another program. messages() gives back what came, a whole message at a time
+struct Link
+    socket: int
+    connecting: bool
+    open: bool
+    error: string
+    outgoing: int
+    out_size: int
+    out_start: int
+    out_used: int
+    incoming: int
+    in_size: int
+    in_used: int
+    piece: int
+end
+
+# A request running in the background. Check done() each frame, then read response()
+struct Request
+    net: Net
+    block: int
+    connection: int
+    request: int
+    stage: int
+    status: int
+    buffer: int
+    capacity: int
+    used: int
+    waiting: int
+    address: NetAddress
+    result: Response
+    deadline: float
+    clock: int
+    finished: bool
+end
+
+struct NetAddress
+    secure: bool
+    host: string
+    port: int
+    path: string
+end
+
+# --- Starting ---
+
+func start_net(): Net
+    var agent = net_lasting_wide("Jamo")
+    var session = WinHttpOpen(agent, 4, 0, 0, 0)
+    if session == 0
+        fail("Windows couldn't start web requests.")
+    end
+    var n = Net{agent: agent, session: session, background: 0, closing: [], seconds: 30.0, sockets_started: false, open: true}
+    n.set_timeout(30.0)
+    return n
+end
+
+# How long a request may take at each stage before it gives up with a timeout error
+func Net.set_timeout(seconds: float)
+    self.must_be_open()
+    if not (seconds > 0.0 and seconds <= 3600.0)
+        fail(f"A timeout goes from above 0.0 to 3600.0 seconds, not {seconds}.")
+    end
+    self.seconds = seconds
+    var milliseconds = int(seconds * 1000.0)
+    WinHttpSetTimeouts(self.session, milliseconds, milliseconds, milliseconds, milliseconds)
+    if self.background != 0
+        WinHttpSetTimeouts(self.background, milliseconds, milliseconds, milliseconds, milliseconds)
+    end
+end
+
+func Net.must_be_open()
+    if not self.open
+        fail("This net is closed, so it can't be used.")
+    end
+end
+
+func Net.close()
+    if not self.open
+        fail("This net is already closed.")
+    end
+    self.open = false
+    WinHttpCloseHandle(self.session)
+    if self.background != 0
+        WinHttpCloseHandle(self.background)
+    end
+    LocalFree(self.agent)
+end
+
+# --- Requests ---
+
+func Net.get(url: string): Response
+    return self.request("GET", url, "")
+end
+
+# Sends text to a web address, as plain UTF-8 text
+func Net.post(url: string, text: string): Response
+    return self.request("POST", url, text)
+end
+
+func Net.request(verb: string, url: string, body: string): Response
+    var r = self.start(verb, url, body)
+    timeBeginPeriod(1)
+    while not r.done()
+        Sleep(1)
+    end
+    timeEndPeriod(1)
+    return r.response()
+end
+
+# Sets every time limit on one request, including the wait for the answer's headers, which
+# WinHttpSetTimeouts leaves at 90 seconds
+func net_time_limits(request: int, seconds: float)
+    var milliseconds = int(seconds * 1000.0)
+    WinHttpSetTimeouts(request, milliseconds, milliseconds, milliseconds, milliseconds)
+    var value = memory(8)
+    poke_i32(value, 0, milliseconds)
+    WinHttpSetOption(request, 7, value, 4)
+end
+
+func net_failed(code: int, address: NetAddress): Response
+    var where = f"{address.host}:{address.port}"
+    var why = f"the request failed (WinHTTP error {code})"
+    if code == 12002
+        why = f"{where} took too long to answer"
+    elif code == 12007
+        why = f"couldn't find the server {address.host}"
+    elif code == 12029
+        why = f"couldn't connect to {where}"
+    elif code == 12030 or code == 12031
+        why = f"the connection to {where} was dropped"
+    elif code == 12152
+        why = f"{where} closed the connection or sent an answer that isn't valid HTTP"
+    elif code == 12175 or code == 12044 or code == 12045 or code == 12037 or code == 12038
+        why = f"the secure connection to {where} couldn't be trusted"
+    end
+    return Response{status: 0, text: "", error: why}
+end
+
+# --- Web addresses ---
+
+func net_address(url: string): NetAddress
+    var secure = false
+    var start = 0
+    if net_starts(url, "http://")
+        start = 7
+    elif net_starts(url, "https://")
+        secure = true
+        start = 8
+    else
+        fail(f"net takes web addresses starting with http:// or https://, not {url}.")
+    end
+    var place = start
+    var host = ""
+    while place < len(url) and url[place] != ":" and url[place] != "/" and url[place] != "?"
+        host = host + url[place]
+        place += 1
+    end
+    if host == ""
+        fail(f"The web address {url} has no server name.")
+    end
+    var port = 80
+    if secure
+        port = 443
+    end
+    if place < len(url) and url[place] == ":"
+        place += 1
+        port = 0
+        var digits = 0
+        while place < len(url) and byte(url, place) >= 48 and byte(url, place) <= 57
+            port = port * 10 + byte(url, place) - 48
+            digits += 1
+            place += 1
+            if port > 65535
+                fail(f"The web address {url} has a port above 65535.")
+            end
+        end
+        if digits == 0 or port == 0
+            fail(f"The web address {url} has a port that isn't a number from 1 to 65535.")
+        end
+    end
+    var path = ""
+    while place < len(url)
+        path = path + url[place]
+        place += 1
+    end
+    if path == "" or byte(path, 0) == 63
+        path = "/" + path
+    end
+    return NetAddress{secure: secure, host: host, port: port, path: path}
+end
+
+func net_starts(text: string, front: string): bool
+    if len(text) < len(front)
+        return false
+    end
+    for i in 0..len(front)
+        if byte(text, i) != byte(front, i)
+            return false
+        end
+    end
+    return true
+end
+
+# --- Background requests ---
+
+func Net.start_get(url: string): Request
+    return self.start("GET", url, "")
+end
+
+func Net.start_post(url: string, text: string): Request
+    return self.start("POST", url, text)
+end
+
+func Net.start(verb: string, url: string, body: string): Request
+    self.must_be_open()
+    var address = net_address(url)
+    self.tidy()
+    if self.background == 0
+        self.background = WinHttpOpen(self.agent, 4, 0, 0, 268435456)
+        if self.background == 0
+            fail("Windows couldn't start background web requests.")
+        end
+        WinHttpSetStatusCallback(self.background, callback(net_signal), 25103360, 0)
+        self.set_timeout(self.seconds)
+    end
+    var header_text = ""
+    if verb == "POST"
+        header_text = "Content-Type: text/plain; charset=utf-8"
+    end
+    var texts = 65600 + len(body) + 8 - len(body) % 2
+    var block = LocalAlloc(64, texts + (len(address.host) + len(verb) + len(address.path) + len(header_text) + 4) * 2)
+    if block == 0
+        fail("There isn't enough memory for another web request.")
+    end
+    for i in 0..len(body)
+        poke_u8(block, 65600 + i, byte(body, i))
+    end
+    var host_text = block + texts
+    var verb_text = host_text + net_copy_wide(host_text, address.host)
+    var path_text = verb_text + net_copy_wide(verb_text, verb)
+    var headers = path_text + net_copy_wide(path_text, address.path)
+    net_copy_wide(headers, header_text)
+    var r = Request{net: self, block: block, connection: 0, request: 0, stage: 1, status: 0, buffer: memory(4096), capacity: 4096, used: 0, waiting: 0, address: address, result: Response{status: 0, text: "", error: ""}, deadline: 0.0, clock: memory(16), finished: false}
+    r.deadline = net_clock(r.clock) + self.seconds
+    r.connection = WinHttpConnect(self.background, host_text, address.port, 0)
+    if r.connection == 0
+        r.fail_with(GetLastError())
+        return r
+    end
+    var flags = 0
+    if address.secure
+        flags = 8388608
+    end
+    r.request = WinHttpOpenRequest(r.connection, verb_text, path_text, 0, 0, 0, flags)
+    if r.request == 0
+        r.fail_with(GetLastError())
+        return r
+    end
+    net_time_limits(r.request, self.seconds)
+    var headers_length = 0
+    if verb == "POST"
+        headers_length = -1
+    else
+        headers = 0
+    end
+    if not WinHttpSendRequest(r.request, headers, headers_length, block + 65600, len(body), len(body), block)
+        r.fail_with(GetLastError())
+    end
+    return r
+end
+
+# Takes the request's next steps, and answers true once it has finished, worked or not
+func Request.done(): bool
+    if self.finished
+        return true
+    end
+    var block = self.block
+    var moving = true
+    var stage_before = self.stage
+    var used_before = self.used
+    while moving and not self.finished
+        moving = false
+        if peek_i32(block, 20) != 0
+            self.fail_with(peek_i32(block, 24))
+        elif self.stage == 1 and peek_i32(block, 0) != 0
+            self.stage = 2
+            moving = true
+            if not WinHttpReceiveResponse(self.request, 0)
+                self.fail_with(GetLastError())
+            end
+        elif self.stage == 2 and peek_i32(block, 4) != 0
+            var number = memory(8)
+            var length = memory(8)
+            poke_i32(length, 0, 4)
+            if WinHttpQueryHeaders(self.request, 536870931, 0, number, length, 0)
+                self.status = peek_i32(number, 0)
+                self.ask_for_data()
+                moving = true
+            else
+                self.fail_with(GetLastError())
+            end
+        elif self.stage == 3 and peek_i32(block, 8) != 0
+            var count = peek_i32(block, 12)
+            if count <= 0
+                self.finish(Response{status: self.status, text: memory_text(self.buffer, self.used), error: ""})
+            else
+                if count > 65536
+                    count = 65536
+                end
+                self.waiting = count
+                self.stage = 4
+                poke_i32(block, 16, 0)
+                moving = true
+                if not WinHttpReadData(self.request, block + 64, count, 0)
+                    self.fail_with(GetLastError())
+                end
+            end
+        elif self.stage == 4 and peek_i32(block, 16) != 0
+            self.keep(block + 64, self.waiting)
+            self.ask_for_data()
+            moving = true
+        end
+    end
+    if not self.finished
+        var now = net_clock(self.clock)
+        if self.stage != stage_before or self.used != used_before
+            self.deadline = now + self.net.seconds
+        elif now > self.deadline
+            self.fail_with(12002)
+        end
+    end
+    return self.finished
+end
+
+# Seconds on the PC's steady clock. WinHTTP's own time limits only get checked when something arrives,
+# so each request keeps its own deadline instead
+func net_clock(place: int): float
+    QueryPerformanceCounter(place)
+    QueryPerformanceFrequency(place + 8)
+    return float(peek_i64(place, 0)) / float(peek_i64(place, 8))
+end
+
+func Request.ask_for_data()
+    self.stage = 3
+    poke_i32(self.block, 8, 0)
+    if not WinHttpQueryDataAvailable(self.request, 0)
+        self.fail_with(GetLastError())
+    end
+end
+
+# Copies a piece of the answer out of the block, into memory that grows
+func Request.keep(from: int, count: int)
+    if self.used + count > self.capacity
+        while self.used + count > self.capacity
+            self.capacity = self.capacity * 2
+        end
+        var bigger = memory(self.capacity)
+        for i in 0..(self.used + 7) / 8
+            poke_i64(bigger, i * 8, peek_i64(self.buffer, i * 8))
+        end
+        self.buffer = bigger
+    end
+    for i in 0..count
+        poke_u8(self.buffer, self.used + i, peek_u8(from, i))
+    end
+    self.used += count
+end
+
+# What came back. Only after done() has answered true
+func Request.response(): Response
+    if not self.finished
+        fail("This request hasn't finished yet. Check done() first.")
+    end
+    return self.result
+end
+
+# Stops a request that isn't needed any more
+func Request.cancel()
+    if not self.finished
+        self.finish(Response{status: 0, text: "", error: "the request was cancelled"})
+    end
+end
+
+func Request.fail_with(code: int)
+    self.finish(net_failed(code, self.address))
+end
+
+func Request.finish(result: Response)
+    self.result = result
+    self.finished = true
+    if self.request != 0
+        WinHttpCloseHandle(self.request)
+        self.net.closing.add(self.block)
+    else
+        LocalFree(self.block)
+    end
+    if self.connection != 0
+        WinHttpCloseHandle(self.connection)
+    end
+    self.request = 0
+    self.connection = 0
+end
+
+# Gives back the blocks of requests whose handles WinHTTP has finished closing
+func Net.tidy()
+    var still: [int] = []
+    for block in self.closing
+        if peek_i32(block, 28) != 0
+            LocalFree(block)
+        else
+            still.add(block)
+        end
+    end
+    self.closing = still
+end
+
+# How many finished requests WinHTTP is still closing
+func Net.closing_count(): int
+    self.tidy()
+    return len(self.closing)
+end
+
+# WinHTTP calls this on its own threads. It only writes numbers into the request's block: it must never
+# make text, arrays or structs, because the memory cleaner works on the program's own thread
+func net_signal(handle: int, block: int, status: int, info: int): int
+    if block == 0
+        return 0
+    end
+    var kind = status % 4294967296
+    if kind < 0
+        kind += 4294967296
+    end
+    if kind == 4194304
+        poke_i32(block, 0, 1)
+    elif kind == 131072
+        poke_i32(block, 4, 1)
+    elif kind == 262144
+        poke_i32(block, 12, peek_i32(info, 0))
+        poke_i32(block, 8, 1)
+    elif kind == 524288
+        poke_i32(block, 16, 1)
+    elif kind == 2097152
+        poke_i32(block, 24, peek_i32(info, 8))
+        poke_i32(block, 20, 1)
+    elif kind == 2048
+        poke_i32(block, 28, 1)
+    end
+    return 0
+end
+
+# --- Links between programs ---
+
+func Net.start_sockets()
+    self.must_be_open()
+    if not self.sockets_started
+        if WSAStartup(514, memory(512)) != 0
+            fail("Windows couldn't start network connections.")
+        end
+        self.sockets_started = true
+    end
+end
+
+# Waits for other programs to connect on a port, from any PC that can reach this one. Windows may ask
+# whether to let the program through its firewall
+func Net.listen(port: int): Listener
+    return self.listen_on(port, 0)
+end
+
+# The same, but only programs on this PC can connect. Good for testing
+func Net.listen_here(port: int): Listener
+    return self.listen_on(port, 16777343)
+end
+
+func Net.listen_on(port: int, address: int): Listener
+    self.start_sockets()
+    if port < 1 or port > 65535
+        fail(f"A port is a number from 1 to 65535, not {port}.")
+    end
+    var s = net_new_socket()
+    var yes = memory(8)
+    poke_i32(yes, 0, 1)
+    setsockopt(s, 65535, -5, yes, 4)
+    var place = net_socket_address(address, port)
+    if bind(s, place, 16) != 0
+        var code = WSAGetLastError()
+        closesocket(s)
+        if code == 10048
+            fail(f"Port {port} is already in use by another program.")
+        end
+        fail(f"Windows couldn't listen on port {port} (error {code}).")
+    end
+    listen(s, 16)
+    net_no_waiting(s)
+    return Listener{socket: s, port: port, open: true}
+end
+
+# The links of programs that connected since the last call. Call it once a frame
+func Listener.new_links(): [Link]
+    if not self.open
+        fail("This listener is closed, so it can't be used.")
+    end
+    var links: [Link] = []
+    while true
+        var s = accept(self.socket, 0, 0)
+        if s == -1
+            return links
+        end
+        net_no_waiting(s)
+        links.add(net_link(s, false))
+    end
+    return links
+end
+
+func Listener.close()
+    if not self.open
+        fail("This listener is already closed.")
+    end
+    self.open = false
+    closesocket(self.socket)
+end
+
+# Connects to a program listening on a port. host is an address like "127.0.0.1", or "localhost".
+# The link starts out connecting: check connected(), or just send, since messages wait until it's ready
+func Net.connect(host: string, port: int): Link
+    self.start_sockets()
+    if port < 1 or port > 65535
+        fail(f"A port is a number from 1 to 65535, not {port}.")
+    end
+    var address = net_ipv4(host)
+    var s = net_new_socket()
+    net_no_waiting(s)
+    var link = net_link(s, true)
+    if connect(s, net_socket_address(address, port), 16) != 0
+        var code = WSAGetLastError()
+        if code != 10035
+            link.broken(f"couldn't connect to {host}:{port} (error {code})")
+        end
+    else
+        link.connecting = false
+    end
+    return link
+end
+
+func net_link(s: int, connecting: bool): Link
+    return Link{socket: s, connecting: connecting, open: true, error: "", outgoing: memory(4096), out_size: 4096, out_start: 0, out_used: 0, incoming: memory(4096), in_size: 4096, in_used: 0, piece: memory(65536)}
+end
+
+func net_new_socket(): int
+    var s = socket(2, 1, 6)
+    if s == -1
+        fail("Windows couldn't make a network connection.")
+    end
+    return s
+end
+
+# Sockets that never wait
+func net_no_waiting(s: int)
+    var yes = memory(8)
+    poke_i32(yes, 0, 1)
+    ioctlsocket(s, -2147195266, yes)
+end
+
+# A sockaddr_in: the family, the port with its high byte first, then the address
+func net_socket_address(address: int, port: int): int
+    var place = memory(16)
+    poke_u16(place, 0, 2)
+    poke_u8(place, 2, port / 256)
+    poke_u8(place, 3, port % 256)
+    poke_i32(place, 4, address)
+    return place
+end
+
+# Turns "1.2.3.4" or "localhost" into the 4 bytes an address takes, first number lowest
+func net_ipv4(host: string): int
+    if host == "localhost"
+        return 16777343
+    end
+    var parts = [0, 0, 0, 0]
+    var part = 0
+    var digits = 0
+    for i in 0..len(host)
+        var b = byte(host, i)
+        if b >= 48 and b <= 57 and digits < 3
+            parts[part] = parts[part] * 10 + b - 48
+            digits += 1
+        elif b == 46 and digits > 0 and part < 3
+            part += 1
+            digits = 0
+        else
+            fail(f"net connects to addresses like 192.168.1.20 or localhost, not {host}.")
+        end
+    end
+    if part != 3 or digits == 0 or parts[0] > 255 or parts[1] > 255 or parts[2] > 255 or parts[3] > 255
+        fail(f"net connects to addresses like 192.168.1.20 or localhost, not {host}.")
+    end
+    return parts[0] + parts[1] * 256 + parts[2] * 65536 + parts[3] * 16777216
+end
+
+# True once the link has finished connecting
+func Link.connected(): bool
+    self.check_connecting()
+    return self.open and not self.connecting
+end
+
+func Link.check_connecting()
+    if not self.connecting or not self.open
+        return
+    end
+    var poll = memory(16)
+    poke_i64(poll, 0, self.socket)
+    poke_u16(poll, 8, 16)
+    if WSAPoll(poll, 1, 0) <= 0
+        return
+    end
+    var events = peek_u16(poll, 10)
+    if events % 2 == 1 or events / 2 % 2 == 1
+        var code = memory(8)
+        var size = memory(8)
+        poke_i32(size, 0, 4)
+        getsockopt(self.socket, 65535, 4103, code, size)
+        self.broken(f"couldn't connect (error {peek_i32(code, 0)})")
+    elif events / 16 % 2 == 1
+        self.connecting = false
+    end
+end
+
+# Sends one message. It goes out as soon as it can, during messages()
+func Link.send(text: string)
+    if not self.open
+        if self.error != ""
+            return
+        end
+        fail("This link is closed, so it can't send.")
+    end
+    var length = len(text)
+    if length > 16777216
+        fail(f"A message can be up to 16 MB, but this one is {length} bytes.")
+    end
+    self.make_room(length + 4)
+    var at = self.outgoing + self.out_used
+    poke_u8(at, 0, length % 256)
+    poke_u8(at, 1, length / 256 % 256)
+    poke_u8(at, 2, length / 65536 % 256)
+    poke_u8(at, 3, length / 16777216)
+    for i in 0..length
+        poke_u8(at, 4 + i, byte(text, i))
+    end
+    self.out_used += length + 4
+    self.flush()
+end
+
+func Link.make_room(extra: int)
+    if self.out_used + extra <= self.out_size
+        return
+    end
+    if self.out_start > 0
+        for i in self.out_start..self.out_used
+            poke_u8(self.outgoing, i - self.out_start, peek_u8(self.outgoing, i))
+        end
+        self.out_used -= self.out_start
+        self.out_start = 0
+        if self.out_used + extra <= self.out_size
+            return
+        end
+    end
+    var size = self.out_size
+    while self.out_used + extra > size
+        size = size * 2
+    end
+    var bigger = memory(size)
+    for i in 0..(self.out_used + 7) / 8
+        poke_i64(bigger, i * 8, peek_i64(self.outgoing, i * 8))
+    end
+    self.outgoing = bigger
+    self.out_size = size
+end
+
+# Sends as much of what's waiting as the connection takes now, up to 64 KB at a time
+func Link.flush()
+    self.check_connecting()
+    while self.open and not self.connecting and self.out_start < self.out_used
+        var count = self.out_used - self.out_start
+        if count > 65536
+            count = 65536
+        end
+        var sent = send(self.socket, self.outgoing + self.out_start, count, 0)
+        if sent < 0
+            var code = WSAGetLastError()
+            if code != 10035
+                self.broken(f"the connection was lost (error {code})")
+            end
+            return
+        end
+        self.out_start += sent
+    end
+    if self.out_start == self.out_used
+        self.out_start = 0
+        self.out_used = 0
+    end
+end
+
+# Sends what's waiting, reads what has come, and gives back the whole messages. Call it once a frame
+func Link.messages(): [string]
+    var found: [string] = []
+    if not self.open
+        if self.error != ""
+            return found
+        end
+        fail("This link is closed, so it can't be used.")
+    end
+    self.flush()
+    if not self.open or self.connecting
+        return found
+    end
+    while self.open
+        var count = recv(self.socket, self.piece, 65536, 0)
+        if count > 0
+            self.keep_incoming(count)
+        elif count == 0
+            self.take_messages(found)
+            self.broken("the other side closed the connection")
+            return found
+        else
+            var code = WSAGetLastError()
+            if code != 10035
+                self.take_messages(found)
+                self.broken(f"the connection was lost (error {code})")
+                return found
+            end
+            break
+        end
+    end
+    self.take_messages(found)
+    return found
+end
+
+func Link.keep_incoming(count: int)
+    if self.in_used + count > self.in_size
+        var size = self.in_size
+        while self.in_used + count > size
+            size = size * 2
+        end
+        var bigger = memory(size)
+        for i in 0..(self.in_used + 7) / 8
+            poke_i64(bigger, i * 8, peek_i64(self.incoming, i * 8))
+        end
+        self.incoming = bigger
+        self.in_size = size
+    end
+    for i in 0..count
+        poke_u8(self.incoming, self.in_used + i, peek_u8(self.piece, i))
+    end
+    self.in_used += count
+end
+
+# Moves every whole message from what has come into found
+func Link.take_messages(found: [string])
+    var place = 0
+    while self.in_used - place >= 4
+        var at = self.incoming + place
+        var length = peek_u8(at, 0) + peek_u8(at, 1) * 256 + peek_u8(at, 2) * 65536 + peek_u8(at, 3) * 16777216
+        if length > 16777216
+            self.broken("the other side sent a message over 16 MB, so the link was closed")
+            return
+        end
+        if self.in_used - place - 4 < length
+            break
+        end
+        found.add(memory_text(at + 4, length))
+        place += 4 + length
+    end
+    for i in place..self.in_used
+        poke_u8(self.incoming, i - place, peek_u8(self.incoming, i))
+    end
+    self.in_used -= place
+end
+
+# Why the link stopped, or "" while it works
+func Link.problem(): string
+    return self.error
+end
+
+func Link.is_open(): bool
+    self.check_connecting()
+    return self.open
+end
+
+func Link.broken(why: string)
+    if self.open
+        self.open = false
+        self.error = why
+        closesocket(self.socket)
+    end
+end
+
+func Link.close()
+    if not self.open
+        if self.error != ""
+            return
+        end
+        fail("This link is already closed.")
+    end
+    self.open = false
+    closesocket(self.socket)
+end
+
+# Copies text as Windows text, ending in a 0, to a place outside Jamo's memory. Gives back the bytes used
+func net_copy_wide(place: int, text: string): int
+    var from = wide(text)
+    var i = 0
+    while peek_u16(from, i * 2) != 0
+        poke_u16(place, i * 2, peek_u16(from, i * 2))
+        i += 1
+    end
+    poke_u16(place, i * 2, 0)
+    return i * 2 + 2
+end
+
+# Windows text that stays put until it's given back with LocalFree
+func net_lasting_wide(text: string): int
+    var place = LocalAlloc(64, len(text) * 2 + 2)
+    net_copy_wide(place, text)
+    return place
+end

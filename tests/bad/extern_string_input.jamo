@@ -1,0 +1,4 @@
+extern "user32.dll" func MessageBoxW(window: int, text: string): i32
+
+func main()
+end

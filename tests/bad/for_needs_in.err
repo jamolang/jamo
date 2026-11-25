@@ -1,0 +1,4 @@
+for_needs_in.jamo line 2: A for loop needs in after its variable.
+        for i 0..3
+              ^
+Like this: for i in 0..10

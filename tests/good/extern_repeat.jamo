@@ -1,0 +1,22 @@
+use "g3d.jamo"
+
+# The same Windows functions the libraries declare, declared again exactly the same
+extern "msvcrt.dll" func sqrt(value: float): float
+extern "msvcrt.dll" func sin(number: float): float
+extern "msvcrt.dll" func cos(value: float): float
+extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
+extern "kernel32.dll" func Sleep(milliseconds: i32)
+extern "msvcrt.dll" func floor(value: float): float
+extern "msvcrt.dll" func floor(value: float): float
+
+func main()
+    print(sqrt(16.0))
+    print(sin(0.0))
+    print(cos(0.0))
+    print(floor(2.75))
+    var place = memory(8)
+    print(QueryPerformanceCounter(place))
+    print(peek_i64(place, 0) > 0)
+    Sleep(1)
+    print(vec3(1.0, 2.5, 3.0).y)
+end

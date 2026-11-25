@@ -1,0 +1,3 @@
+generic_literal_needs_types.jamo line 6: Box needs its types, like Box<int>{...}.
+        var a = Box{item: 1}
+                ^^^^^^^^^^^^

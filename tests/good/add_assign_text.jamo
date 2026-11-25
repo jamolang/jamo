@@ -1,0 +1,18 @@
+# += joins text, on a variable, a field and an array item
+struct Note
+    text: string
+end
+
+func main()
+    var word = "Ja"
+    word += "mo"
+    print(word)
+    var note = Note{text: "a"}
+    for i in 0..3
+        note.text += string(i)
+    end
+    print(note.text)
+    var parts = ["x"]
+    parts[0] += "y"
+    print(parts[0])
+end

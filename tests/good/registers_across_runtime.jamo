@@ -1,0 +1,22 @@
+# The four busiest variables live in r12 to r15. These runtime routines use those registers
+# themselves, so they must put them back
+
+func keep()
+    var a = 11
+    var b = 22
+    var c = 33
+    var d = 44
+    var x = float("1.25") + float(f"{a + b + c + d}")
+    print(f"after float: {a} {b} {c} {d} {x}")
+    write_file("registers.txt", f"{a}{b}{c}{d}")
+    print(f"after write_file: {a} {b} {c} {d}")
+    var back = read_file("registers.txt")
+    print(f"after read_file: {a} {b} {c} {d} {back}")
+    var place = wide("hello")
+    var words = args()
+    print(f"after wide and args: {a} {b} {c} {d} {len(words)} {place > 0}")
+end
+
+func main()
+    keep()
+end

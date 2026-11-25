@@ -1,0 +1,3 @@
+index_needs_closing.jamo line 2: This needs a closing ].
+        print("abc"[0)
+                     ^

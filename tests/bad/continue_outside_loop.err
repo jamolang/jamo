@@ -1,0 +1,3 @@
+continue_outside_loop.jamo line 3: continue can only go inside a loop.
+            continue
+            ^^^^^^^^

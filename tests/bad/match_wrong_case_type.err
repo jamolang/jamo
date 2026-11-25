@@ -1,0 +1,3 @@
+match_wrong_case_type.jamo line 3: This match is on an int, but this case is a string.
+            case "a"
+                 ^^^

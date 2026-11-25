@@ -1,0 +1,10 @@
+func half(n: int, by: int): int
+    return n / by
+end
+
+func main()
+    print("before")
+    print(half(4, 2))
+    print(half(4, 0))
+    print("never")
+end

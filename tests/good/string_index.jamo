@@ -1,0 +1,10 @@
+func main()
+    var word = "cat"
+    print(word[0])
+    print(word[2])
+    print(len(word[1]))
+    print(word[0] == "c")
+    print("xyz"[1])
+    var i = 1
+    print(word[i + 1] + word[i - 1])
+end

@@ -1,0 +1,15 @@
+struct Box
+    size: int
+end
+
+func Box.split(parts: int): int
+    return self.size / parts
+end
+
+func divide(box: Box): int
+    return box.split(0)
+end
+
+func main()
+    print(divide(Box{size: 4}))
+end

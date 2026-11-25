@@ -1,0 +1,14 @@
+var total = outer()
+var names: [string] = []
+
+func outer(): int
+    return inner()
+end
+
+func inner(): int
+    return len(names)
+end
+
+func main()
+    print(1)
+end

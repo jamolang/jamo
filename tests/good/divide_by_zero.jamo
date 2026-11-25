@@ -1,0 +1,6 @@
+func main()
+    print(1)
+    var zero = 0
+    print(10 / zero)
+    print(2)
+end

@@ -1,0 +1,3 @@
+line_does_nothing.jamo line 3: This line doesn't do anything.
+        a[0]
+        ^^^^

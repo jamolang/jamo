@@ -1,0 +1,40 @@
+struct Link
+    value: int
+    next: [Link]
+end
+
+func down(n: int, text: string): int
+    if n == 0
+        return len(text)
+    end
+    var mine = string(n)
+    var answer = down(n - 1, "x") + len(mine)
+    return answer + len(text) - len(mine)
+end
+
+func chain(size: int): Link
+    var head = Link{value: 0, next: []}
+    for i in 1..size
+        head = Link{value: i, next: [head]}
+    end
+    return head
+end
+
+func total_junk(text: string)
+end
+
+func main()
+    print(down(300, "abc"))
+    var head = chain(1000)
+    for i in 0..200
+        var junk = "garbage" + string(i)
+        total_junk(junk)
+    end
+    var total = 0
+    var at = head
+    while len(at.next) > 0
+        total += at.value
+        at = at.next[0]
+    end
+    print(total)
+end

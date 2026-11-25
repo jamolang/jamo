@@ -1,0 +1,5 @@
+extern "kernel32.dll" func GetTickCount(): i32
+extern "kernel32.dll" func GetTickCount()
+
+func main()
+end

@@ -1,0 +1,3 @@
+set_a_call.jamo line 6: Only a variable, a field or an item can be set.
+        f() = 2
+        ^^^

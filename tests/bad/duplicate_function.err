@@ -1,0 +1,4 @@
+duplicate_function.jamo line 4: There's already a function called f, on line 1.
+    func f()
+         ^
+Give this one a different name.

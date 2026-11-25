@@ -1,0 +1,6 @@
+func main()
+    var word = "héllo 日本"
+    print(word)
+    print(len(word))
+    print(len("é"))
+end

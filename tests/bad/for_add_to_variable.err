@@ -1,0 +1,4 @@
+for_add_to_variable.jamo line 3: i is a for loop's variable, so it can't be changed.
+            i += 1
+            ^
+Copy it into a new variable first.

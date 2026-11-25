@@ -1,0 +1,2999 @@
+# Made by runtime/make_runtime.py from runtime.dsl. Change that, not this.
+#
+# Each runtime routine is real machine code, written out as hex, with its instruction beside it.
+
+use "assembler.jamo"
+
+const R_EXIT = 0
+const R_WRITE = 1
+const R_RAW_ALLOC = 2
+const R_FORMAT_INT = 3
+const R_MAKE_STRING = 4
+const R_PRINT_INT = 5
+const R_INT_TO_STRING = 6
+const R_BOOL_TO_STRING = 7
+const R_PRINT_BOOL = 8
+const R_PRINT_STRING = 9
+const R_JOIN_STRINGS = 10
+const R_JOIN_MANY = 11
+const R_STRINGS_EQUAL = 12
+const R_ERROR_TEXT = 13
+const R_FILE_NAME_OF = 14
+const R_RUN_ERROR = 15
+const R_DIVIDE_BY_ZERO = 16
+const R_OUT_OF_MEMORY = 17
+const R_FORMAT_FLOAT = 18
+const R_PRINT_FLOAT = 19
+const R_FLOAT_TO_STRING = 20
+const R_FLOAT_TO_INT = 21
+const R_FLOAT_MOD = 22
+const R_BUILDER_START = 23
+const R_BUILDER_ADD = 24
+const R_BUILDER_ADD_STRING = 25
+const R_BUILDER_TO_STRING = 26
+const R_BUILDER_ADD_INT = 27
+const R_INDEX_ERROR = 28
+const R_STRING_AT = 29
+const R_NEW_ARRAY = 30
+const R_ARRAY_ADD = 31
+const R_ARRAY_POP = 32
+const R_ARRAY_ADDRESS = 33
+const R_ARRAY_AT = 34
+const R_BUILDER_ADD_FLOAT = 35
+const R_BUILDER_ADD_BOOL = 36
+const R_BUILDER_ADD_QUOTED = 37
+const R_BUILDER_PRINT = 38
+const R_SHOW_ENTER = 39
+const R_SHOW_LEAVE = 40
+const R_TEXT_ERROR = 41
+const R_STRING_TO_INT = 42
+const R_BIG_TIMES_TEN = 43
+const R_BIG_DOUBLE = 44
+const R_BIG_COMPARE = 45
+const R_BIG_SUBTRACT = 46
+const R_STRING_TO_FLOAT = 47
+const R_STRING_TO_FLOAT_BODY = 48
+const R_BIG_SUBTRACT_CLEAR = 49
+const R_TO_WIDE = 50
+const R_TO_WIDE_BODY = 51
+const R_READ_WHOLE_FILE = 52
+const R_READ_WHOLE_FILE_BODY = 53
+const R_WRITE_WHOLE_FILE = 54
+const R_WRITE_WHOLE_FILE_BODY = 55
+const R_FILE_EXISTS = 56
+const R_STDIN_REFILL = 57
+const R_READ_LINE = 58
+const R_BUILDER_ADD_BYTE = 59
+const R_BUILDER_ADD_LETTER = 60
+const R_GET_ARGS = 61
+const R_GET_ARGS_BODY = 62
+const R_ADD_BACKSLASH_RUN = 63
+const R_RAW_FREE = 64
+const R_ALLOC = 65
+const R_ALLOC_TEXT = 66
+const R_ALLOC_BLOCK = 67
+const R_ALLOC_AGAIN = 68
+const R_ALLOC_TAKE = 69
+const R_ALLOC_SLOW = 70
+const R_CLEANER_START = 71
+const R_CLEANER_VERIFY = 72
+const R_CLEANER_ADD_TO_TABLE = 73
+const R_CLEANER_MARK_WORD = 74
+const R_CLEANER_CLEAN = 75
+const R_SHOW_CALLS = 76
+const RUNTIME_ROUTINES = 77
+
+# rcx = exit code. A window program that collected a run error shows it in a message box first, since it has no console
+func write_rt_exit(out: Assembler, rt: [int], text: RuntimeText)
+    var at_box_done = out.new_label()
+    var at_plain_exit = out.new_label()
+    out.place(rt[R_EXIT])
+    out.lea_data(REG_RAX, DATA_CLEANER, 0)
+    out.hex("f6402010")  # test byte ptr [rax+32], 16
+    out.jump_if_equal(at_plain_exit)
+    out.lea_data(REG_RAX, DATA_ERROR_TEXT, 0)
+    out.hex("48833800")  # cmp qword ptr [rax], 0
+    out.jump_if_equal(at_plain_exit)
+    out.hex("4889cb")  # mov rbx, rcx
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.lea_string(REG_RCX, text.user32_dll)
+    out.hex("4883c108")  # add rcx, 8
+    out.call_windows(DATA_LOAD_LIBRARY_A)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_box_done)
+    out.hex("4889c1")  # mov rcx, rax
+    out.lea_string(REG_RDX, text.message_box)
+    out.hex("4883c208")  # add rdx, 8
+    out.call_windows(DATA_GET_PROC_ADDRESS)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_box_done)
+    out.hex("4989c3")  # mov r11, rax
+    out.hex("31c9")  # xor ecx, ecx
+    out.lea_data(REG_RDX, DATA_ERROR_TEXT, 0)
+    out.hex("4883c208")  # add rdx, 8
+    out.lea_string(REG_R8, text.error_title)
+    out.hex("4983c008")  # add r8, 8
+    out.hex("41b910000000")  # mov r9d, 16
+    out.call_r11()
+    out.place(at_box_done)
+    out.hex("4889d9")  # mov rcx, rbx
+    out.place(at_plain_exit)
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.call_windows(DATA_EXIT_PROCESS)
+end
+
+# rcx = which stream, rdx = the text, r8 = its length. Keeps rbx, rsi and rdi for its callers. A window program has no console, so what goes to the error stream is kept for exit's message box, up to 4095 bytes
+func write_rt_write(out: Assembler, rt: [int], text: RuntimeText)
+    var at_to_stream = out.new_label()
+    var at_next_part = out.new_label()
+    var at_finished = out.new_label()
+    out.place(rt[R_WRITE])
+    out.hex("4883f9f4")  # cmp rcx, -12
+    out.jump_if_not_equal(at_to_stream)
+    out.lea_data(REG_R9, DATA_CLEANER, 0)
+    out.hex("41f6412010")  # test byte ptr [r9+32], 16
+    out.jump_if_equal(at_to_stream)
+    out.hex("56")  # push rsi
+    out.hex("57")  # push rdi
+    out.lea_data(REG_R9, DATA_ERROR_TEXT, 0)
+    out.hex("498b39")  # mov rdi, qword ptr [r9]
+    out.hex("48c7c1ff0f0000")  # mov rcx, 4095
+    out.hex("4829f9")  # sub rcx, rdi
+    out.hex("4c39c1")  # cmp rcx, r8
+    out.hex("490f47c8")  # cmova rcx, r8
+    out.hex("490109")  # add qword ptr [r9], rcx
+    out.hex("498d7c3908")  # lea rdi, [r9+rdi+8]
+    out.hex("4889d6")  # mov rsi, rdx
+    out.hex("f3a4")  # rep movsb
+    out.hex("5f")  # pop rdi
+    out.hex("5e")  # pop rsi
+    out.hex("c3")  # ret
+    out.place(at_to_stream)
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("53")  # push rbx
+    out.hex("56")  # push rsi
+    out.hex("57")  # push rdi
+    out.hex("4889d3")  # mov rbx, rdx
+    out.hex("4c89c6")  # mov rsi, r8
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec30")  # sub rsp, 48
+    out.call_windows(DATA_GET_STD_HANDLE)
+    out.hex("4889c7")  # mov rdi, rax
+    out.place(at_next_part)
+    out.hex("4885f6")  # test rsi, rsi
+    out.jump_if_equal(at_finished)
+    out.hex("4989f0")  # mov r8, rsi
+    out.hex("b800000040")  # mov eax, 0x40000000
+    out.hex("4939c0")  # cmp r8, rax
+    out.hex("4c0f47c0")  # cmova r8, rax
+    out.hex("4889f9")  # mov rcx, rdi
+    out.hex("4889da")  # mov rdx, rbx
+    out.hex("4c8d4c2428")  # lea r9, [rsp+40]
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.call_windows(DATA_WRITE_FILE)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_finished)
+    out.hex("8b442428")  # mov eax, dword ptr [rsp+40]
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_finished)
+    out.hex("4801c3")  # add rbx, rax
+    out.hex("4829c6")  # sub rsi, rax
+    out.jump(at_next_part)
+    out.place(at_finished)
+    out.hex("488d65e8")  # lea rsp, [rbp-24]
+    out.hex("5f")  # pop rdi
+    out.hex("5e")  # pop rsi
+    out.hex("5b")  # pop rbx
+    out.hex("5d")  # pop rbp
+    out.hex("c3")  # ret
+end
+
+# rcx = bytes wanted, for the text builder and the like, which the cleaner never touches. Keeps rbx, rsi and rdi
+func write_rt_raw_alloc(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_RAW_ALLOC])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.hex("4989c8")  # mov r8, rcx
+    out.hex("31d2")  # xor edx, edx
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.call_windows(DATA_HEAP_ALLOC)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(rt[R_OUT_OF_MEMORY])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the int, rdi = where the text must end. Answers with its start in rdx, building it backward
+func write_rt_format_int(out: Assembler, rt: [int], text: RuntimeText)
+    var at_positive = out.new_label()
+    var at_next_digit = out.new_label()
+    var at_no_sign = out.new_label()
+    out.place(rt[R_FORMAT_INT])
+    out.hex("4989fa")  # mov r10, rdi
+    out.hex("4531db")  # xor r11d, r11d
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_not_negative(at_positive)
+    out.hex("41bb01000000")  # mov r11d, 1
+    out.hex("48f7d8")  # neg rax
+    out.place(at_positive)
+    out.hex("b90a000000")  # mov ecx, 10
+    out.place(at_next_digit)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("48f7f1")  # div rcx
+    out.hex("80c230")  # add dl, 48
+    out.hex("49ffca")  # dec r10
+    out.hex("418812")  # mov byte ptr [r10], dl
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_not_equal(at_next_digit)
+    out.hex("4d85db")  # test r11, r11
+    out.jump_if_equal(at_no_sign)
+    out.hex("49ffca")  # dec r10
+    out.hex("41c6022d")  # mov byte ptr [r10], 45
+    out.place(at_no_sign)
+    out.hex("4c89d2")  # mov rdx, r10
+    out.hex("c3")  # ret
+end
+
+# rdx = the text, r8 = its length. Answers with a new string in rax
+func write_rt_make_string(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_MAKE_STRING])
+    out.hex("4889d3")  # mov rbx, rdx
+    out.hex("4c89c6")  # mov rsi, r8
+    out.hex("498d4809")  # lea rcx, [r8+9]
+    out.call(rt[R_ALLOC_TEXT])
+    out.hex("4989c1")  # mov r9, rax
+    out.hex("498931")  # mov qword ptr [r9], rsi
+    out.hex("498d7908")  # lea rdi, [r9+8]
+    out.hex("4889f1")  # mov rcx, rsi
+    out.hex("4889de")  # mov rsi, rbx
+    out.hex("f3a4")  # rep movsb
+    out.hex("c6070a")  # mov byte ptr [rdi], 10
+    out.hex("4c89c8")  # mov rax, r9
+    out.hex("c3")  # ret
+end
+
+# rax = the int
+func write_rt_print_int(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_PRINT_INT])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883ec30")  # sub rsp, 48
+    out.hex("c645ff0a")  # mov byte ptr [rbp-1], 10
+    out.hex("488d7dff")  # lea rdi, [rbp-1]
+    out.call(rt[R_FORMAT_INT])
+    out.hex("4989e8")  # mov r8, rbp
+    out.hex("4929d0")  # sub r8, rdx
+    out.hex("48c7c1f5ffffff")  # mov rcx, -11
+    out.call(rt[R_WRITE])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the int
+func write_rt_int_to_string(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_INT_TO_STRING])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883ec30")  # sub rsp, 48
+    out.hex("4889ef")  # mov rdi, rbp
+    out.call(rt[R_FORMAT_INT])
+    out.hex("4989e8")  # mov r8, rbp
+    out.hex("4929d0")  # sub r8, rdx
+    out.call(rt[R_MAKE_STRING])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the bool. Answers with the shared true or false string
+func write_rt_bool_to_string(out: Assembler, rt: [int], text: RuntimeText)
+    var at_is_false = out.new_label()
+    out.place(rt[R_BOOL_TO_STRING])
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_is_false)
+    out.lea_rax_string(text.true_word)
+    out.hex("c3")  # ret
+    out.place(at_is_false)
+    out.lea_rax_string(text.false_word)
+    out.hex("c3")  # ret
+end
+
+# rax = the bool
+func write_rt_print_bool(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_PRINT_BOOL])
+    out.call(rt[R_BOOL_TO_STRING])
+    out.jump(rt[R_PRINT_STRING])
+end
+
+# rax = the string. Every string keeps a hidden new line just past its end
+func write_rt_print_string(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_PRINT_STRING])
+    out.hex("488d5008")  # lea rdx, [rax+8]
+    out.hex("4c8b00")  # mov r8, qword ptr [rax]
+    out.hex("49ffc0")  # inc r8
+    out.hex("48c7c1f5ffffff")  # mov rcx, -11
+    out.jump(rt[R_WRITE])
+end
+
+# rax = the left string, rcx = the right string
+func write_rt_join_strings(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_JOIN_STRINGS])
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("4889ce")  # mov rsi, rcx
+    out.hex("488b0b")  # mov rcx, qword ptr [rbx]
+    out.hex("48030e")  # add rcx, qword ptr [rsi]
+    out.hex("4883c109")  # add rcx, 9
+    out.call(rt[R_ALLOC_TEXT])
+    out.hex("4989c0")  # mov r8, rax
+    out.hex("488b0b")  # mov rcx, qword ptr [rbx]
+    out.hex("48030e")  # add rcx, qword ptr [rsi]
+    out.hex("498908")  # mov qword ptr [r8], rcx
+    out.hex("498d7808")  # lea rdi, [r8+8]
+    out.hex("4889f2")  # mov rdx, rsi
+    out.hex("488d7308")  # lea rsi, [rbx+8]
+    out.hex("488b0b")  # mov rcx, qword ptr [rbx]
+    out.hex("f3a4")  # rep movsb
+    out.hex("488d7208")  # lea rsi, [rdx+8]
+    out.hex("488b0a")  # mov rcx, qword ptr [rdx]
+    out.hex("f3a4")  # rep movsb
+    out.hex("c6070a")  # mov byte ptr [rdi], 10
+    out.hex("4c89c0")  # mov rax, r8
+    out.hex("c3")  # ret
+end
+
+# rcx = how many strings, 2 or more, pushed in order before the call. Answers with them joined, made once. The caller takes them off the stack
+func write_rt_join_many(out: Assembler, rt: [int], text: RuntimeText)
+    var at_add_length = out.new_label()
+    var at_copy_part = out.new_label()
+    out.place(rt[R_JOIN_MANY])
+    out.hex("4889cb")  # mov rbx, rcx
+    out.hex("31c9")  # xor ecx, ecx
+    out.hex("488d742408")  # lea rsi, [rsp+8]
+    out.hex("4889da")  # mov rdx, rbx
+    out.place(at_add_length)
+    out.hex("488b06")  # mov rax, qword ptr [rsi]
+    out.hex("480308")  # add rcx, qword ptr [rax]
+    out.hex("4883c608")  # add rsi, 8
+    out.hex("48ffca")  # dec rdx
+    out.jump_if_not_equal(at_add_length)
+    out.hex("4989c8")  # mov r8, rcx
+    out.hex("4883c109")  # add rcx, 9
+    out.call(rt[R_ALLOC_TEXT])
+    out.hex("4c8900")  # mov qword ptr [rax], r8
+    out.hex("488d7808")  # lea rdi, [rax+8]
+    out.hex("488d14dc")  # lea rdx, [rsp+rbx*8]
+    out.place(at_copy_part)
+    out.hex("488b32")  # mov rsi, qword ptr [rdx]
+    out.hex("488b0e")  # mov rcx, qword ptr [rsi]
+    out.hex("4883c608")  # add rsi, 8
+    out.hex("f3a4")  # rep movsb
+    out.hex("4883ea08")  # sub rdx, 8
+    out.hex("48ffcb")  # dec rbx
+    out.jump_if_not_equal(at_copy_part)
+    out.hex("c6070a")  # mov byte ptr [rdi], 10
+    out.hex("c3")  # ret
+end
+
+# rax = one string, rcx = the other. Answers with a bool. The same string is equal to itself without looking
+func write_rt_strings_equal(out: Assembler, rt: [int], text: RuntimeText)
+    var at_same = out.new_label()
+    var at_different = out.new_label()
+    out.place(rt[R_STRINGS_EQUAL])
+    out.hex("4839c8")  # cmp rax, rcx
+    out.jump_if_equal(at_same)
+    out.hex("4889c6")  # mov rsi, rax
+    out.hex("4889cf")  # mov rdi, rcx
+    out.hex("488b0e")  # mov rcx, qword ptr [rsi]
+    out.hex("483b0f")  # cmp rcx, qword ptr [rdi]
+    out.jump_if_not_equal(at_different)
+    out.hex("4883c608")  # add rsi, 8
+    out.hex("4883c708")  # add rdi, 8
+    out.hex("31c0")  # xor eax, eax
+    out.hex("f3a6")  # repe cmpsb
+    out.hex("0f94c0")  # sete al
+    out.hex("c3")  # ret
+    out.place(at_same)
+    out.hex("b801000000")  # mov eax, 1
+    out.hex("c3")  # ret
+    out.place(at_different)
+    out.hex("31c0")  # xor eax, eax
+    out.hex("c3")  # ret
+end
+
+# rax = the string, written to the error stream with no new line
+func write_rt_error_text(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_ERROR_TEXT])
+    out.hex("488d5008")  # lea rdx, [rax+8]
+    out.hex("4c8b00")  # mov r8, qword ptr [rax]
+    out.hex("48c7c1f4ffffff")  # mov rcx, -12
+    out.jump(rt[R_WRITE])
+end
+
+# rax = which file. Answers with its name
+func write_rt_file_name_of(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_FILE_NAME_OF])
+    for i in 1..len(text.file_names)
+        var next = out.new_label()
+        out.mov_rcx_number(i)
+        out.cmp_rax_rcx()
+        out.jump_if_not_equal(next)
+        out.lea_rax_string(text.file_names[i])
+        out.hex("c3")
+        out.place(next)
+    end
+    out.lea_rax_string(text.file_names[0])
+    out.hex("c3")  # ret
+end
+
+# rax = the message. Shows the file and line, then stops with exit code 1
+func write_rt_run_error(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_RUN_ERROR])
+    out.hex("4889c3")  # mov rbx, rax
+    out.load_rax_data(DATA_CURRENT_LINE)
+    out.hex("4989c4")  # mov r12, rax
+    out.hex("48c1e820")  # shr rax, 32
+    out.call(rt[R_FILE_NAME_OF])
+    out.call(rt[R_ERROR_TEXT])
+    out.lea_rax_string(text.line_word)
+    out.call(rt[R_ERROR_TEXT])
+    out.hex("4883ec30")  # sub rsp, 48
+    out.hex("4489e0")  # mov eax, r12d
+    out.hex("488d7c2430")  # lea rdi, [rsp+48]
+    out.call(rt[R_FORMAT_INT])
+    out.hex("4c8d442430")  # lea r8, [rsp+48]
+    out.hex("4929d0")  # sub r8, rdx
+    out.hex("48c7c1f4ffffff")  # mov rcx, -12
+    out.call(rt[R_WRITE])
+    out.lea_rax_string(text.error_word)
+    out.call(rt[R_ERROR_TEXT])
+    out.hex("488d5308")  # lea rdx, [rbx+8]
+    out.hex("4c8b03")  # mov r8, qword ptr [rbx]
+    out.hex("49ffc0")  # inc r8
+    out.hex("48c7c1f4ffffff")  # mov rcx, -12
+    out.call(rt[R_WRITE])
+    out.call(rt[R_SHOW_CALLS])
+    out.hex("b901000000")  # mov ecx, 1
+    out.jump(rt[R_EXIT])
+end
+
+func write_rt_divide_by_zero(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_DIVIDE_BY_ZERO])
+    out.lea_rax_string(text.divide_by_zero)
+    out.jump(rt[R_RUN_ERROR])
+end
+
+func write_rt_out_of_memory(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_OUT_OF_MEMORY])
+    out.lea_rax_string(text.out_of_memory)
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# rax = the float, rdi = where the text must end. Answers with its start in rdx, building it backward. Rounds exactly, like %.6f, using whole numbers only
+func write_rt_format_float(out: Assembler, rt: [int], text: RuntimeText)
+    var at_has_fraction = out.new_label()
+    var at_only_fraction = out.new_label()
+    var at_long_shift = out.new_label()
+    var at_half_is_high = out.new_label()
+    var at_half_added = out.new_label()
+    var at_carry_check = out.new_label()
+    var at_write_fixed = out.new_label()
+    var at_has_decimals = out.new_label()
+    var at_next_trim = out.new_label()
+    var at_next_place = out.new_label()
+    var at_write_dot = out.new_label()
+    var at_add_sign = out.new_label()
+    var at_all_done = out.new_label()
+    var at_not_finite = out.new_label()
+    var at_is_infinite = out.new_label()
+    var at_scientific = out.new_label()
+    var at_next_big_digit = out.new_label()
+    var at_next_word = out.new_label()
+    var at_check_rest = out.new_label()
+    var at_is_tie = out.new_label()
+    var at_round_up = out.new_label()
+    var at_next_carry = out.new_label()
+    var at_plain_increase = out.new_label()
+    var at_rounded = out.new_label()
+    var at_trim_zero = out.new_label()
+    var at_copy_digit = out.new_label()
+    out.place(rt[R_FORMAT_FLOAT])
+    out.hex("4989c0")  # mov r8, rax
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("480fbaf33f")  # btr rbx, 63
+    out.hex("48b8000000000000f07f")  # movabs rax, 0x7FF0000000000000
+    out.hex("4839c3")  # cmp rbx, rax
+    out.jump_if_at_least(at_not_finite)
+    out.hex("48b80080e03779c34143")  # movabs rax, 0x4341C37937E08000
+    out.hex("4839c3")  # cmp rbx, rax
+    out.jump_if_at_least(at_scientific)
+    out.hex("4531c9")  # xor r9d, r9d
+    out.hex("31f6")  # xor esi, esi
+    out.hex("4889d9")  # mov rcx, rbx
+    out.hex("48c1e934")  # shr rcx, 52
+    out.hex("4881f9ea030000")  # cmp rcx, 1002
+    out.jump_if_below(at_write_fixed)
+    out.hex("4889d8")  # mov rax, rbx
+    out.hex("48baffffffffffff0f00")  # movabs rdx, 0x000FFFFFFFFFFFFF
+    out.hex("4821d0")  # and rax, rdx
+    out.hex("480fbae834")  # bts rax, 52
+    out.hex("4881e933040000")  # sub rcx, 1075
+    out.jump_if_less(at_has_fraction)
+    out.hex("48d3e0")  # shl rax, cl
+    out.hex("4989c1")  # mov r9, rax
+    out.jump(at_write_fixed)
+    out.place(at_has_fraction)
+    out.hex("48f7d9")  # neg rcx
+    out.hex("4883f940")  # cmp rcx, 64
+    out.jump_if_at_least(at_only_fraction)
+    out.hex("4989c1")  # mov r9, rax
+    out.hex("49d3e9")  # shr r9, cl
+    out.hex("ba01000000")  # mov edx, 1
+    out.hex("48d3e2")  # shl rdx, cl
+    out.hex("48ffca")  # dec rdx
+    out.hex("4821d0")  # and rax, rdx
+    out.place(at_only_fraction)
+    out.hex("4989ca")  # mov r10, rcx
+    out.hex("ba40420f00")  # mov edx, 1000000
+    out.hex("48f7e2")  # mul rdx
+    out.hex("4983fa40")  # cmp r10, 64
+    out.jump_if_at_least(at_long_shift)
+    out.hex("498d4aff")  # lea rcx, [r10-1]
+    out.hex("41bb01000000")  # mov r11d, 1
+    out.hex("49d3e3")  # shl r11, cl
+    out.hex("4c01d8")  # add rax, r11
+    out.hex("4883d200")  # adc rdx, 0
+    out.hex("4c89d1")  # mov rcx, r10
+    out.hex("4889c6")  # mov rsi, rax
+    out.hex("480fadd6")  # shrd rsi, rdx, cl
+    out.hex("41bb01000000")  # mov r11d, 1
+    out.hex("49d3e3")  # shl r11, cl
+    out.hex("49ffcb")  # dec r11
+    out.hex("4c85d8")  # test rax, r11
+    out.jump_if_not_equal(at_carry_check)
+    out.hex("4883e6fe")  # and rsi, -2
+    out.jump(at_carry_check)
+    out.place(at_long_shift)
+    out.hex("498d4ac0")  # lea rcx, [r10-64]
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_not_equal(at_half_is_high)
+    out.hex("49bb0000000000000080")  # movabs r11, 0x8000000000000000
+    out.hex("4c01d8")  # add rax, r11
+    out.hex("4883d200")  # adc rdx, 0
+    out.jump(at_half_added)
+    out.place(at_half_is_high)
+    out.hex("498d4abf")  # lea rcx, [r10-65]
+    out.hex("41bb01000000")  # mov r11d, 1
+    out.hex("49d3e3")  # shl r11, cl
+    out.hex("4c01da")  # add rdx, r11
+    out.place(at_half_added)
+    out.hex("498d4ac0")  # lea rcx, [r10-64]
+    out.hex("4889d6")  # mov rsi, rdx
+    out.hex("48d3ee")  # shr rsi, cl
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_not_equal(at_carry_check)
+    out.hex("41bb01000000")  # mov r11d, 1
+    out.hex("49d3e3")  # shl r11, cl
+    out.hex("49ffcb")  # dec r11
+    out.hex("4c85da")  # test rdx, r11
+    out.jump_if_not_equal(at_carry_check)
+    out.hex("4883e6fe")  # and rsi, -2
+    out.place(at_carry_check)
+    out.hex("4881fe40420f00")  # cmp rsi, 1000000
+    out.jump_if_not_equal(at_write_fixed)
+    out.hex("49ffc1")  # inc r9
+    out.hex("31f6")  # xor esi, esi
+    out.place(at_write_fixed)
+    out.hex("4989fa")  # mov r10, rdi
+    out.hex("4885f6")  # test rsi, rsi
+    out.jump_if_not_equal(at_has_decimals)
+    out.hex("49ffca")  # dec r10
+    out.hex("41c60230")  # mov byte ptr [r10], 48
+    out.jump(at_write_dot)
+    out.place(at_has_decimals)
+    out.hex("41bb06000000")  # mov r11d, 6
+    out.hex("b90a000000")  # mov ecx, 10
+    out.place(at_next_trim)
+    out.hex("4889f0")  # mov rax, rsi
+    out.hex("31d2")  # xor edx, edx
+    out.hex("48f7f1")  # div rcx
+    out.hex("4885d2")  # test rdx, rdx
+    out.jump_if_not_equal(at_next_place)
+    out.hex("4889c6")  # mov rsi, rax
+    out.hex("49ffcb")  # dec r11
+    out.jump(at_next_trim)
+    out.place(at_next_place)
+    out.hex("4889f0")  # mov rax, rsi
+    out.hex("31d2")  # xor edx, edx
+    out.hex("48f7f1")  # div rcx
+    out.hex("4889c6")  # mov rsi, rax
+    out.hex("80c230")  # add dl, 48
+    out.hex("49ffca")  # dec r10
+    out.hex("418812")  # mov byte ptr [r10], dl
+    out.hex("49ffcb")  # dec r11
+    out.jump_if_not_equal(at_next_place)
+    out.place(at_write_dot)
+    out.hex("49ffca")  # dec r10
+    out.hex("41c6022e")  # mov byte ptr [r10], 46
+    out.hex("4c89d7")  # mov rdi, r10
+    out.hex("4c89c8")  # mov rax, r9
+    out.call(rt[R_FORMAT_INT])
+    out.place(at_add_sign)
+    out.hex("4d85c0")  # test r8, r8
+    out.jump_if_not_negative(at_all_done)
+    out.hex("48ffca")  # dec rdx
+    out.hex("c6022d")  # mov byte ptr [rdx], 45
+    out.place(at_all_done)
+    out.hex("c3")  # ret
+    out.place(at_not_finite)
+    out.hex("488d57fd")  # lea rdx, [rdi-3]
+    out.hex("48b8000000000000f07f")  # movabs rax, 0x7FF0000000000000
+    out.hex("4839c3")  # cmp rbx, rax
+    out.jump_if_equal(at_is_infinite)
+    out.hex("c6026e")  # mov byte ptr [rdx], 110
+    out.hex("c6420161")  # mov byte ptr [rdx+1], 97
+    out.hex("c642026e")  # mov byte ptr [rdx+2], 110
+    out.hex("c3")  # ret
+    out.place(at_is_infinite)
+    out.hex("c60269")  # mov byte ptr [rdx], 105
+    out.hex("c642016e")  # mov byte ptr [rdx+1], 110
+    out.hex("c6420266")  # mov byte ptr [rdx+2], 102
+    out.jump(at_add_sign)
+    out.place(at_scientific)
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4881ec00020000")  # sub rsp, 512
+    out.hex("4989f9")  # mov r9, rdi
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("31c0")  # xor eax, eax
+    out.hex("b910000000")  # mov ecx, 16
+    out.hex("f348ab")  # rep stosq
+    out.hex("4889d9")  # mov rcx, rbx
+    out.hex("48c1e934")  # shr rcx, 52
+    out.hex("4881e933040000")  # sub rcx, 1075
+    out.hex("4889d8")  # mov rax, rbx
+    out.hex("48baffffffffffff0f00")  # movabs rdx, 0x000FFFFFFFFFFFFF
+    out.hex("4821d0")  # and rax, rdx
+    out.hex("480fbae834")  # bts rax, 52
+    out.hex("4889ca")  # mov rdx, rcx
+    out.hex("48c1ea06")  # shr rdx, 6
+    out.hex("83e13f")  # and ecx, 63
+    out.hex("4531d2")  # xor r10d, r10d
+    out.hex("490fa5c2")  # shld r10, rax, cl
+    out.hex("48d3e0")  # shl rax, cl
+    out.hex("488904d4")  # mov qword ptr [rsp+rdx*8], rax
+    out.hex("4c8954d408")  # mov qword ptr [rsp+rdx*8+8], r10
+    out.hex("488dbc2400020000")  # lea rdi, [rsp+512]
+    out.hex("41ba0a000000")  # mov r10d, 10
+    out.place(at_next_big_digit)
+    out.hex("b90f000000")  # mov ecx, 15
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4531db")  # xor r11d, r11d
+    out.place(at_next_word)
+    out.hex("488b04cc")  # mov rax, qword ptr [rsp+rcx*8]
+    out.hex("49f7f2")  # div r10
+    out.hex("488904cc")  # mov qword ptr [rsp+rcx*8], rax
+    out.hex("4909c3")  # or r11, rax
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_negative(at_next_word)
+    out.hex("80c230")  # add dl, 48
+    out.hex("48ffcf")  # dec rdi
+    out.hex("8817")  # mov byte ptr [rdi], dl
+    out.hex("4d85db")  # test r11, r11
+    out.jump_if_not_equal(at_next_big_digit)
+    out.hex("4889fe")  # mov rsi, rdi
+    out.hex("4c8d9424ff010000")  # lea r10, [rsp+511]
+    out.hex("4929f2")  # sub r10, rsi
+    out.hex("8a4607")  # mov al, byte ptr [rsi+7]
+    out.hex("3c35")  # cmp al, 53
+    out.jump_if_above(at_round_up)
+    out.jump_if_below(at_rounded)
+    out.hex("488d7e08")  # lea rdi, [rsi+8]
+    out.hex("488d8c2400020000")  # lea rcx, [rsp+512]
+    out.place(at_check_rest)
+    out.hex("4839cf")  # cmp rdi, rcx
+    out.jump_if_at_least(at_is_tie)
+    out.hex("803f30")  # cmp byte ptr [rdi], 48
+    out.jump_if_not_equal(at_round_up)
+    out.hex("48ffc7")  # inc rdi
+    out.jump(at_check_rest)
+    out.place(at_is_tie)
+    out.hex("f6460601")  # test byte ptr [rsi+6], 1
+    out.jump_if_equal(at_rounded)
+    out.place(at_round_up)
+    out.hex("b906000000")  # mov ecx, 6
+    out.place(at_next_carry)
+    out.hex("803c0e39")  # cmp byte ptr [rsi+rcx], 57
+    out.jump_if_not_equal(at_plain_increase)
+    out.hex("c6040e30")  # mov byte ptr [rsi+rcx], 48
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_negative(at_next_carry)
+    out.hex("c60631")  # mov byte ptr [rsi], 49
+    out.hex("49ffc2")  # inc r10
+    out.jump(at_rounded)
+    out.place(at_plain_increase)
+    out.hex("fe040e")  # inc byte ptr [rsi+rcx]
+    out.place(at_rounded)
+    out.hex("4c89cf")  # mov rdi, r9
+    out.hex("4c89d0")  # mov rax, r10
+    out.call(rt[R_FORMAT_INT])
+    out.hex("48ffca")  # dec rdx
+    out.hex("c6022b")  # mov byte ptr [rdx], 43
+    out.hex("48ffca")  # dec rdx
+    out.hex("c60265")  # mov byte ptr [rdx], 101
+    out.hex("b906000000")  # mov ecx, 6
+    out.place(at_trim_zero)
+    out.hex("4883f901")  # cmp rcx, 1
+    out.jump_if_equal(at_copy_digit)
+    out.hex("803c0e30")  # cmp byte ptr [rsi+rcx], 48
+    out.jump_if_not_equal(at_copy_digit)
+    out.hex("48ffc9")  # dec rcx
+    out.jump(at_trim_zero)
+    out.place(at_copy_digit)
+    out.hex("8a040e")  # mov al, byte ptr [rsi+rcx]
+    out.hex("48ffca")  # dec rdx
+    out.hex("8802")  # mov byte ptr [rdx], al
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_equal(at_copy_digit)
+    out.hex("48ffca")  # dec rdx
+    out.hex("c6022e")  # mov byte ptr [rdx], 46
+    out.hex("8a06")  # mov al, byte ptr [rsi]
+    out.hex("48ffca")  # dec rdx
+    out.hex("8802")  # mov byte ptr [rdx], al
+    out.hex("c9")  # leave
+    out.jump(at_add_sign)
+end
+
+# rax = the float
+func write_rt_print_float(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_PRINT_FLOAT])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883ec40")  # sub rsp, 64
+    out.hex("c645ff0a")  # mov byte ptr [rbp-1], 10
+    out.hex("488d7dff")  # lea rdi, [rbp-1]
+    out.call(rt[R_FORMAT_FLOAT])
+    out.hex("4989e8")  # mov r8, rbp
+    out.hex("4929d0")  # sub r8, rdx
+    out.hex("48c7c1f5ffffff")  # mov rcx, -11
+    out.call(rt[R_WRITE])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the float
+func write_rt_float_to_string(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_FLOAT_TO_STRING])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883ec40")  # sub rsp, 64
+    out.hex("4889ef")  # mov rdi, rbp
+    out.call(rt[R_FORMAT_FLOAT])
+    out.hex("4989e8")  # mov r8, rbp
+    out.hex("4929d0")  # sub r8, rdx
+    out.call(rt[R_MAKE_STRING])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the float. The processor answers with the smallest int when a float doesn't fit
+func write_rt_float_to_int(out: Assembler, rt: [int], text: RuntimeText)
+    var at_too_large = out.new_label()
+    var at_fits = out.new_label()
+    out.place(rt[R_FLOAT_TO_INT])
+    out.hex("66480f6ec0")  # movq xmm0, rax
+    out.hex("f2480f2cc0")  # cvttsd2si rax, xmm0
+    out.hex("48b90000000000000080")  # movabs rcx, 0x8000000000000000
+    out.hex("4839c8")  # cmp rax, rcx
+    out.jump_if_not_equal(at_fits)
+    out.hex("48b9000000000000e0c3")  # movabs rcx, 0xC3E0000000000000
+    out.hex("66480f6ec9")  # movq xmm1, rcx
+    out.hex("660f2ec1")  # ucomisd xmm0, xmm1
+    out.jump_if_unordered(at_too_large)
+    out.jump_if_equal(at_fits)
+    out.place(at_too_large)
+    out.lea_rax_string(text.float_too_large)
+    out.jump(rt[R_RUN_ERROR])
+    out.place(at_fits)
+    out.hex("c3")  # ret
+end
+
+# rax = the left float, rcx = the right float. The remainder keeps the left side's sign, like % on ints
+func write_rt_float_mod(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_step = out.new_label()
+    out.place(rt[R_FLOAT_MOD])
+    out.hex("51")  # push rcx
+    out.hex("dd0424")  # fld qword ptr [rsp]
+    out.hex("48890424")  # mov qword ptr [rsp], rax
+    out.hex("dd0424")  # fld qword ptr [rsp]
+    out.place(at_next_step)
+    out.hex("d9f8")  # fprem
+    out.hex("dfe0")  # fnstsw ax
+    out.hex("f6c404")  # test ah, 4
+    out.jump_if_not_equal(at_next_step)
+    out.hex("ddd9")  # fstp st(1)
+    out.hex("dd1c24")  # fstp qword ptr [rsp]
+    out.hex("58")  # pop rax
+    out.hex("c3")  # ret
+end
+
+# The one text builder: its pointer, length and room. Clears it for new text
+func write_rt_builder_start(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_START])
+    out.lea_data(REG_RAX, DATA_BUILDER, 0)
+    out.hex("48c7400800000000")  # mov qword ptr [rax+8], 0
+    out.hex("c3")  # ret
+end
+
+# rdx = the text, r8 = its length. Keeps rbx, rsi and rdi
+func write_rt_builder_add(out: Assembler, rt: [int], text: RuntimeText)
+    var at_big_enough = out.new_label()
+    var at_has_room = out.new_label()
+    out.place(rt[R_BUILDER_ADD])
+    out.hex("53")  # push rbx
+    out.hex("56")  # push rsi
+    out.hex("57")  # push rdi
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.lea_data(REG_RBX, DATA_BUILDER, 0)
+    out.hex("4889d6")  # mov rsi, rdx
+    out.hex("4d89c4")  # mov r12, r8
+    out.hex("488b4308")  # mov rax, qword ptr [rbx+8]
+    out.hex("4c01e0")  # add rax, r12
+    out.hex("483b4310")  # cmp rax, qword ptr [rbx+16]
+    out.jump_if_at_most(at_has_room)
+    out.hex("488d0c00")  # lea rcx, [rax+rax]
+    out.hex("4881f900010000")  # cmp rcx, 256
+    out.jump_if_at_least(at_big_enough)
+    out.hex("b900010000")  # mov ecx, 256
+    out.place(at_big_enough)
+    out.hex("48894b10")  # mov qword ptr [rbx+16], rcx
+    out.call(rt[R_RAW_ALLOC])
+    out.hex("4889c7")  # mov rdi, rax
+    out.hex("4989f0")  # mov r8, rsi
+    out.hex("488b33")  # mov rsi, qword ptr [rbx]
+    out.hex("4989f5")  # mov r13, rsi
+    out.hex("48893b")  # mov qword ptr [rbx], rdi
+    out.hex("488b4b08")  # mov rcx, qword ptr [rbx+8]
+    out.hex("f3a4")  # rep movsb
+    out.hex("4c89c6")  # mov rsi, r8
+    out.hex("4c89e9")  # mov rcx, r13
+    out.call(rt[R_RAW_FREE])
+    out.place(at_has_room)
+    out.hex("488b3b")  # mov rdi, qword ptr [rbx]
+    out.hex("48037b08")  # add rdi, qword ptr [rbx+8]
+    out.hex("4c89e1")  # mov rcx, r12
+    out.hex("f3a4")  # rep movsb
+    out.hex("4c016308")  # add qword ptr [rbx+8], r12
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("5f")  # pop rdi
+    out.hex("5e")  # pop rsi
+    out.hex("5b")  # pop rbx
+    out.hex("c3")  # ret
+end
+
+# rax = the string
+func write_rt_builder_add_string(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_ADD_STRING])
+    out.hex("488d5008")  # lea rdx, [rax+8]
+    out.hex("4c8b00")  # mov r8, qword ptr [rax]
+    out.jump(rt[R_BUILDER_ADD])
+end
+
+# Answers with the built text as a new string
+func write_rt_builder_to_string(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_TO_STRING])
+    out.lea_data(REG_RAX, DATA_BUILDER, 0)
+    out.hex("488b10")  # mov rdx, qword ptr [rax]
+    out.hex("4c8b4008")  # mov r8, qword ptr [rax+8]
+    out.jump(rt[R_MAKE_STRING])
+end
+
+# rax = the int. Keeps rbx, rsi, r12 and r13
+func write_rt_builder_add_int(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_ADD_INT])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883ec30")  # sub rsp, 48
+    out.hex("4889ef")  # mov rdi, rbp
+    out.call(rt[R_FORMAT_INT])
+    out.hex("4989e8")  # mov r8, rbp
+    out.hex("4929d0")  # sub r8, rdx
+    out.call(rt[R_BUILDER_ADD])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the index, rcx = the size, rdx = the words after the index, r8 = the words after the size
+func write_rt_index_error(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_INDEX_ERROR])
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("4889ce")  # mov rsi, rcx
+    out.hex("4989d4")  # mov r12, rdx
+    out.hex("4d89c5")  # mov r13, r8
+    out.call(rt[R_BUILDER_START])
+    out.lea_string(REG_RAX, text.index_word)
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.hex("4889d8")  # mov rax, rbx
+    out.call(rt[R_BUILDER_ADD_INT])
+    out.hex("4c89e0")  # mov rax, r12
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.hex("4889f0")  # mov rax, rsi
+    out.call(rt[R_BUILDER_ADD_INT])
+    out.hex("4c89e8")  # mov rax, r13
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.call(rt[R_BUILDER_TO_STRING])
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# rax = the string, rcx = the index. Answers with that byte's one-letter string, which is shared, since text never changes
+func write_rt_string_at(out: Assembler, rt: [int], text: RuntimeText)
+    var at_outside = out.new_label()
+    out.place(rt[R_STRING_AT])
+    out.hex("483b08")  # cmp rcx, qword ptr [rax]
+    out.jump_if_at_least(at_outside)
+    out.hex("0fb6440808")  # movzx eax, byte ptr [rax+rcx+8]
+    out.hex("c1e004")  # shl eax, 4
+    out.lea_data(REG_RDX, DATA_LETTERS, 0)
+    out.hex("4801d0")  # add rax, rdx
+    out.hex("c3")  # ret
+    out.place(at_outside)
+    out.hex("4889ca")  # mov rdx, rcx
+    out.hex("488b08")  # mov rcx, qword ptr [rax]
+    out.hex("4889d0")  # mov rax, rdx
+    out.lea_string(REG_RDX, text.outside_string)
+    out.lea_string(REG_R8, text.bytes_word)
+    out.jump(rt[R_INDEX_ERROR])
+end
+
+# rcx = how many items. An array is its length, its room and a pointer to its items, so it can grow and stay shared. An empty one gets its items on its first add, since most never get any
+func write_rt_new_array(out: Assembler, rt: [int], text: RuntimeText)
+    var at_enough_room = out.new_label()
+    var at_stays_empty = out.new_label()
+    out.place(rt[R_NEW_ARRAY])
+    out.hex("4889cb")  # mov rbx, rcx
+    out.hex("b918000000")  # mov ecx, 24
+    out.call(rt[R_ALLOC])
+    out.hex("4889c6")  # mov rsi, rax
+    out.hex("4889d9")  # mov rcx, rbx
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_equal(at_stays_empty)
+    out.hex("4883f904")  # cmp rcx, 4
+    out.jump_if_at_least(at_enough_room)
+    out.hex("b904000000")  # mov ecx, 4
+    out.place(at_enough_room)
+    out.hex("4889cf")  # mov rdi, rcx
+    out.hex("48c1e103")  # shl rcx, 3
+    out.call(rt[R_ALLOC])
+    out.hex("48894610")  # mov qword ptr [rsi+16], rax
+    out.hex("48897e08")  # mov qword ptr [rsi+8], rdi
+    out.hex("48891e")  # mov qword ptr [rsi], rbx
+    out.hex("4889f0")  # mov rax, rsi
+    out.hex("c3")  # ret
+    out.place(at_stays_empty)
+    out.hex("4889f0")  # mov rax, rsi
+    out.hex("c3")  # ret
+end
+
+# rax = the array, rcx = the new item
+func write_rt_array_add(out: Assembler, rt: [int], text: RuntimeText)
+    var at_has_items = out.new_label()
+    var at_has_room = out.new_label()
+    out.place(rt[R_ARRAY_ADD])
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("4889ce")  # mov rsi, rcx
+    out.hex("488b03")  # mov rax, qword ptr [rbx]
+    out.hex("483b4308")  # cmp rax, qword ptr [rbx+8]
+    out.jump_if_below(at_has_room)
+    out.hex("488b4b08")  # mov rcx, qword ptr [rbx+8]
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_not_equal(at_has_items)
+    out.hex("48c7430802000000")  # mov qword ptr [rbx+8], 2
+    out.hex("b902000000")  # mov ecx, 2
+    out.place(at_has_items)
+    out.hex("48c1e104")  # shl rcx, 4
+    out.call(rt[R_ALLOC])
+    out.hex("4889c7")  # mov rdi, rax
+    out.hex("48d16308")  # shl qword ptr [rbx+8], 1
+    out.hex("4989f0")  # mov r8, rsi
+    out.hex("488b7310")  # mov rsi, qword ptr [rbx+16]
+    out.hex("48897b10")  # mov qword ptr [rbx+16], rdi
+    out.hex("488b0b")  # mov rcx, qword ptr [rbx]
+    out.hex("f348a5")  # rep movsq
+    out.hex("4c89c6")  # mov rsi, r8
+    out.place(at_has_room)
+    out.hex("488b03")  # mov rax, qword ptr [rbx]
+    out.hex("488b5310")  # mov rdx, qword ptr [rbx+16]
+    out.hex("488934c2")  # mov qword ptr [rdx+rax*8], rsi
+    out.hex("48ff03")  # inc qword ptr [rbx]
+    out.hex("c3")  # ret
+end
+
+# rax = the array. Answers with its last item
+func write_rt_array_pop(out: Assembler, rt: [int], text: RuntimeText)
+    var at_is_empty = out.new_label()
+    out.place(rt[R_ARRAY_POP])
+    out.hex("488b08")  # mov rcx, qword ptr [rax]
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_equal(at_is_empty)
+    out.hex("48ffc9")  # dec rcx
+    out.hex("488908")  # mov qword ptr [rax], rcx
+    out.hex("488b5010")  # mov rdx, qword ptr [rax+16]
+    out.hex("488b04ca")  # mov rax, qword ptr [rdx+rcx*8]
+    out.hex("48c704ca00000000")  # mov qword ptr [rdx+rcx*8], 0
+    out.hex("c3")  # ret
+    out.place(at_is_empty)
+    out.lea_string(REG_RAX, text.pop_empty)
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# rax = the array, rcx = the index. Answers with where that item lives, and keeps r9
+func write_rt_array_address(out: Assembler, rt: [int], text: RuntimeText)
+    var at_outside = out.new_label()
+    out.place(rt[R_ARRAY_ADDRESS])
+    out.hex("483b08")  # cmp rcx, qword ptr [rax]
+    out.jump_if_at_least(at_outside)
+    out.hex("488b4010")  # mov rax, qword ptr [rax+16]
+    out.hex("488d04c8")  # lea rax, [rax+rcx*8]
+    out.hex("c3")  # ret
+    out.place(at_outside)
+    out.hex("4889ca")  # mov rdx, rcx
+    out.hex("488b08")  # mov rcx, qword ptr [rax]
+    out.hex("4889d0")  # mov rax, rdx
+    out.lea_string(REG_RDX, text.outside_array)
+    out.lea_string(REG_R8, text.items_word)
+    out.jump(rt[R_INDEX_ERROR])
+end
+
+# rax = the array, rcx = the index. Answers with that item
+func write_rt_array_at(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_ARRAY_AT])
+    out.call(rt[R_ARRAY_ADDRESS])
+    out.hex("488b00")  # mov rax, qword ptr [rax]
+    out.hex("c3")  # ret
+end
+
+# rax = the float
+func write_rt_builder_add_float(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_ADD_FLOAT])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883ec40")  # sub rsp, 64
+    out.hex("4889ef")  # mov rdi, rbp
+    out.call(rt[R_FORMAT_FLOAT])
+    out.hex("4989e8")  # mov r8, rbp
+    out.hex("4929d0")  # sub r8, rdx
+    out.call(rt[R_BUILDER_ADD])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rax = the bool
+func write_rt_builder_add_bool(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_ADD_BOOL])
+    out.call(rt[R_BOOL_TO_STRING])
+    out.jump(rt[R_BUILDER_ADD_STRING])
+end
+
+# rax = the string, shown inside an array or struct
+func write_rt_builder_add_quoted(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_ADD_QUOTED])
+    out.hex("4889c3")  # mov rbx, rax
+    out.lea_string(REG_RAX, text.quote)
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.hex("4889d8")  # mov rax, rbx
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.lea_string(REG_RAX, text.quote)
+    out.jump(rt[R_BUILDER_ADD_STRING])
+end
+
+# Writes the built text and a new line
+func write_rt_builder_print(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_PRINT])
+    out.lea_string(REG_RAX, text.new_line)
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.lea_data(REG_RAX, DATA_BUILDER, 0)
+    out.hex("488b10")  # mov rdx, qword ptr [rax]
+    out.hex("4c8b4008")  # mov r8, qword ptr [rax+8]
+    out.hex("48c7c1f5ffffff")  # mov rcx, -11
+    out.jump(rt[R_WRITE])
+end
+
+# rax = the array or struct being shown. Answers with 1 if it's already being shown, so a loop of items can't go on forever. Otherwise links it in, using [rbp-16] and [rbp-24] of its caller
+func write_rt_show_enter(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_visit = out.new_label()
+    var at_found = out.new_label()
+    var at_not_found = out.new_label()
+    out.place(rt[R_SHOW_ENTER])
+    out.lea_data(REG_RDX, DATA_VISIT_HEAD, 0)
+    out.hex("488b0a")  # mov rcx, qword ptr [rdx]
+    out.place(at_next_visit)
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_equal(at_not_found)
+    out.hex("48394108")  # cmp qword ptr [rcx+8], rax
+    out.jump_if_equal(at_found)
+    out.hex("488b09")  # mov rcx, qword ptr [rcx]
+    out.jump(at_next_visit)
+    out.place(at_found)
+    out.hex("b801000000")  # mov eax, 1
+    out.hex("c3")  # ret
+    out.place(at_not_found)
+    out.hex("488945f0")  # mov qword ptr [rbp-16], rax
+    out.hex("488b0a")  # mov rcx, qword ptr [rdx]
+    out.hex("48894de8")  # mov qword ptr [rbp-24], rcx
+    out.hex("488d4de8")  # lea rcx, [rbp-24]
+    out.hex("48890a")  # mov qword ptr [rdx], rcx
+    out.hex("31c0")  # xor eax, eax
+    out.hex("c3")  # ret
+end
+
+# Unlinks what show_enter linked in
+func write_rt_show_leave(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_SHOW_LEAVE])
+    out.lea_data(REG_RDX, DATA_VISIT_HEAD, 0)
+    out.hex("488b45e8")  # mov rax, qword ptr [rbp-24]
+    out.hex("488902")  # mov qword ptr [rdx], rax
+    out.hex("c3")  # ret
+end
+
+# rax = some text from the program, rdx = the words before it, r8 = the words after it
+func write_rt_text_error(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_TEXT_ERROR])
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("4989d4")  # mov r12, rdx
+    out.hex("4d89c5")  # mov r13, r8
+    out.call(rt[R_BUILDER_START])
+    out.hex("4c89e0")  # mov rax, r12
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.hex("4889d8")  # mov rax, rbx
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.hex("4c89e8")  # mov rax, r13
+    out.call(rt[R_BUILDER_ADD_STRING])
+    out.call(rt[R_BUILDER_TO_STRING])
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# rax = the text. Takes digits with an optional minus sign, and nothing else
+func write_rt_string_to_int(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_digit = out.new_label()
+    var at_fits = out.new_label()
+    var at_positive = out.new_label()
+    var at_bad_number = out.new_label()
+    out.place(rt[R_STRING_TO_INT])
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("488d7008")  # lea rsi, [rax+8]
+    out.hex("488b08")  # mov rcx, qword ptr [rax]
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_equal(at_bad_number)
+    out.hex("31ff")  # xor edi, edi
+    out.hex("4531c0")  # xor r8d, r8d
+    out.hex("41b90a000000")  # mov r9d, 10
+    out.hex("803e2d")  # cmp byte ptr [rsi], 45
+    out.jump_if_not_equal(at_next_digit)
+    out.hex("bf01000000")  # mov edi, 1
+    out.hex("48ffc6")  # inc rsi
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_equal(at_bad_number)
+    out.place(at_next_digit)
+    out.hex("0fb606")  # movzx eax, byte ptr [rsi]
+    out.hex("83e830")  # sub eax, 48
+    out.hex("83f809")  # cmp eax, 9
+    out.jump_if_above(at_bad_number)
+    out.hex("4989c2")  # mov r10, rax
+    out.hex("4c89c0")  # mov rax, r8
+    out.hex("49f7e1")  # mul r9
+    out.jump_if_below(at_bad_number)
+    out.hex("4c01d0")  # add rax, r10
+    out.jump_if_below(at_bad_number)
+    out.hex("4989c0")  # mov r8, rax
+    out.hex("48ffc6")  # inc rsi
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_equal(at_next_digit)
+    out.hex("48b80000000000000080")  # movabs rax, 0x8000000000000000
+    out.hex("4939c0")  # cmp r8, rax
+    out.jump_if_above(at_bad_number)
+    out.jump_if_not_equal(at_fits)
+    out.hex("85ff")  # test edi, edi
+    out.jump_if_equal(at_bad_number)
+    out.place(at_fits)
+    out.hex("4c89c0")  # mov rax, r8
+    out.hex("85ff")  # test edi, edi
+    out.jump_if_equal(at_positive)
+    out.hex("48f7d8")  # neg rax
+    out.place(at_positive)
+    out.hex("c3")  # ret
+    out.place(at_bad_number)
+    out.hex("4889d8")  # mov rax, rbx
+    out.lea_string(REG_RDX, text.cant_turn)
+    out.lea_string(REG_R8, text.into_int)
+    out.jump(rt[R_TEXT_ERROR])
+end
+
+# rdi = a whole number of 128 words, rax = what to add afterward
+func write_rt_big_times_ten(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_word = out.new_label()
+    out.place(rt[R_BIG_TIMES_TEN])
+    out.hex("4989c3")  # mov r11, rax
+    out.hex("31c9")  # xor ecx, ecx
+    out.place(at_next_word)
+    out.hex("488b04cf")  # mov rax, qword ptr [rdi+rcx*8]
+    out.hex("ba0a000000")  # mov edx, 10
+    out.hex("48f7e2")  # mul rdx
+    out.hex("4c01d8")  # add rax, r11
+    out.hex("4883d200")  # adc rdx, 0
+    out.hex("488904cf")  # mov qword ptr [rdi+rcx*8], rax
+    out.hex("4989d3")  # mov r11, rdx
+    out.hex("48ffc1")  # inc rcx
+    out.hex("4881f980000000")  # cmp rcx, 128
+    out.jump_if_below(at_next_word)
+    out.hex("c3")  # ret
+end
+
+# rdi = a whole number of 128 words
+func write_rt_big_double(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_word = out.new_label()
+    out.place(rt[R_BIG_DOUBLE])
+    out.hex("b980000000")  # mov ecx, 128
+    out.hex("31c0")  # xor eax, eax
+    out.place(at_next_word)
+    out.hex("48d117")  # rcl qword ptr [rdi], 1
+    out.hex("488d7f08")  # lea rdi, [rdi+8]
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_equal(at_next_word)
+    out.hex("c3")  # ret
+end
+
+# rdi and rsi = two whole numbers of 128 words. Answers with less than, equal to or more than 0 in rax
+func write_rt_big_compare(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_word = out.new_label()
+    var at_different = out.new_label()
+    out.place(rt[R_BIG_COMPARE])
+    out.hex("b97f000000")  # mov ecx, 127
+    out.place(at_next_word)
+    out.hex("488b04cf")  # mov rax, qword ptr [rdi+rcx*8]
+    out.hex("483b04ce")  # cmp rax, qword ptr [rsi+rcx*8]
+    out.jump_if_not_equal(at_different)
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_negative(at_next_word)
+    out.hex("31c0")  # xor eax, eax
+    out.hex("c3")  # ret
+    out.place(at_different)
+    out.hex("4819c0")  # sbb rax, rax
+    out.hex("4883c801")  # or rax, 1
+    out.hex("c3")  # ret
+end
+
+# rdi = a whole number of 128 words, which rsi is taken away from
+func write_rt_big_subtract(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_word = out.new_label()
+    out.place(rt[R_BIG_SUBTRACT])
+    out.hex("b980000000")  # mov ecx, 128
+    out.hex("31d2")  # xor edx, edx
+    out.place(at_next_word)
+    out.hex("488b04d6")  # mov rax, qword ptr [rsi+rdx*8]
+    out.hex("481904d7")  # sbb qword ptr [rdi+rdx*8], rax
+    out.hex("48ffc2")  # inc rdx
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_equal(at_next_word)
+    out.hex("c3")  # ret
+end
+
+# Keeps r12 to r15, where Jamo code may hold variables, around string_to_float_body
+func write_rt_string_to_float(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_STRING_TO_FLOAT])
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.hex("4156")  # push r14
+    out.hex("4157")  # push r15
+    out.call(rt[R_STRING_TO_FLOAT_BODY])
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("c3")  # ret
+end
+
+# rax = the text. Rounds exactly, using whole numbers only. [rsp] holds the top of a fraction, and [rsp+1024] the bottom
+func write_rt_string_to_float_body(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_char = out.new_label()
+    var at_is_significant = out.new_label()
+    var at_digit_counted = out.new_label()
+    var at_too_many_digits = out.new_label()
+    var at_char_done = out.new_label()
+    var at_found_dot = out.new_label()
+    var at_all_read = out.new_label()
+    var at_scale_top = out.new_label()
+    var at_scale_bottom = out.new_label()
+    var at_scaled = out.new_label()
+    var at_shift_bottom = out.new_label()
+    var at_bottom_too_small = out.new_label()
+    var at_top_too_small = out.new_label()
+    var at_in_range = out.new_label()
+    var at_has_precision = out.new_label()
+    var at_next_bit = out.new_label()
+    var at_bit_done = out.new_label()
+    var at_check_rest = out.new_label()
+    var at_round_up = out.new_label()
+    var at_rounded = out.new_label()
+    var at_has_answer = out.new_label()
+    var at_bad_number = out.new_label()
+    out.place(rt[R_STRING_TO_FLOAT_BODY])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4881ec00080000")  # sub rsp, 2048
+    out.hex("48830c2400")  # or qword ptr [rsp], 0
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("31c0")  # xor eax, eax
+    out.hex("b900010000")  # mov ecx, 256
+    out.hex("f348ab")  # rep stosq
+    out.hex("488d7308")  # lea rsi, [rbx+8]
+    out.hex("4c8b03")  # mov r8, qword ptr [rbx]
+    out.hex("4d85c0")  # test r8, r8
+    out.jump_if_equal(at_bad_number)
+    out.hex("4531ff")  # xor r15d, r15d
+    out.hex("4531e4")  # xor r12d, r12d
+    out.hex("4531ed")  # xor r13d, r13d
+    out.hex("4531f6")  # xor r14d, r14d
+    out.hex("4531c9")  # xor r9d, r9d
+    out.hex("4531d2")  # xor r10d, r10d
+    out.hex("803e2d")  # cmp byte ptr [rsi], 45
+    out.jump_if_not_equal(at_next_char)
+    out.hex("41bf01000000")  # mov r15d, 1
+    out.hex("48ffc6")  # inc rsi
+    out.hex("49ffc8")  # dec r8
+    out.jump_if_equal(at_bad_number)
+    out.place(at_next_char)
+    out.hex("4d85c0")  # test r8, r8
+    out.jump_if_equal(at_all_read)
+    out.hex("0fb606")  # movzx eax, byte ptr [rsi]
+    out.hex("3c2e")  # cmp al, 46
+    out.jump_if_equal(at_found_dot)
+    out.hex("83e830")  # sub eax, 48
+    out.hex("83f809")  # cmp eax, 9
+    out.jump_if_above(at_bad_number)
+    out.hex("49ffc1")  # inc r9
+    out.hex("4d85ed")  # test r13, r13
+    out.jump_if_not_equal(at_is_significant)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_digit_counted)
+    out.place(at_is_significant)
+    out.hex("4981fd20030000")  # cmp r13, 800
+    out.jump_if_at_least(at_too_many_digits)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.call(rt[R_BIG_TIMES_TEN])
+    out.hex("49ffc5")  # inc r13
+    out.place(at_digit_counted)
+    out.hex("4d85d2")  # test r10, r10
+    out.jump_if_equal(at_char_done)
+    out.hex("49ffcc")  # dec r12
+    out.jump(at_char_done)
+    out.place(at_too_many_digits)
+    out.hex("4909c6")  # or r14, rax
+    out.hex("4d85d2")  # test r10, r10
+    out.jump_if_not_equal(at_char_done)
+    out.hex("49ffc4")  # inc r12
+    out.place(at_char_done)
+    out.hex("48ffc6")  # inc rsi
+    out.hex("49ffc8")  # dec r8
+    out.jump(at_next_char)
+    out.place(at_found_dot)
+    out.hex("4d85d2")  # test r10, r10
+    out.jump_if_not_equal(at_bad_number)
+    out.hex("4d85c9")  # test r9, r9
+    out.jump_if_equal(at_bad_number)
+    out.hex("41ba01000000")  # mov r10d, 1
+    out.hex("48ffc6")  # inc rsi
+    out.hex("49ffc8")  # dec r8
+    out.jump_if_equal(at_bad_number)
+    out.jump(at_next_char)
+    out.place(at_all_read)
+    out.hex("31c0")  # xor eax, eax
+    out.hex("4d85ed")  # test r13, r13
+    out.jump_if_equal(at_has_answer)
+    out.hex("4b8d042c")  # lea rax, [r12+r13]
+    out.hex("483d36010000")  # cmp rax, 310
+    out.jump_if_greater(at_bad_number)
+    out.hex("483db6feffff")  # cmp rax, -330
+    out.jump_if_less(at_bad_number)
+    out.hex("48c784240004000001000000")  # mov qword ptr [rsp+1024], 1
+    out.place(at_scale_top)
+    out.hex("4d85e4")  # test r12, r12
+    out.jump_if_less_equal(at_scale_bottom)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("31c0")  # xor eax, eax
+    out.call(rt[R_BIG_TIMES_TEN])
+    out.hex("49ffcc")  # dec r12
+    out.jump(at_scale_top)
+    out.place(at_scale_bottom)
+    out.hex("4d85e4")  # test r12, r12
+    out.jump_if_greater_equal(at_scaled)
+    out.hex("488dbc2400040000")  # lea rdi, [rsp+1024]
+    out.hex("31c0")  # xor eax, eax
+    out.call(rt[R_BIG_TIMES_TEN])
+    out.hex("49ffc4")  # inc r12
+    out.jump(at_scale_bottom)
+    out.place(at_scaled)
+    out.hex("41bd35000000")  # mov r13d, 53
+    out.hex("41bc35000000")  # mov r12d, 53
+    out.place(at_shift_bottom)
+    out.hex("488dbc2400040000")  # lea rdi, [rsp+1024]
+    out.call(rt[R_BIG_DOUBLE])
+    out.hex("49ffcc")  # dec r12
+    out.jump_if_not_equal(at_shift_bottom)
+    out.place(at_bottom_too_small)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("488db42400040000")  # lea rsi, [rsp+1024]
+    out.call(rt[R_BIG_COMPARE])
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_negative(at_top_too_small)
+    out.hex("488dbc2400040000")  # lea rdi, [rsp+1024]
+    out.call(rt[R_BIG_DOUBLE])
+    out.hex("49ffc5")  # inc r13
+    out.jump(at_bottom_too_small)
+    out.place(at_top_too_small)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("488db42400040000")  # lea rsi, [rsp+1024]
+    out.call(rt[R_BIG_COMPARE])
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_not_negative(at_in_range)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.call(rt[R_BIG_DOUBLE])
+    out.hex("49ffcd")  # dec r13
+    out.jump(at_top_too_small)
+    out.place(at_in_range)
+    out.hex("4981fdff030000")  # cmp r13, 1023
+    out.jump_if_greater(at_bad_number)
+    out.hex("41b935000000")  # mov r9d, 53
+    out.hex("4981fd02fcffff")  # cmp r13, -1022
+    out.jump_if_greater_equal(at_has_precision)
+    out.hex("4d8d8d33040000")  # lea r9, [r13+1075]
+    out.hex("4d85c9")  # test r9, r9
+    out.jump_if_negative(at_bad_number)
+    out.place(at_has_precision)
+    out.hex("4d8d6101")  # lea r12, [r9+1]
+    out.hex("4531d2")  # xor r10d, r10d
+    out.place(at_next_bit)
+    out.hex("49d1e2")  # shl r10, 1
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("488db42400040000")  # lea rsi, [rsp+1024]
+    out.call(rt[R_BIG_COMPARE])
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_negative(at_bit_done)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.hex("488db42400040000")  # lea rsi, [rsp+1024]
+    out.hex("f8")  # clc
+    out.call(rt[R_BIG_SUBTRACT_CLEAR])
+    out.hex("4983ca01")  # or r10, 1
+    out.place(at_bit_done)
+    out.hex("488d3c24")  # lea rdi, [rsp]
+    out.call(rt[R_BIG_DOUBLE])
+    out.hex("49ffcc")  # dec r12
+    out.jump_if_not_equal(at_next_bit)
+    out.hex("b97f000000")  # mov ecx, 127
+    out.hex("31c0")  # xor eax, eax
+    out.place(at_check_rest)
+    out.hex("480b04cc")  # or rax, qword ptr [rsp+rcx*8]
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_negative(at_check_rest)
+    out.hex("4909c6")  # or r14, rax
+    out.hex("4d89d3")  # mov r11, r10
+    out.hex("4983e301")  # and r11, 1
+    out.hex("49d1ea")  # shr r10, 1
+    out.hex("4d85db")  # test r11, r11
+    out.jump_if_equal(at_rounded)
+    out.hex("4d85f6")  # test r14, r14
+    out.jump_if_not_equal(at_round_up)
+    out.hex("49f7c201000000")  # test r10, 1
+    out.jump_if_equal(at_rounded)
+    out.place(at_round_up)
+    out.hex("49ffc2")  # inc r10
+    out.place(at_rounded)
+    out.hex("4c89d0")  # mov rax, r10
+    out.hex("4981fd02fcffff")  # cmp r13, -1022
+    out.jump_if_less(at_has_answer)
+    out.hex("498d8dfe030000")  # lea rcx, [r13+1022]
+    out.hex("48c1e134")  # shl rcx, 52
+    out.hex("4801c8")  # add rax, rcx
+    out.hex("48b9000000000000f07f")  # movabs rcx, 0x7FF0000000000000
+    out.hex("4839c8")  # cmp rax, rcx
+    out.jump_if_at_least(at_bad_number)
+    out.place(at_has_answer)
+    out.hex("49c1e73f")  # shl r15, 63
+    out.hex("4c09f8")  # or rax, r15
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+    out.place(at_bad_number)
+    out.hex("4889d8")  # mov rax, rbx
+    out.lea_string(REG_RDX, text.cant_turn)
+    out.lea_string(REG_R8, text.into_float)
+    out.jump(rt[R_TEXT_ERROR])
+end
+
+# The same as big_subtract, starting with nothing borrowed
+func write_rt_big_subtract_clear(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_word = out.new_label()
+    out.place(rt[R_BIG_SUBTRACT_CLEAR])
+    out.hex("31d2")  # xor edx, edx
+    out.hex("b980000000")  # mov ecx, 128
+    out.hex("31c0")  # xor eax, eax
+    out.place(at_next_word)
+    out.hex("488b04d6")  # mov rax, qword ptr [rsi+rdx*8]
+    out.hex("481904d7")  # sbb qword ptr [rdi+rdx*8], rax
+    out.hex("48ffc2")  # inc rdx
+    out.hex("48ffc9")  # dec rcx
+    out.jump_if_not_equal(at_next_word)
+    out.hex("c3")  # ret
+end
+
+# Keeps r12 to r15, where Jamo code may hold variables, around to_wide_body
+func write_rt_to_wide(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_TO_WIDE])
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.hex("4156")  # push r14
+    out.hex("4157")  # push r15
+    out.call(rt[R_TO_WIDE_BODY])
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("c3")  # ret
+end
+
+# rax = a string. Answers with its text the way Windows' file functions want it. Keeps rbx and rsi
+func write_rt_to_wide_body(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_TO_WIDE_BODY])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("53")  # push rbx
+    out.hex("56")  # push rsi
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec30")  # sub rsp, 48
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("b9e9fd0000")  # mov ecx, 65001
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4c8d4308")  # lea r8, [rbx+8]
+    out.hex("4c8b0b")  # mov r9, qword ptr [rbx]
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.hex("48c744242800000000")  # mov qword ptr [rsp+40], 0
+    out.call_windows(DATA_MULTI_BYTE_TO_WIDE_CHAR)
+    out.hex("89c6")  # mov esi, eax
+    out.hex("488d4c0002")  # lea rcx, [rax+rax+2]
+    out.call(rt[R_ALLOC_TEXT])
+    out.hex("4989c4")  # mov r12, rax
+    out.hex("b9e9fd0000")  # mov ecx, 65001
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4c8d4308")  # lea r8, [rbx+8]
+    out.hex("4c8b0b")  # mov r9, qword ptr [rbx]
+    out.hex("4c89642420")  # mov qword ptr [rsp+32], r12
+    out.hex("4889742428")  # mov qword ptr [rsp+40], rsi
+    out.call_windows(DATA_MULTI_BYTE_TO_WIDE_CHAR)
+    out.hex("6641c704740000")  # mov word ptr [r12+rsi*2], 0
+    out.hex("4c89e0")  # mov rax, r12
+    out.hex("488d65f0")  # lea rsp, [rbp-16]
+    out.hex("5e")  # pop rsi
+    out.hex("5b")  # pop rbx
+    out.hex("5d")  # pop rbp
+    out.hex("c3")  # ret
+end
+
+# Keeps r12 to r15, where Jamo code may hold variables, around read_whole_file_body
+func write_rt_read_whole_file(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_READ_WHOLE_FILE])
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.hex("4156")  # push r14
+    out.hex("4157")  # push r15
+    out.call(rt[R_READ_WHOLE_FILE_BODY])
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("c3")  # ret
+end
+
+# rax = the path
+func write_rt_read_whole_file_body(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_chunk = out.new_label()
+    var at_finished = out.new_label()
+    var at_failed = out.new_label()
+    out.place(rt[R_READ_WHOLE_FILE_BODY])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4881ece00f0000")  # sub rsp, 4064
+    out.hex("48830c2400")  # or qword ptr [rsp], 0
+    out.hex("4989c5")  # mov r13, rax
+    out.call(rt[R_TO_WIDE])
+    out.hex("4889c1")  # mov rcx, rax
+    out.hex("ba00000080")  # mov edx, 0x80000000
+    out.hex("41b803000000")  # mov r8d, 3
+    out.hex("4531c9")  # xor r9d, r9d
+    out.hex("48c744242003000000")  # mov qword ptr [rsp+32], 3
+    out.hex("48c744242880000000")  # mov qword ptr [rsp+40], 0x80
+    out.hex("48c744243000000000")  # mov qword ptr [rsp+48], 0
+    out.call_windows(DATA_CREATE_FILE_W)
+    out.hex("4883f8ff")  # cmp rax, -1
+    out.jump_if_equal(at_failed)
+    out.hex("4989c4")  # mov r12, rax
+    out.call(rt[R_BUILDER_START])
+    out.place(at_next_chunk)
+    out.hex("4c89e1")  # mov rcx, r12
+    out.hex("488d542440")  # lea rdx, [rsp+64]
+    out.hex("41b8a00f0000")  # mov r8d, 4000
+    out.hex("4c8d4c2438")  # lea r9, [rsp+56]
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.call_windows(DATA_READ_FILE)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_failed)
+    out.hex("8b442438")  # mov eax, dword ptr [rsp+56]
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_finished)
+    out.hex("488d542440")  # lea rdx, [rsp+64]
+    out.hex("4989c0")  # mov r8, rax
+    out.call(rt[R_BUILDER_ADD])
+    out.jump(at_next_chunk)
+    out.place(at_finished)
+    out.hex("4c89e1")  # mov rcx, r12
+    out.call_windows(DATA_CLOSE_HANDLE)
+    out.call(rt[R_BUILDER_TO_STRING])
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+    out.place(at_failed)
+    out.hex("4c89e8")  # mov rax, r13
+    out.lea_string(REG_RDX, text.cant_read)
+    out.lea_string(REG_R8, text.period)
+    out.jump(rt[R_TEXT_ERROR])
+end
+
+# Keeps r12 to r15, where Jamo code may hold variables, around write_whole_file_body
+func write_rt_write_whole_file(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_WRITE_WHOLE_FILE])
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.hex("4156")  # push r14
+    out.hex("4157")  # push r15
+    out.call(rt[R_WRITE_WHOLE_FILE_BODY])
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("c3")  # ret
+end
+
+# rax = the path, rcx = the text. Replaces the file
+func write_rt_write_whole_file_body(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_part = out.new_label()
+    var at_finished = out.new_label()
+    var at_failed = out.new_label()
+    out.place(rt[R_WRITE_WHOLE_FILE_BODY])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec40")  # sub rsp, 64
+    out.hex("4989c5")  # mov r13, rax
+    out.hex("4989ce")  # mov r14, rcx
+    out.call(rt[R_TO_WIDE])
+    out.hex("4889c1")  # mov rcx, rax
+    out.hex("ba00000040")  # mov edx, 0x40000000
+    out.hex("41b801000000")  # mov r8d, 1
+    out.hex("4531c9")  # xor r9d, r9d
+    out.hex("48c744242002000000")  # mov qword ptr [rsp+32], 2
+    out.hex("48c744242880000000")  # mov qword ptr [rsp+40], 0x80
+    out.hex("48c744243000000000")  # mov qword ptr [rsp+48], 0
+    out.call_windows(DATA_CREATE_FILE_W)
+    out.hex("4883f8ff")  # cmp rax, -1
+    out.jump_if_equal(at_failed)
+    out.hex("4989c4")  # mov r12, rax
+    out.hex("498d5e08")  # lea rbx, [r14+8]
+    out.hex("498b36")  # mov rsi, qword ptr [r14]
+    out.place(at_next_part)
+    out.hex("4885f6")  # test rsi, rsi
+    out.jump_if_equal(at_finished)
+    out.hex("4989f0")  # mov r8, rsi
+    out.hex("b800000040")  # mov eax, 0x40000000
+    out.hex("4939c0")  # cmp r8, rax
+    out.hex("4c0f47c0")  # cmova r8, rax
+    out.hex("4c89e1")  # mov rcx, r12
+    out.hex("4889da")  # mov rdx, rbx
+    out.hex("4c8d4c2438")  # lea r9, [rsp+56]
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.call_windows(DATA_WRITE_FILE)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_failed)
+    out.hex("8b442438")  # mov eax, dword ptr [rsp+56]
+    out.hex("4801c3")  # add rbx, rax
+    out.hex("4829c6")  # sub rsi, rax
+    out.jump(at_next_part)
+    out.place(at_finished)
+    out.hex("4c89e1")  # mov rcx, r12
+    out.call_windows(DATA_CLOSE_HANDLE)
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+    out.place(at_failed)
+    out.hex("4c89e8")  # mov rax, r13
+    out.lea_string(REG_RDX, text.cant_write)
+    out.lea_string(REG_R8, text.period)
+    out.jump(rt[R_TEXT_ERROR])
+end
+
+# rax = the path. Answers with a bool
+func write_rt_file_exists(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_FILE_EXISTS])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.call(rt[R_TO_WIDE])
+    out.hex("4889c1")  # mov rcx, rax
+    out.call_windows(DATA_GET_FILE_ATTRIBUTES_W)
+    out.hex("83f8ff")  # cmp eax, -1
+    out.hex("0f95c0")  # setne al
+    out.hex("0fb6c0")  # movzx eax, al
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# Reads more typed or piped input. Answers with how much came. Keeps rbx
+func write_rt_stdin_refill(out: Assembler, rt: [int], text: RuntimeText)
+    var at_has_buffer = out.new_label()
+    var at_no_input = out.new_label()
+    var at_finished = out.new_label()
+    out.place(rt[R_STDIN_REFILL])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("53")  # push rbx
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec40")  # sub rsp, 64
+    out.lea_data(REG_RBX, DATA_STDIN, 0)
+    out.hex("48833b00")  # cmp qword ptr [rbx], 0
+    out.jump_if_not_equal(at_has_buffer)
+    out.hex("b900100000")  # mov ecx, 4096
+    out.call(rt[R_RAW_ALLOC])
+    out.hex("488903")  # mov qword ptr [rbx], rax
+    out.place(at_has_buffer)
+    out.hex("48c7c1f6ffffff")  # mov rcx, -10
+    out.call_windows(DATA_GET_STD_HANDLE)
+    out.hex("4889c1")  # mov rcx, rax
+    out.hex("488b13")  # mov rdx, qword ptr [rbx]
+    out.hex("41b800100000")  # mov r8d, 4096
+    out.hex("4c8d4c2438")  # lea r9, [rsp+56]
+    out.hex("48c744243800000000")  # mov qword ptr [rsp+56], 0
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.call_windows(DATA_READ_FILE)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_no_input)
+    out.hex("8b442438")  # mov eax, dword ptr [rsp+56]
+    out.hex("48c7430800000000")  # mov qword ptr [rbx+8], 0
+    out.hex("48894310")  # mov qword ptr [rbx+16], rax
+    out.jump(at_finished)
+    out.place(at_no_input)
+    out.hex("31c0")  # xor eax, eax
+    out.place(at_finished)
+    out.hex("488d65f8")  # lea rsp, [rbp-8]
+    out.hex("5b")  # pop rbx
+    out.hex("5d")  # pop rbp
+    out.hex("c3")  # ret
+end
+
+# Answers with the next line of input, without its line ending, or "" when there's no more
+func write_rt_read_line(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_char = out.new_label()
+    var at_has_char = out.new_label()
+    var at_line_done = out.new_label()
+    var at_no_return = out.new_label()
+    out.place(rt[R_READ_LINE])
+    out.lea_data(REG_RBX, DATA_STDIN, 0)
+    out.call(rt[R_BUILDER_START])
+    out.place(at_next_char)
+    out.hex("488b4308")  # mov rax, qword ptr [rbx+8]
+    out.hex("483b4310")  # cmp rax, qword ptr [rbx+16]
+    out.jump_if_below(at_has_char)
+    out.call(rt[R_STDIN_REFILL])
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_line_done)
+    out.hex("31c0")  # xor eax, eax
+    out.place(at_has_char)
+    out.hex("488b13")  # mov rdx, qword ptr [rbx]
+    out.hex("4801c2")  # add rdx, rax
+    out.hex("48ff4308")  # inc qword ptr [rbx+8]
+    out.hex("803a0a")  # cmp byte ptr [rdx], 10
+    out.jump_if_equal(at_line_done)
+    out.hex("41b801000000")  # mov r8d, 1
+    out.call(rt[R_BUILDER_ADD])
+    out.jump(at_next_char)
+    out.place(at_line_done)
+    out.lea_data(REG_RAX, DATA_BUILDER, 0)
+    out.hex("488b4808")  # mov rcx, qword ptr [rax+8]
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_equal(at_no_return)
+    out.hex("488b10")  # mov rdx, qword ptr [rax]
+    out.hex("807c0aff0d")  # cmp byte ptr [rdx+rcx-1], 13
+    out.jump_if_not_equal(at_no_return)
+    out.hex("48ff4808")  # dec qword ptr [rax+8]
+    out.place(at_no_return)
+    out.jump(rt[R_BUILDER_TO_STRING])
+end
+
+# rax = one byte. Keeps rbx
+func write_rt_builder_add_byte(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_BUILDER_ADD_BYTE])
+    out.hex("50")  # push rax
+    out.hex("4889e2")  # mov rdx, rsp
+    out.hex("41b801000000")  # mov r8d, 1
+    out.call(rt[R_BUILDER_ADD])
+    out.hex("58")  # pop rax
+    out.hex("c3")  # ret
+end
+
+# rax = a letter's number in Unicode, added as UTF-8. Keeps r12, r13, r14 and r15
+func write_rt_builder_add_letter(out: Assembler, rt: [int], text: RuntimeText)
+    var at_two_bytes = out.new_label()
+    var at_three_bytes = out.new_label()
+    var at_four_bytes = out.new_label()
+    var at_middle_byte = out.new_label()
+    var at_last_byte = out.new_label()
+    out.place(rt[R_BUILDER_ADD_LETTER])
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("4881fb80000000")  # cmp rbx, 0x80
+    out.jump_if_at_least(at_two_bytes)
+    out.jump(rt[R_BUILDER_ADD_BYTE])
+    out.place(at_two_bytes)
+    out.hex("4881fb00080000")  # cmp rbx, 0x800
+    out.jump_if_at_least(at_three_bytes)
+    out.hex("48c1e806")  # shr rax, 6
+    out.hex("480dc0000000")  # or rax, 0xC0
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.jump(at_last_byte)
+    out.place(at_three_bytes)
+    out.hex("4881fb00000100")  # cmp rbx, 0x10000
+    out.jump_if_at_least(at_four_bytes)
+    out.hex("48c1e80c")  # shr rax, 12
+    out.hex("480de0000000")  # or rax, 0xE0
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.jump(at_middle_byte)
+    out.place(at_four_bytes)
+    out.hex("48c1e812")  # shr rax, 18
+    out.hex("480df0000000")  # or rax, 0xF0
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.hex("4889d8")  # mov rax, rbx
+    out.hex("48c1e80c")  # shr rax, 12
+    out.hex("4883e03f")  # and rax, 0x3F
+    out.hex("480d80000000")  # or rax, 0x80
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.place(at_middle_byte)
+    out.hex("4889d8")  # mov rax, rbx
+    out.hex("48c1e806")  # shr rax, 6
+    out.hex("4883e03f")  # and rax, 0x3F
+    out.hex("480d80000000")  # or rax, 0x80
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.place(at_last_byte)
+    out.hex("4889d8")  # mov rax, rbx
+    out.hex("4883e03f")  # and rax, 0x3F
+    out.hex("480d80000000")  # or rax, 0x80
+    out.jump(rt[R_BUILDER_ADD_BYTE])
+end
+
+# Keeps r12 to r15, where Jamo code may hold variables, around get_args_body
+func write_rt_get_args(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_GET_ARGS])
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.hex("4156")  # push r14
+    out.hex("4157")  # push r15
+    out.call(rt[R_GET_ARGS_BODY])
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("c3")  # ret
+end
+
+# Answers with the command line's inputs as an array of strings, read by Windows' usual rules
+func write_rt_get_args_body(out: Assembler, rt: [int], text: RuntimeText)
+    var at_skip_quoted_name = out.new_label()
+    var at_skip_plain_name = out.new_label()
+    var at_next_input = out.new_label()
+    var at_skip_space = out.new_label()
+    var at_found_input = out.new_label()
+    var at_next_letter = out.new_label()
+    var at_plain_letter = out.new_label()
+    var at_whole_letter = out.new_label()
+    var at_quote_mark = out.new_label()
+    var at_flip_quotes = out.new_label()
+    var at_backslashes = out.new_label()
+    var at_count_backslash = out.new_label()
+    var at_counted = out.new_label()
+    var at_add_backslashes = out.new_label()
+    var at_input_done = out.new_label()
+    var at_all_done = out.new_label()
+    out.place(rt[R_GET_ARGS_BODY])
+    out.hex("b900000000")  # mov ecx, 0
+    out.call(rt[R_NEW_ARRAY])
+    out.hex("4989c4")  # mov r12, rax
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.call_windows(DATA_GET_COMMAND_LINE_W)
+    out.hex("4989c5")  # mov r13, rax
+    out.hex("6641837d0022")  # cmp word ptr [r13], 34
+    out.jump_if_not_equal(at_skip_plain_name)
+    out.place(at_skip_quoted_name)
+    out.hex("4983c502")  # add r13, 2
+    out.hex("410fb74500")  # movzx eax, word ptr [r13]
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_all_done)
+    out.hex("83f822")  # cmp eax, 34
+    out.jump_if_not_equal(at_skip_quoted_name)
+    out.hex("4983c502")  # add r13, 2
+    out.jump(at_next_input)
+    out.place(at_skip_plain_name)
+    out.hex("410fb74500")  # movzx eax, word ptr [r13]
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_all_done)
+    out.hex("83f820")  # cmp eax, 32
+    out.jump_if_equal(at_next_input)
+    out.hex("83f809")  # cmp eax, 9
+    out.jump_if_equal(at_next_input)
+    out.hex("4983c502")  # add r13, 2
+    out.jump(at_skip_plain_name)
+    out.place(at_next_input)
+    out.hex("410fb74500")  # movzx eax, word ptr [r13]
+    out.hex("83f820")  # cmp eax, 32
+    out.jump_if_equal(at_skip_space)
+    out.hex("83f809")  # cmp eax, 9
+    out.jump_if_not_equal(at_found_input)
+    out.place(at_skip_space)
+    out.hex("4983c502")  # add r13, 2
+    out.jump(at_next_input)
+    out.place(at_found_input)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_all_done)
+    out.call(rt[R_BUILDER_START])
+    out.hex("4531f6")  # xor r14d, r14d
+    out.place(at_next_letter)
+    out.hex("410fb74500")  # movzx eax, word ptr [r13]
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_input_done)
+    out.hex("83f85c")  # cmp eax, 92
+    out.jump_if_equal(at_backslashes)
+    out.hex("83f822")  # cmp eax, 34
+    out.jump_if_equal(at_quote_mark)
+    out.hex("4d85f6")  # test r14, r14
+    out.jump_if_not_equal(at_plain_letter)
+    out.hex("83f820")  # cmp eax, 32
+    out.jump_if_equal(at_input_done)
+    out.hex("83f809")  # cmp eax, 9
+    out.jump_if_equal(at_input_done)
+    out.place(at_plain_letter)
+    out.hex("4983c502")  # add r13, 2
+    out.hex("89c1")  # mov ecx, eax
+    out.hex("81e100fc0000")  # and ecx, 0xFC00
+    out.hex("81f900d80000")  # cmp ecx, 0xD800
+    out.jump_if_not_equal(at_whole_letter)
+    out.hex("410fb74d00")  # movzx ecx, word ptr [r13]
+    out.hex("89ca")  # mov edx, ecx
+    out.hex("81e200fc0000")  # and edx, 0xFC00
+    out.hex("81fa00dc0000")  # cmp edx, 0xDC00
+    out.jump_if_not_equal(at_whole_letter)
+    out.hex("4983c502")  # add r13, 2
+    out.hex("2d00d80000")  # sub eax, 0xD800
+    out.hex("c1e00a")  # shl eax, 10
+    out.hex("81e900dc0000")  # sub ecx, 0xDC00
+    out.hex("01c8")  # add eax, ecx
+    out.hex("0500000100")  # add eax, 0x10000
+    out.place(at_whole_letter)
+    out.call(rt[R_BUILDER_ADD_LETTER])
+    out.jump(at_next_letter)
+    out.place(at_quote_mark)
+    out.hex("4983c502")  # add r13, 2
+    out.hex("4d85f6")  # test r14, r14
+    out.jump_if_equal(at_flip_quotes)
+    out.hex("6641837d0022")  # cmp word ptr [r13], 34
+    out.jump_if_not_equal(at_flip_quotes)
+    out.hex("4983c502")  # add r13, 2
+    out.hex("b822000000")  # mov eax, 34
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.jump(at_next_letter)
+    out.place(at_flip_quotes)
+    out.hex("4983f601")  # xor r14, 1
+    out.jump(at_next_letter)
+    out.place(at_backslashes)
+    out.hex("4531ff")  # xor r15d, r15d
+    out.place(at_count_backslash)
+    out.hex("6641837d005c")  # cmp word ptr [r13], 92
+    out.jump_if_not_equal(at_counted)
+    out.hex("49ffc7")  # inc r15
+    out.hex("4983c502")  # add r13, 2
+    out.jump(at_count_backslash)
+    out.place(at_counted)
+    out.hex("6641837d0022")  # cmp word ptr [r13], 34
+    out.jump_if_not_equal(at_add_backslashes)
+    out.hex("4c89f8")  # mov rax, r15
+    out.hex("4883e001")  # and rax, 1
+    out.hex("49d1ef")  # shr r15, 1
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_add_backslashes)
+    out.hex("4983c502")  # add r13, 2
+    out.hex("4c89fb")  # mov rbx, r15
+    out.call(rt[R_ADD_BACKSLASH_RUN])
+    out.hex("b822000000")  # mov eax, 34
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.jump(at_next_letter)
+    out.place(at_add_backslashes)
+    out.hex("4c89fb")  # mov rbx, r15
+    out.call(rt[R_ADD_BACKSLASH_RUN])
+    out.jump(at_next_letter)
+    out.place(at_input_done)
+    out.call(rt[R_BUILDER_TO_STRING])
+    out.hex("4889c1")  # mov rcx, rax
+    out.hex("4c89e0")  # mov rax, r12
+    out.call(rt[R_ARRAY_ADD])
+    out.jump(at_next_input)
+    out.place(at_all_done)
+    out.hex("4c89e0")  # mov rax, r12
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# rbx = how many backslashes to add
+func write_rt_add_backslash_run(out: Assembler, rt: [int], text: RuntimeText)
+    var at_none_left = out.new_label()
+    out.place(rt[R_ADD_BACKSLASH_RUN])
+    out.hex("4885db")  # test rbx, rbx
+    out.jump_if_equal(at_none_left)
+    out.hex("b85c000000")  # mov eax, 92
+    out.call(rt[R_BUILDER_ADD_BYTE])
+    out.hex("48ffcb")  # dec rbx
+    out.jump(rt[R_ADD_BACKSLASH_RUN])
+    out.place(at_none_left)
+    out.hex("c3")  # ret
+end
+
+# rcx = what raw_alloc gave, or 0. Keeps rbx, rsi and rdi
+func write_rt_raw_free(out: Assembler, rt: [int], text: RuntimeText)
+    var at_nothing = out.new_label()
+    out.place(rt[R_RAW_FREE])
+    out.hex("4885c9")  # test rcx, rcx
+    out.jump_if_equal(at_nothing)
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.hex("4989c8")  # mov r8, rcx
+    out.hex("31d2")  # xor edx, edx
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.call_windows(DATA_HEAP_FREE)
+    out.hex("c9")  # leave
+    out.place(at_nothing)
+    out.hex("c3")  # ret
+end
+
+# rcx = bytes wanted, for a block that can hold references. Answers in rax with the memory zeroed, and keeps every other register
+func write_rt_alloc(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_ALLOC])
+    out.hex("41bb01000000")  # mov r11d, 1
+    out.jump(rt[R_ALLOC_BLOCK])
+end
+
+# rcx = bytes wanted, for a block that holds no references, like a string
+func write_rt_alloc_text(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_ALLOC_TEXT])
+    out.hex("4531db")  # xor r11d, r11d
+    out.jump(rt[R_ALLOC_BLOCK])
+end
+
+# Each block starts with a 32-byte header: the next block, its size, its type at +16, its mark at +17, where it sits in its chunk at +20 or 0 if it has no chunk, and a check value. Blocks of up to 512 bytes come from chunks, and this quick path saves few registers because it can't clean or call Windows
+func write_rt_alloc_block(out: Assembler, rt: [int], text: RuntimeText)
+    var at_slow = out.new_label()
+    out.place(rt[R_ALLOC_BLOCK])
+    out.hex("50")  # push rax
+    out.hex("51")  # push rcx
+    out.hex("52")  # push rdx
+    out.hex("53")  # push rbx
+    out.hex("57")  # push rdi
+    out.lea_data(REG_RBX, DATA_CLEANER, 0)
+    out.hex("488d51ff")  # lea rdx, [rcx-1]
+    out.hex("4881fa00020000")  # cmp rdx, 512
+    out.jump_if_at_least(at_slow)
+    out.hex("4883e2f0")  # and rdx, -16
+    out.hex("488d4230")  # lea rax, [rdx+48]
+    out.hex("48034310")  # add rax, qword ptr [rbx+16]
+    out.hex("483b4318")  # cmp rax, qword ptr [rbx+24]
+    out.jump_if_at_least(at_slow)
+    out.hex("f6432001")  # test byte ptr [rbx+32], 1
+    out.jump_if_not_equal(at_slow)
+    out.jump(rt[R_ALLOC_TAKE])
+    out.place(at_slow)
+    out.hex("5f")  # pop rdi
+    out.hex("5b")  # pop rbx
+    out.hex("5a")  # pop rdx
+    out.hex("59")  # pop rcx
+    out.hex("58")  # pop rax
+    out.jump(rt[R_ALLOC_SLOW])
+end
+
+# Comes back from alloc_slow, which has made sure a small block can be had
+func write_rt_alloc_again(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_ALLOC_AGAIN])
+    out.hex("50")  # push rax
+    out.hex("51")  # push rcx
+    out.hex("52")  # push rdx
+    out.hex("53")  # push rbx
+    out.hex("57")  # push rdi
+    out.lea_data(REG_RBX, DATA_CLEANER, 0)
+    out.hex("488d51ff")  # lea rdx, [rcx-1]
+    out.hex("4883e2f0")  # and rdx, -16
+    out.jump(rt[R_ALLOC_TAKE])
+end
+
+# rdx = 16 x the size class. Takes a block from its free list, or else from the current chunk, then sets it up and zeroes it. Five registers are on the stack
+func write_rt_alloc_take(out: Assembler, rt: [int], text: RuntimeText)
+    var at_set_up = out.new_label()
+    var at_next_zero = out.new_label()
+    var at_from_chunk = out.new_label()
+    var at_slow = out.new_label()
+    var at_not_free = out.new_label()
+    out.place(rt[R_ALLOC_TAKE])
+    out.hex("4889d1")  # mov rcx, rdx
+    out.hex("48d1e9")  # shr rcx, 1
+    out.hex("488b840b90000000")  # mov rax, qword ptr [rbx+rcx+144]
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_from_chunk)
+    out.hex("80781003")  # cmp byte ptr [rax+16], 3
+    out.jump_if_not_equal(at_not_free)
+    out.hex("488b38")  # mov rdi, qword ptr [rax]
+    out.hex("4889bc0b90000000")  # mov qword ptr [rbx+rcx+144], rdi
+    out.place(at_set_up)
+    out.hex("488d7a30")  # lea rdi, [rdx+48]
+    out.hex("48017b10")  # add qword ptr [rbx+16], rdi
+    out.hex("488b3b")  # mov rdi, qword ptr [rbx]
+    out.hex("488938")  # mov qword ptr [rax], rdi
+    out.hex("488903")  # mov qword ptr [rbx], rax
+    out.hex("48ff4308")  # inc qword ptr [rbx+8]
+    out.hex("488b4c2418")  # mov rcx, qword ptr [rsp+24]
+    out.hex("48894808")  # mov qword ptr [rax+8], rcx
+    out.hex("44885810")  # mov byte ptr [rax+16], r11b
+    out.hex("c6401100")  # mov byte ptr [rax+17], 0
+    out.hex("4831c1")  # xor rcx, rax
+    out.hex("48bf41454c434f4d414a")  # movabs rdi, 0x4A414D4F434C4541
+    out.hex("4831f9")  # xor rcx, rdi
+    out.hex("48894818")  # mov qword ptr [rax+24], rcx
+    out.hex("4883c020")  # add rax, 32
+    out.place(at_next_zero)
+    out.hex("48c7041000000000")  # mov qword ptr [rax+rdx], 0
+    out.hex("48c744100800000000")  # mov qword ptr [rax+rdx+8], 0
+    out.hex("4883ea10")  # sub rdx, 16
+    out.jump_if_not_negative(at_next_zero)
+    out.hex("5f")  # pop rdi
+    out.hex("5b")  # pop rbx
+    out.hex("5a")  # pop rdx
+    out.hex("59")  # pop rcx
+    out.hex("4883c408")  # add rsp, 8
+    out.hex("c3")  # ret
+    out.place(at_from_chunk)
+    out.hex("488b4368")  # mov rax, qword ptr [rbx+104]
+    out.hex("488d7c1030")  # lea rdi, [rax+rdx+48]
+    out.hex("483b7b70")  # cmp rdi, qword ptr [rbx+112]
+    out.jump_if_above(at_slow)
+    out.hex("48897b68")  # mov qword ptr [rbx+104], rdi
+    out.hex("4889c7")  # mov rdi, rax
+    out.hex("482b7b60")  # sub rdi, qword ptr [rbx+96]
+    out.hex("897814")  # mov dword ptr [rax+20], edi
+    out.jump(at_set_up)
+    out.place(at_slow)
+    out.hex("5f")  # pop rdi
+    out.hex("5b")  # pop rbx
+    out.hex("5a")  # pop rdx
+    out.hex("59")  # pop rcx
+    out.hex("58")  # pop rax
+    out.jump(rt[R_ALLOC_SLOW])
+    out.place(at_not_free)
+    out.lea_string(REG_RAX, text.cleaner_bad_header)
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# Everything the quick path can't do: cleaning, getting a chunk, and large blocks. Every register goes on the stack first, so cleaning can find what's in them
+func write_rt_alloc_slow(out: Assembler, rt: [int], text: RuntimeText)
+    var at_clean_first = out.new_label()
+    var at_no_clean = out.new_label()
+    var at_new_chunk = out.new_label()
+    var at_get_chunk = out.new_label()
+    var at_use_chunk = out.new_label()
+    var at_small_ready = out.new_label()
+    var at_large = out.new_label()
+    var at_no_memory = out.new_label()
+    var at_got_memory = out.new_label()
+    out.place(rt[R_ALLOC_SLOW])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("50")  # push rax
+    out.hex("51")  # push rcx
+    out.hex("52")  # push rdx
+    out.hex("53")  # push rbx
+    out.hex("56")  # push rsi
+    out.hex("57")  # push rdi
+    out.hex("4150")  # push r8
+    out.hex("4151")  # push r9
+    out.hex("4152")  # push r10
+    out.hex("4153")  # push r11
+    out.hex("4154")  # push r12
+    out.hex("4155")  # push r13
+    out.hex("4156")  # push r14
+    out.hex("4157")  # push r15
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec20")  # sub rsp, 32
+    out.lea_data(REG_RBX, DATA_CLEANER, 0)
+    out.hex("488b45f0")  # mov rax, qword ptr [rbp-16]
+    out.hex("4883c02f")  # add rax, 47
+    out.hex("4883e0f0")  # and rax, -16
+    out.hex("48014310")  # add qword ptr [rbx+16], rax
+    out.hex("4531e4")  # xor r12d, r12d
+    out.hex("f6432004")  # test byte ptr [rbx+32], 4
+    out.jump_if_not_equal(at_no_clean)
+    out.hex("f6432001")  # test byte ptr [rbx+32], 1
+    out.jump_if_not_equal(at_clean_first)
+    out.hex("488b4310")  # mov rax, qword ptr [rbx+16]
+    out.hex("483b4318")  # cmp rax, qword ptr [rbx+24]
+    out.jump_if_below(at_no_clean)
+    out.place(at_clean_first)
+    out.call(rt[R_CLEANER_CLEAN])
+    out.hex("41bc01000000")  # mov r12d, 1
+    out.place(at_no_clean)
+    out.hex("488b4df0")  # mov rcx, qword ptr [rbp-16]
+    out.hex("48ffc9")  # dec rcx
+    out.hex("4881f900020000")  # cmp rcx, 512
+    out.jump_if_at_least(at_large)
+    out.hex("4883e1f0")  # and rcx, -16
+    out.hex("4889c8")  # mov rax, rcx
+    out.hex("48d1e8")  # shr rax, 1
+    out.hex("4883bc039000000000")  # cmp qword ptr [rbx+rax+144], 0
+    out.jump_if_not_equal(at_small_ready)
+    out.hex("488b4368")  # mov rax, qword ptr [rbx+104]
+    out.hex("488d440830")  # lea rax, [rax+rcx+48]
+    out.hex("483b4370")  # cmp rax, qword ptr [rbx+112]
+    out.jump_if_at_most(at_small_ready)
+    out.hex("488b8380000000")  # mov rax, qword ptr [rbx+128]
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_new_chunk)
+    out.hex("488b08")  # mov rcx, qword ptr [rax]
+    out.hex("48898b80000000")  # mov qword ptr [rbx+128], rcx
+    out.hex("48ff8b88000000")  # dec qword ptr [rbx+136]
+    out.jump(at_use_chunk)
+    out.place(at_new_chunk)
+    out.hex("4d85e4")  # test r12, r12
+    out.jump_if_not_equal(at_get_chunk)
+    out.hex("f6432004")  # test byte ptr [rbx+32], 4
+    out.jump_if_not_equal(at_get_chunk)
+    out.hex("488b4308")  # mov rax, qword ptr [rbx+8]
+    out.hex("48034350")  # add rax, qword ptr [rbx+80]
+    out.hex("4c8d0480")  # lea r8, [rax+rax*4]
+    out.hex("49c1e003")  # shl r8, 3
+    out.hex("4981c000000400")  # add r8, 0x40000
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.call_windows(DATA_HEAP_ALLOC)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_clean_first)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4989c0")  # mov r8, rax
+    out.call_windows(DATA_HEAP_FREE)
+    out.place(at_get_chunk)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("41b800000400")  # mov r8d, 0x40000
+    out.call_windows(DATA_HEAP_ALLOC)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_no_memory)
+    out.place(at_use_chunk)
+    out.hex("488b4b78")  # mov rcx, qword ptr [rbx+120]
+    out.hex("488908")  # mov qword ptr [rax], rcx
+    out.hex("48894378")  # mov qword ptr [rbx+120], rax
+    out.hex("48c7400800000000")  # mov qword ptr [rax+8], 0
+    out.hex("48894360")  # mov qword ptr [rbx+96], rax
+    out.hex("488d4810")  # lea rcx, [rax+16]
+    out.hex("48894b68")  # mov qword ptr [rbx+104], rcx
+    out.hex("488d8800000400")  # lea rcx, [rax+0x40000]
+    out.hex("48894b70")  # mov qword ptr [rbx+112], rcx
+    out.place(at_small_ready)
+    out.hex("488d6590")  # lea rsp, [rbp-112]
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("415b")  # pop r11
+    out.hex("415a")  # pop r10
+    out.hex("4159")  # pop r9
+    out.hex("4158")  # pop r8
+    out.hex("5f")  # pop rdi
+    out.hex("5e")  # pop rsi
+    out.hex("5b")  # pop rbx
+    out.hex("5a")  # pop rdx
+    out.hex("59")  # pop rcx
+    out.hex("58")  # pop rax
+    out.hex("5d")  # pop rbp
+    out.jump(rt[R_ALLOC_AGAIN])
+    out.place(at_large)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("ba08000000")  # mov edx, 8
+    out.hex("4c8b45f0")  # mov r8, qword ptr [rbp-16]
+    out.hex("4983c020")  # add r8, 32
+    out.call_windows(DATA_HEAP_ALLOC)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_not_equal(at_got_memory)
+    out.place(at_no_memory)
+    out.hex("4d85e4")  # test r12, r12
+    out.jump_if_not_equal(rt[R_OUT_OF_MEMORY])
+    out.hex("f6432004")  # test byte ptr [rbx+32], 4
+    out.jump_if_not_equal(rt[R_OUT_OF_MEMORY])
+    out.jump(at_clean_first)
+    out.place(at_got_memory)
+    out.hex("488b0b")  # mov rcx, qword ptr [rbx]
+    out.hex("488908")  # mov qword ptr [rax], rcx
+    out.hex("488903")  # mov qword ptr [rbx], rax
+    out.hex("48ff4308")  # inc qword ptr [rbx+8]
+    out.hex("488b4df0")  # mov rcx, qword ptr [rbp-16]
+    out.hex("48894808")  # mov qword ptr [rax+8], rcx
+    out.hex("488b55b0")  # mov rdx, qword ptr [rbp-80]
+    out.hex("885010")  # mov byte ptr [rax+16], dl
+    out.hex("4831c1")  # xor rcx, rax
+    out.hex("48ba41454c434f4d414a")  # movabs rdx, 0x4A414D4F434C4541
+    out.hex("4831d1")  # xor rcx, rdx
+    out.hex("48894818")  # mov qword ptr [rax+24], rcx
+    out.hex("4883c020")  # add rax, 32
+    out.hex("488945f8")  # mov qword ptr [rbp-8], rax
+    out.hex("488d6590")  # lea rsp, [rbp-112]
+    out.hex("415f")  # pop r15
+    out.hex("415e")  # pop r14
+    out.hex("415d")  # pop r13
+    out.hex("415c")  # pop r12
+    out.hex("415b")  # pop r11
+    out.hex("415a")  # pop r10
+    out.hex("4159")  # pop r9
+    out.hex("4158")  # pop r8
+    out.hex("5f")  # pop rdi
+    out.hex("5e")  # pop rsi
+    out.hex("5b")  # pop rbx
+    out.hex("5a")  # pop rdx
+    out.hex("59")  # pop rcx
+    out.hex("58")  # pop rax
+    out.hex("5d")  # pop rbp
+    out.hex("c3")  # ret
+end
+
+# rax = the mode: 1 cleans at every allocation, 2 adds extra checks, 4 turns cleaning off, 16 is a window program. Also notes where the stack starts. The cleaner's values: the first block +0, how many +8, bytes since a clean +16, when to clean +24, mode +32, stack start +40, freed list +56, how many freed +80, how many cleans +88, current chunk +96, its next free spot +104, its end +112, chunks in use +120, empty chunks +128, how many empty +136, the free list of each size class +144, then the table of blocks +400 and how many entries it has +408, and the list to look through +416 and its entries +424, kept from clean to clean while each is 2 MB or less, so a program that cleans often doesn't ask Windows for them every time. A chunk starts with the next chunk and how many blocks in it are in use
+func write_rt_cleaner_start(out: Assembler, rt: [int], text: RuntimeText)
+    var at_will_clean = out.new_label()
+    out.place(rt[R_CLEANER_START])
+    out.lea_data(REG_RDX, DATA_CLEANER, 0)
+    out.hex("48894220")  # mov qword ptr [rdx+32], rax
+    out.hex("48896228")  # mov qword ptr [rdx+40], rsp
+    out.hex("48c7421800004000")  # mov qword ptr [rdx+24], 0x400000
+    out.hex("a804")  # test al, 4
+    out.jump_if_equal(at_will_clean)
+    out.hex("48c74218ffffffff")  # mov qword ptr [rdx+24], -1
+    out.place(at_will_clean)
+    out.hex("c3")  # ret
+end
+
+# The extra checks: every block's header, and that freed memory still holds only its marker. rbx = the cleaner's values
+func write_rt_cleaner_verify(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_live = out.new_label()
+    var at_check_freed = out.new_label()
+    var at_next_freed = out.new_label()
+    var at_all_good = out.new_label()
+    var at_bad_header = out.new_label()
+    var at_freed_changed = out.new_label()
+    out.place(rt[R_CLEANER_VERIFY])
+    out.hex("488b13")  # mov rdx, qword ptr [rbx]
+    out.place(at_next_live)
+    out.hex("4885d2")  # test rdx, rdx
+    out.jump_if_equal(at_check_freed)
+    out.hex("488b4208")  # mov rax, qword ptr [rdx+8]
+    out.hex("4831d0")  # xor rax, rdx
+    out.hex("48b941454c434f4d414a")  # movabs rcx, 0x4A414D4F434C4541
+    out.hex("4831c8")  # xor rax, rcx
+    out.hex("483b4218")  # cmp rax, qword ptr [rdx+24]
+    out.jump_if_not_equal(at_bad_header)
+    out.hex("807a1001")  # cmp byte ptr [rdx+16], 1
+    out.jump_if_above(at_bad_header)
+    out.hex("807a1100")  # cmp byte ptr [rdx+17], 0
+    out.jump_if_not_equal(at_bad_header)
+    out.hex("488b12")  # mov rdx, qword ptr [rdx]
+    out.jump(at_next_live)
+    out.place(at_check_freed)
+    out.hex("488b5338")  # mov rdx, qword ptr [rbx+56]
+    out.place(at_next_freed)
+    out.hex("4885d2")  # test rdx, rdx
+    out.jump_if_equal(at_all_good)
+    out.hex("488b4208")  # mov rax, qword ptr [rdx+8]
+    out.hex("4831d0")  # xor rax, rdx
+    out.hex("48b941454c434f4d414a")  # movabs rcx, 0x4A414D4F434C4541
+    out.hex("4831c8")  # xor rax, rcx
+    out.hex("483b4218")  # cmp rax, qword ptr [rdx+24]
+    out.jump_if_not_equal(at_bad_header)
+    out.hex("807a1002")  # cmp byte ptr [rdx+16], 2
+    out.jump_if_not_equal(at_bad_header)
+    out.hex("488d7a20")  # lea rdi, [rdx+32]
+    out.hex("488b4a08")  # mov rcx, qword ptr [rdx+8]
+    out.hex("48c1e903")  # shr rcx, 3
+    out.hex("48b8dddddddddddddddd")  # movabs rax, 0xDDDDDDDDDDDDDDDD
+    out.hex("4839c0")  # cmp rax, rax
+    out.hex("f348af")  # repe scasq
+    out.jump_if_not_equal(at_freed_changed)
+    out.hex("488b4a08")  # mov rcx, qword ptr [rdx+8]
+    out.hex("4883e107")  # and rcx, 7
+    out.hex("4839c0")  # cmp rax, rax
+    out.hex("f3ae")  # repe scasb
+    out.jump_if_not_equal(at_freed_changed)
+    out.hex("488b12")  # mov rdx, qword ptr [rdx]
+    out.jump(at_next_freed)
+    out.place(at_all_good)
+    out.hex("c3")  # ret
+    out.place(at_bad_header)
+    out.lea_string(REG_RAX, text.cleaner_bad_header)
+    out.jump(rt[R_RUN_ERROR])
+    out.place(at_freed_changed)
+    out.lea_string(REG_RAX, text.cleaner_freed_changed)
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# rdx = a list of blocks to add to the table of known blocks. r12 = the table, r13 = its size minus 1
+func write_rt_cleaner_add_to_table(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_block = out.new_label()
+    var at_next_place = out.new_label()
+    var at_found_room = out.new_label()
+    var at_finished = out.new_label()
+    out.place(rt[R_CLEANER_ADD_TO_TABLE])
+    out.hex("49b9157c4a7fb979379e")  # movabs r9, 0x9E3779B97F4A7C15
+    out.place(at_next_block)
+    out.hex("4885d2")  # test rdx, rdx
+    out.jump_if_equal(at_finished)
+    out.hex("488d4220")  # lea rax, [rdx+32]
+    out.hex("4889c1")  # mov rcx, rax
+    out.hex("48c1e904")  # shr rcx, 4
+    out.hex("490fafc9")  # imul rcx, r9
+    out.hex("48c1e920")  # shr rcx, 32
+    out.place(at_next_place)
+    out.hex("4c21e9")  # and rcx, r13
+    out.hex("49833ccc00")  # cmp qword ptr [r12+rcx*8], 0
+    out.jump_if_equal(at_found_room)
+    out.hex("48ffc1")  # inc rcx
+    out.jump(at_next_place)
+    out.place(at_found_room)
+    out.hex("498904cc")  # mov qword ptr [r12+rcx*8], rax
+    out.hex("488b12")  # mov rdx, qword ptr [rdx]
+    out.jump(at_next_block)
+    out.place(at_finished)
+    out.hex("c3")  # ret
+end
+
+# rax = anything at all. If it's exactly where a known block's memory starts, that block is in use. r14 = the top of the list still to look through, r15 = 1 when the word came from a block. With checks on, a block's word that points at a block freed in the last 2 cleans is a bug: when the cleaner frees something still in use, that's when it shows. Older ones are left alone, since a plain number can equal an old block's address
+func write_rt_cleaner_mark_word(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_place = out.new_label()
+    var at_found = out.new_label()
+    var at_nothing = out.new_label()
+    var at_is_freed = out.new_label()
+    out.place(rt[R_CLEANER_MARK_WORD])
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_nothing)
+    out.hex("a80f")  # test al, 15
+    out.jump_if_not_equal(at_nothing)
+    out.hex("49b9157c4a7fb979379e")  # movabs r9, 0x9E3779B97F4A7C15
+    out.hex("4889c1")  # mov rcx, rax
+    out.hex("48c1e904")  # shr rcx, 4
+    out.hex("490fafc9")  # imul rcx, r9
+    out.hex("48c1e920")  # shr rcx, 32
+    out.place(at_next_place)
+    out.hex("4c21e9")  # and rcx, r13
+    out.hex("498b14cc")  # mov rdx, qword ptr [r12+rcx*8]
+    out.hex("4885d2")  # test rdx, rdx
+    out.jump_if_equal(at_nothing)
+    out.hex("4839c2")  # cmp rdx, rax
+    out.jump_if_equal(at_found)
+    out.hex("48ffc1")  # inc rcx
+    out.jump(at_next_place)
+    out.place(at_found)
+    out.hex("8078f002")  # cmp byte ptr [rax-16], 2
+    out.jump_if_equal(at_is_freed)
+    out.hex("8078f100")  # cmp byte ptr [rax-15], 0
+    out.jump_if_not_equal(at_nothing)
+    out.hex("c640f101")  # mov byte ptr [rax-15], 1
+    out.hex("8078f001")  # cmp byte ptr [rax-16], 1
+    out.jump_if_not_equal(at_nothing)
+    out.hex("498906")  # mov qword ptr [r14], rax
+    out.hex("4983c608")  # add r14, 8
+    out.place(at_nothing)
+    out.hex("c3")  # ret
+    out.place(at_is_freed)
+    out.hex("4d85ff")  # test r15, r15
+    out.jump_if_equal(at_nothing)
+    out.hex("0fb748f2")  # movzx ecx, word ptr [rax-14]
+    out.hex("8b5358")  # mov edx, dword ptr [rbx+88]
+    out.hex("29ca")  # sub edx, ecx
+    out.hex("81e2ffff0000")  # and edx, 0xFFFF
+    out.hex("83fa02")  # cmp edx, 2
+    out.jump_if_above(at_nothing)
+    out.lea_string(REG_RAX, text.cleaner_freed_reference)
+    out.jump(rt[R_RUN_ERROR])
+end
+
+# Marks everything that's in use, starting from the whole stack, which holds every saved register. Uses a list instead of recursion, so long chains can't overflow the stack
+func write_rt_cleaner_clean(out: Assembler, rt: [int], text: RuntimeText)
+    var at_no_checks = out.new_label()
+    var at_size_table = out.new_label()
+    var at_table_sized = out.new_label()
+    var at_table_freed = out.new_label()
+    var at_reuse_table = out.new_label()
+    var at_table_ready = out.new_label()
+    var at_list_freed = out.new_label()
+    var at_reuse_list = out.new_label()
+    var at_next_root = out.new_label()
+    var at_roots_done = out.new_label()
+    var at_next_to_look_at = out.new_label()
+    var at_next_word = out.new_label()
+    var at_all_marked = out.new_label()
+    var at_next_count = out.new_label()
+    var at_counts_cleared = out.new_label()
+    var at_next_block = out.new_label()
+    var at_not_in_chunk = out.new_label()
+    var at_free_block = out.new_label()
+    var at_free_small = out.new_label()
+    var at_keep_freed = out.new_label()
+    var at_block_freed = out.new_label()
+    var at_freed_twice = out.new_label()
+    var at_sweep_done = out.new_label()
+    var at_next_counted = out.new_label()
+    var at_has_live = out.new_label()
+    var at_all_counted = out.new_label()
+    var at_next_list = out.new_label()
+    var at_next_free = out.new_label()
+    var at_drop_free = out.new_label()
+    var at_list_done = out.new_label()
+    var at_next_chunk = out.new_label()
+    var at_empty_chunk = out.new_label()
+    var at_not_current = out.new_label()
+    var at_trim_chunks = out.new_label()
+    var at_chunks_done = out.new_label()
+    var at_give_up = out.new_label()
+    var at_keep_table = out.new_label()
+    var at_keep_list = out.new_label()
+    out.place(rt[R_CLEANER_CLEAN])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("4883e4f0")  # and rsp, -16
+    out.hex("4883ec30")  # sub rsp, 48
+    out.lea_data(REG_RBX, DATA_CLEANER, 0)
+    out.hex("48ff4358")  # inc qword ptr [rbx+88]
+    out.hex("f6432002")  # test byte ptr [rbx+32], 2
+    out.jump_if_equal(at_no_checks)
+    out.call(rt[R_CLEANER_VERIFY])
+    out.place(at_no_checks)
+    out.hex("488b4308")  # mov rax, qword ptr [rbx+8]
+    out.hex("48034350")  # add rax, qword ptr [rbx+80]
+    out.hex("488d540001")  # lea rdx, [rax+rax+1]
+    out.hex("41bd10000000")  # mov r13d, 16
+    out.place(at_size_table)
+    out.hex("4939d5")  # cmp r13, rdx
+    out.jump_if_at_least(at_table_sized)
+    out.hex("49d1e5")  # shl r13, 1
+    out.jump(at_size_table)
+    out.place(at_table_sized)
+    out.hex("4c3bab98010000")  # cmp r13, qword ptr [rbx+408]
+    out.jump_if_at_most(at_reuse_table)
+    out.hex("4c8b8390010000")  # mov r8, qword ptr [rbx+400]
+    out.hex("4d85c0")  # test r8, r8
+    out.jump_if_equal(at_table_freed)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.call_windows(DATA_HEAP_FREE)
+    out.place(at_table_freed)
+    out.hex("48c7839001000000000000")  # mov qword ptr [rbx+400], 0
+    out.hex("48c7839801000000000000")  # mov qword ptr [rbx+408], 0
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("ba08000000")  # mov edx, 8
+    out.hex("4e8d04ed00000000")  # lea r8, [r13*8]
+    out.call_windows(DATA_HEAP_ALLOC)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_give_up)
+    out.hex("48898390010000")  # mov qword ptr [rbx+400], rax
+    out.hex("4c89ab98010000")  # mov qword ptr [rbx+408], r13
+    out.jump(at_table_ready)
+    out.place(at_reuse_table)
+    out.hex("4c8bab98010000")  # mov r13, qword ptr [rbx+408]
+    out.hex("488bbb90010000")  # mov rdi, qword ptr [rbx+400]
+    out.hex("4c89e9")  # mov rcx, r13
+    out.hex("31c0")  # xor eax, eax
+    out.hex("f348ab")  # rep stosq
+    out.place(at_table_ready)
+    out.hex("4c8ba390010000")  # mov r12, qword ptr [rbx+400]
+    out.hex("4c8b7b08")  # mov r15, qword ptr [rbx+8]
+    out.hex("49ffc7")  # inc r15
+    out.hex("4c3bbba8010000")  # cmp r15, qword ptr [rbx+424]
+    out.jump_if_at_most(at_reuse_list)
+    out.hex("4c8b83a0010000")  # mov r8, qword ptr [rbx+416]
+    out.hex("4d85c0")  # test r8, r8
+    out.jump_if_equal(at_list_freed)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.call_windows(DATA_HEAP_FREE)
+    out.place(at_list_freed)
+    out.hex("48c783a001000000000000")  # mov qword ptr [rbx+416], 0
+    out.hex("48c783a801000000000000")  # mov qword ptr [rbx+424], 0
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4e8d04fd00000000")  # lea r8, [r15*8]
+    out.call_windows(DATA_HEAP_ALLOC)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_give_up)
+    out.hex("488983a0010000")  # mov qword ptr [rbx+416], rax
+    out.hex("4c89bba8010000")  # mov qword ptr [rbx+424], r15
+    out.place(at_reuse_list)
+    out.hex("4c8bb3a0010000")  # mov r14, qword ptr [rbx+416]
+    out.hex("4c89742428")  # mov qword ptr [rsp+40], r14
+    out.hex("49ffcd")  # dec r13
+    out.hex("488b13")  # mov rdx, qword ptr [rbx]
+    out.call(rt[R_CLEANER_ADD_TO_TABLE])
+    out.hex("488b5338")  # mov rdx, qword ptr [rbx+56]
+    out.call(rt[R_CLEANER_ADD_TO_TABLE])
+    out.hex("4531ff")  # xor r15d, r15d
+    out.hex("4889e6")  # mov rsi, rsp
+    out.place(at_next_root)
+    out.hex("483b7328")  # cmp rsi, qword ptr [rbx+40]
+    out.jump_if_at_least(at_roots_done)
+    out.hex("488b06")  # mov rax, qword ptr [rsi]
+    out.call(rt[R_CLEANER_MARK_WORD])
+    out.hex("4883c608")  # add rsi, 8
+    out.jump(at_next_root)
+    out.place(at_roots_done)
+    out.hex("41bf01000000")  # mov r15d, 1
+    out.place(at_next_to_look_at)
+    out.hex("4c3b742428")  # cmp r14, qword ptr [rsp+40]
+    out.jump_if_equal(at_all_marked)
+    out.hex("4983ee08")  # sub r14, 8
+    out.hex("498b36")  # mov rsi, qword ptr [r14]
+    out.hex("488b7ee8")  # mov rdi, qword ptr [rsi-24]
+    out.hex("48c1ef03")  # shr rdi, 3
+    out.place(at_next_word)
+    out.hex("4885ff")  # test rdi, rdi
+    out.jump_if_equal(at_next_to_look_at)
+    out.hex("488b06")  # mov rax, qword ptr [rsi]
+    out.call(rt[R_CLEANER_MARK_WORD])
+    out.hex("4883c608")  # add rsi, 8
+    out.hex("48ffcf")  # dec rdi
+    out.jump(at_next_word)
+    out.place(at_all_marked)
+    out.hex("488b4378")  # mov rax, qword ptr [rbx+120]
+    out.place(at_next_count)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_counts_cleared)
+    out.hex("48c7400800000000")  # mov qword ptr [rax+8], 0
+    out.hex("488b00")  # mov rax, qword ptr [rax]
+    out.jump(at_next_count)
+    out.place(at_counts_cleared)
+    out.hex("4889de")  # mov rsi, rbx
+    out.hex("488b3b")  # mov rdi, qword ptr [rbx]
+    out.hex("4531f6")  # xor r14d, r14d
+    out.place(at_next_block)
+    out.hex("4885ff")  # test rdi, rdi
+    out.jump_if_equal(at_sweep_done)
+    out.hex("807f1100")  # cmp byte ptr [rdi+17], 0
+    out.jump_if_equal(at_free_block)
+    out.hex("c6471100")  # mov byte ptr [rdi+17], 0
+    out.hex("488b4708")  # mov rax, qword ptr [rdi+8]
+    out.hex("4883c02f")  # add rax, 47
+    out.hex("4883e0f0")  # and rax, -16
+    out.hex("4901c6")  # add r14, rax
+    out.hex("8b5714")  # mov edx, dword ptr [rdi+20]
+    out.hex("85d2")  # test edx, edx
+    out.jump_if_equal(at_not_in_chunk)
+    out.hex("4889f8")  # mov rax, rdi
+    out.hex("4829d0")  # sub rax, rdx
+    out.hex("48ff4008")  # inc qword ptr [rax+8]
+    out.place(at_not_in_chunk)
+    out.hex("4889fe")  # mov rsi, rdi
+    out.hex("488b3f")  # mov rdi, qword ptr [rdi]
+    out.jump(at_next_block)
+    out.place(at_free_block)
+    out.hex("807f1002")  # cmp byte ptr [rdi+16], 2
+    out.jump_if_equal(at_freed_twice)
+    out.hex("4c8b3f")  # mov r15, qword ptr [rdi]
+    out.hex("4c893e")  # mov qword ptr [rsi], r15
+    out.hex("48ff4b08")  # dec qword ptr [rbx+8]
+    out.hex("f6432002")  # test byte ptr [rbx+32], 2
+    out.jump_if_not_equal(at_keep_freed)
+    out.hex("837f1400")  # cmp dword ptr [rdi+20], 0
+    out.jump_if_not_equal(at_free_small)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4989f8")  # mov r8, rdi
+    out.call_windows(DATA_HEAP_FREE)
+    out.jump(at_block_freed)
+    out.place(at_free_small)
+    out.hex("c6471003")  # mov byte ptr [rdi+16], 3
+    out.hex("488b4708")  # mov rax, qword ptr [rdi+8]
+    out.hex("48ffc8")  # dec rax
+    out.hex("48c1e804")  # shr rax, 4
+    out.hex("488b8cc390000000")  # mov rcx, qword ptr [rbx+rax*8+144]
+    out.hex("48890f")  # mov qword ptr [rdi], rcx
+    out.hex("4889bcc390000000")  # mov qword ptr [rbx+rax*8+144], rdi
+    out.jump(at_block_freed)
+    out.place(at_keep_freed)
+    out.hex("c6471002")  # mov byte ptr [rdi+16], 2
+    out.hex("8b4358")  # mov eax, dword ptr [rbx+88]
+    out.hex("66894712")  # mov word ptr [rdi+18], ax
+    out.hex("488b4338")  # mov rax, qword ptr [rbx+56]
+    out.hex("488907")  # mov qword ptr [rdi], rax
+    out.hex("48897b38")  # mov qword ptr [rbx+56], rdi
+    out.hex("48ff4350")  # inc qword ptr [rbx+80]
+    out.hex("488b4f08")  # mov rcx, qword ptr [rdi+8]
+    out.hex("4883c720")  # add rdi, 32
+    out.hex("b0dd")  # mov al, 0xDD
+    out.hex("f3aa")  # rep stosb
+    out.place(at_block_freed)
+    out.hex("4c89ff")  # mov rdi, r15
+    out.jump(at_next_block)
+    out.place(at_freed_twice)
+    out.lea_string(REG_RAX, text.cleaner_double_free)
+    out.jump(rt[R_RUN_ERROR])
+    out.place(at_sweep_done)
+    out.hex("4d01f6")  # add r14, r14
+    out.hex("b800004000")  # mov eax, 0x400000
+    out.hex("4939c6")  # cmp r14, rax
+    out.hex("490f47c6")  # cmova rax, r14
+    out.hex("48894318")  # mov qword ptr [rbx+24], rax
+    out.hex("f6432002")  # test byte ptr [rbx+32], 2
+    out.jump_if_not_equal(at_chunks_done)
+    out.hex("31c9")  # xor ecx, ecx
+    out.hex("31d2")  # xor edx, edx
+    out.hex("488b4378")  # mov rax, qword ptr [rbx+120]
+    out.place(at_next_counted)
+    out.hex("4885c0")  # test rax, rax
+    out.jump_if_equal(at_all_counted)
+    out.hex("48ffc1")  # inc rcx
+    out.hex("4883780800")  # cmp qword ptr [rax+8], 0
+    out.jump_if_not_equal(at_has_live)
+    out.hex("48ffc2")  # inc rdx
+    out.place(at_has_live)
+    out.hex("488b00")  # mov rax, qword ptr [rax]
+    out.jump(at_next_counted)
+    out.place(at_all_counted)
+    out.hex("48c1e203")  # shl rdx, 3
+    out.hex("4839ca")  # cmp rdx, rcx
+    out.jump_if_below(at_trim_chunks)
+    out.hex("4531ed")  # xor r13d, r13d
+    out.place(at_next_list)
+    out.hex("4a8db42b90000000")  # lea rsi, [rbx+r13+144]
+    out.place(at_next_free)
+    out.hex("488b3e")  # mov rdi, qword ptr [rsi]
+    out.hex("4885ff")  # test rdi, rdi
+    out.jump_if_equal(at_list_done)
+    out.hex("8b5714")  # mov edx, dword ptr [rdi+20]
+    out.hex("4889f8")  # mov rax, rdi
+    out.hex("4829d0")  # sub rax, rdx
+    out.hex("4883780800")  # cmp qword ptr [rax+8], 0
+    out.jump_if_equal(at_drop_free)
+    out.hex("4889fe")  # mov rsi, rdi
+    out.jump(at_next_free)
+    out.place(at_drop_free)
+    out.hex("488b07")  # mov rax, qword ptr [rdi]
+    out.hex("488906")  # mov qword ptr [rsi], rax
+    out.jump(at_next_free)
+    out.place(at_list_done)
+    out.hex("4983c508")  # add r13, 8
+    out.hex("4981fd00010000")  # cmp r13, 256
+    out.jump_if_below(at_next_list)
+    out.hex("488d7378")  # lea rsi, [rbx+120]
+    out.place(at_next_chunk)
+    out.hex("488b3e")  # mov rdi, qword ptr [rsi]
+    out.hex("4885ff")  # test rdi, rdi
+    out.jump_if_equal(at_trim_chunks)
+    out.hex("48837f0800")  # cmp qword ptr [rdi+8], 0
+    out.jump_if_equal(at_empty_chunk)
+    out.hex("4889fe")  # mov rsi, rdi
+    out.jump(at_next_chunk)
+    out.place(at_empty_chunk)
+    out.hex("488b07")  # mov rax, qword ptr [rdi]
+    out.hex("488906")  # mov qword ptr [rsi], rax
+    out.hex("483b7b60")  # cmp rdi, qword ptr [rbx+96]
+    out.jump_if_not_equal(at_not_current)
+    out.hex("31c0")  # xor eax, eax
+    out.hex("48894360")  # mov qword ptr [rbx+96], rax
+    out.hex("48894368")  # mov qword ptr [rbx+104], rax
+    out.hex("48894370")  # mov qword ptr [rbx+112], rax
+    out.place(at_not_current)
+    out.hex("488b8380000000")  # mov rax, qword ptr [rbx+128]
+    out.hex("488907")  # mov qword ptr [rdi], rax
+    out.hex("4889bb80000000")  # mov qword ptr [rbx+128], rdi
+    out.hex("48ff8388000000")  # inc qword ptr [rbx+136]
+    out.jump(at_next_chunk)
+    out.place(at_trim_chunks)
+    out.hex("488b8388000000")  # mov rax, qword ptr [rbx+136]
+    out.hex("48c1e012")  # shl rax, 18
+    out.hex("488b4b18")  # mov rcx, qword ptr [rbx+24]
+    out.hex("48d1e9")  # shr rcx, 1
+    out.hex("4881c100000800")  # add rcx, 0x80000
+    out.hex("4839c8")  # cmp rax, rcx
+    out.jump_if_at_most(at_chunks_done)
+    out.hex("488bbb80000000")  # mov rdi, qword ptr [rbx+128]
+    out.hex("488b07")  # mov rax, qword ptr [rdi]
+    out.hex("48898380000000")  # mov qword ptr [rbx+128], rax
+    out.hex("48ff8b88000000")  # dec qword ptr [rbx+136]
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4989f8")  # mov r8, rdi
+    out.call_windows(DATA_HEAP_FREE)
+    out.jump(at_trim_chunks)
+    out.place(at_chunks_done)
+    out.place(at_give_up)
+    out.hex("4881bb9801000000000400")  # cmp qword ptr [rbx+408], 262144
+    out.jump_if_at_most(at_keep_table)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4c8b8390010000")  # mov r8, qword ptr [rbx+400]
+    out.call_windows(DATA_HEAP_FREE)
+    out.hex("48c7839001000000000000")  # mov qword ptr [rbx+400], 0
+    out.hex("48c7839801000000000000")  # mov qword ptr [rbx+408], 0
+    out.place(at_keep_table)
+    out.hex("4881bba801000000000400")  # cmp qword ptr [rbx+424], 262144
+    out.jump_if_at_most(at_keep_list)
+    out.load_rcx_data(DATA_HEAP_HANDLE)
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4c8b83a0010000")  # mov r8, qword ptr [rbx+416]
+    out.call_windows(DATA_HEAP_FREE)
+    out.hex("48c783a001000000000000")  # mov qword ptr [rbx+416], 0
+    out.hex("48c783a801000000000000")  # mov qword ptr [rbx+424], 0
+    out.place(at_keep_list)
+    out.hex("48c7431000000000")  # mov qword ptr [rbx+16], 0
+    out.hex("c9")  # leave
+    out.hex("c3")  # ret
+end
+
+# Walks up the stack, showing each function call that led here. The table holds pairs of 4-byte places: where a call returns to, and the words for that call
+func write_rt_show_calls(out: Assembler, rt: [int], text: RuntimeText)
+    var at_next_frame = out.new_label()
+    var at_next_entry = out.new_label()
+    var at_found_call = out.new_label()
+    var at_not_a_call = out.new_label()
+    var at_too_many = out.new_label()
+    var at_finished = out.new_label()
+    out.place(rt[R_SHOW_CALLS])
+    out.hex("4989ed")  # mov r13, rbp
+    out.hex("4531f6")  # xor r14d, r14d
+    out.lea_data(REG_RAX, DATA_CLEANER, 0)
+    out.hex("4c8b7828")  # mov r15, qword ptr [rax+40]
+    out.place(at_next_frame)
+    out.hex("4d85ed")  # test r13, r13
+    out.jump_if_equal(at_finished)
+    out.hex("4d39fd")  # cmp r13, r15
+    out.jump_if_at_least(at_finished)
+    out.hex("498b4508")  # mov rax, qword ptr [r13+8]
+    out.hex("48b90000004001000000")  # movabs rcx, 0x140000000
+    out.hex("4829c8")  # sub rax, rcx
+    out.lea_data(REG_RDX, DATA_CALL_TABLE, 0)
+    out.hex("8b0a")  # mov ecx, dword ptr [rdx]
+    out.hex("4883c208")  # add rdx, 8
+    out.place(at_next_entry)
+    out.hex("85c9")  # test ecx, ecx
+    out.jump_if_equal(at_not_a_call)
+    out.hex("3b02")  # cmp eax, dword ptr [rdx]
+    out.jump_if_equal(at_found_call)
+    out.hex("4883c208")  # add rdx, 8
+    out.hex("ffc9")  # dec ecx
+    out.jump(at_next_entry)
+    out.place(at_found_call)
+    out.hex("4983fe0a")  # cmp r14, 10
+    out.jump_if_at_least(at_too_many)
+    out.hex("49ffc6")  # inc r14
+    out.hex("8b4204")  # mov eax, dword ptr [rdx+4]
+    out.hex("48b90000004001000000")  # movabs rcx, 0x140000000
+    out.hex("4801c8")  # add rax, rcx
+    out.call(rt[R_ERROR_TEXT])
+    out.place(at_not_a_call)
+    out.hex("498b4500")  # mov rax, qword ptr [r13]
+    out.hex("4c39e8")  # cmp rax, r13
+    out.jump_if_at_most(at_finished)
+    out.hex("4989c5")  # mov r13, rax
+    out.jump(at_next_frame)
+    out.place(at_too_many)
+    out.lea_string(REG_RAX, text.more_calls)
+    out.jump(rt[R_ERROR_TEXT])
+    out.place(at_finished)
+    out.hex("c3")  # ret
+end
+
+# Every routine's label, made first, in order
+func make_runtime_labels(out: Assembler): [int]
+    var rt: [int] = []
+    for i in 0..RUNTIME_ROUTINES
+        rt.add(out.new_label())
+    end
+    return rt
+end
+
+func write_runtime(out: Assembler, rt: [int], text: RuntimeText)
+    write_rt_exit(out, rt, text)
+    write_rt_write(out, rt, text)
+    write_rt_raw_alloc(out, rt, text)
+    write_rt_format_int(out, rt, text)
+    write_rt_make_string(out, rt, text)
+    write_rt_print_int(out, rt, text)
+    write_rt_int_to_string(out, rt, text)
+    write_rt_bool_to_string(out, rt, text)
+    write_rt_print_bool(out, rt, text)
+    write_rt_print_string(out, rt, text)
+    write_rt_join_strings(out, rt, text)
+    write_rt_join_many(out, rt, text)
+    write_rt_strings_equal(out, rt, text)
+    write_rt_error_text(out, rt, text)
+    write_rt_file_name_of(out, rt, text)
+    write_rt_run_error(out, rt, text)
+    write_rt_divide_by_zero(out, rt, text)
+    write_rt_out_of_memory(out, rt, text)
+    write_rt_format_float(out, rt, text)
+    write_rt_print_float(out, rt, text)
+    write_rt_float_to_string(out, rt, text)
+    write_rt_float_to_int(out, rt, text)
+    write_rt_float_mod(out, rt, text)
+    write_rt_builder_start(out, rt, text)
+    write_rt_builder_add(out, rt, text)
+    write_rt_builder_add_string(out, rt, text)
+    write_rt_builder_to_string(out, rt, text)
+    write_rt_builder_add_int(out, rt, text)
+    write_rt_index_error(out, rt, text)
+    write_rt_string_at(out, rt, text)
+    write_rt_new_array(out, rt, text)
+    write_rt_array_add(out, rt, text)
+    write_rt_array_pop(out, rt, text)
+    write_rt_array_address(out, rt, text)
+    write_rt_array_at(out, rt, text)
+    write_rt_builder_add_float(out, rt, text)
+    write_rt_builder_add_bool(out, rt, text)
+    write_rt_builder_add_quoted(out, rt, text)
+    write_rt_builder_print(out, rt, text)
+    write_rt_show_enter(out, rt, text)
+    write_rt_show_leave(out, rt, text)
+    write_rt_text_error(out, rt, text)
+    write_rt_string_to_int(out, rt, text)
+    write_rt_big_times_ten(out, rt, text)
+    write_rt_big_double(out, rt, text)
+    write_rt_big_compare(out, rt, text)
+    write_rt_big_subtract(out, rt, text)
+    write_rt_string_to_float(out, rt, text)
+    write_rt_string_to_float_body(out, rt, text)
+    write_rt_big_subtract_clear(out, rt, text)
+    write_rt_to_wide(out, rt, text)
+    write_rt_to_wide_body(out, rt, text)
+    write_rt_read_whole_file(out, rt, text)
+    write_rt_read_whole_file_body(out, rt, text)
+    write_rt_write_whole_file(out, rt, text)
+    write_rt_write_whole_file_body(out, rt, text)
+    write_rt_file_exists(out, rt, text)
+    write_rt_stdin_refill(out, rt, text)
+    write_rt_read_line(out, rt, text)
+    write_rt_builder_add_byte(out, rt, text)
+    write_rt_builder_add_letter(out, rt, text)
+    write_rt_get_args(out, rt, text)
+    write_rt_get_args_body(out, rt, text)
+    write_rt_add_backslash_run(out, rt, text)
+    write_rt_raw_free(out, rt, text)
+    write_rt_alloc(out, rt, text)
+    write_rt_alloc_text(out, rt, text)
+    write_rt_alloc_block(out, rt, text)
+    write_rt_alloc_again(out, rt, text)
+    write_rt_alloc_take(out, rt, text)
+    write_rt_alloc_slow(out, rt, text)
+    write_rt_cleaner_start(out, rt, text)
+    write_rt_cleaner_verify(out, rt, text)
+    write_rt_cleaner_add_to_table(out, rt, text)
+    write_rt_cleaner_mark_word(out, rt, text)
+    write_rt_cleaner_clean(out, rt, text)
+    write_rt_show_calls(out, rt, text)
+end

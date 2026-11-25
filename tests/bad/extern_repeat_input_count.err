@@ -1,0 +1,4 @@
+extern_repeat_input_count.jamo line 3: Sleep is already declared in window.jamo (built in) line 15, and this one is different: it takes 2 inputs here but 1 input there.
+    extern "kernel32.dll" func Sleep(milliseconds: i32, extra: int)
+                               ^^^^^
+An extern can be declared again only if its DLL, inputs and answer are exactly the same.

@@ -1,0 +1,8 @@
+enum Mood
+    CALM
+    ANGRY
+end
+
+func main()
+    print(Mood)
+end

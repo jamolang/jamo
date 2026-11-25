@@ -1,0 +1,7 @@
+struct Loop<T>
+    inner: Loop<T>
+end
+
+func main()
+    var l: [Loop<int>] = []
+end

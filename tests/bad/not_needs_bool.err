@@ -1,0 +1,3 @@
+not_needs_bool.jamo line 2: not needs a bool, but this is a float.
+        print(not 1.5)
+                  ^^^

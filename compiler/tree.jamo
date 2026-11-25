@@ -1,0 +1,19 @@
+# Prints the tree the parser makes for one file, then every error, the same way as 'jamo ast', so the
+# two parsers can be compared. jamo run tree.jamo some_file.jamo
+
+use "parser.jamo"
+use "printer.jamo"
+
+func main()
+    var lexer = new_lexer(read_file(args()[0]))
+    lexer.read_tokens()
+    var program = new_program()
+    var parser = new_parser(lexer.tokens, lexer.errors, program)
+    parser.parse()
+    var printer = TreePrinter{program: program, out: new_builder(), checked: false}
+    printer.print_all()
+    for problem in lexer.errors
+        printer.out.line(f"error {problem.line} {problem.column} {problem.length} {problem.words} | {problem.hint}")
+    end
+    write_file("tree.out", printer.out.text())
+end

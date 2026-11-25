@@ -1,0 +1,12 @@
+struct Box<T>
+    item: T
+end
+
+func Box<T>.get(): T
+    return self.item
+end
+
+func main()
+    var b = Box<int>{item: 1}
+    print(b.gte())
+end

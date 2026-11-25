@@ -1,0 +1,7 @@
+func main()
+    if true
+        print(1)
+    elif 5
+        print(2)
+    end
+end

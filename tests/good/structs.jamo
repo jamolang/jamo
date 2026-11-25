@@ -1,0 +1,61 @@
+struct Enemy
+    health: int
+    speed: float
+end
+
+struct Team
+    name: string
+    leader: Enemy
+    members: [Enemy]
+    ready: bool
+end
+
+struct Nothing_inside
+end
+
+func make(health: int): Enemy
+    return Enemy{health: health, speed: 1.5}
+end
+
+func hurt(enemy: Enemy, amount: int)
+    enemy.health -= amount
+end
+
+func main()
+    var e = Enemy{health: 3, speed: 1.5}
+    print(e)
+    print(e.health)
+    print(e.speed)
+    e.health = 10
+    e.speed *= 2.0
+    print(e)
+    var other = e
+    other.health = 1
+    print(e.health)
+    hurt(e, 4)
+    print(other.health)
+    var made = make(9)
+    print(made.health)
+    print(make(8).health)
+    print(string(made) + "!")
+    print(f"e is {e}")
+    var backwards = Enemy{speed: 0.5, health: 2}
+    print(backwards)
+
+    var team = Team{
+        name: "red",
+        leader: e,
+        members: [],
+        ready: false,
+    }
+    print(team)
+    team.members.add(made)
+    team.members.add(Enemy{health: 1, speed: 0.0})
+    team.members[1].health += 41
+    team.leader.health = 77
+    print(e.health)
+    print(team.members[1].health)
+    print(team)
+    print(Nothing_inside{})
+    print(f"{Enemy{health: 1, speed: 2.0}.health}")
+end

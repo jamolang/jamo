@@ -1,0 +1,77 @@
+# A tiny text adventure: find the key, then open the door.
+
+enum Room
+    CAVE
+    HALL
+    VAULT
+end
+
+struct Game
+    room: Room
+    has_key: bool
+    moves: int
+end
+
+func Game.describe()
+    match self.room
+        case Room.CAVE
+            print("You're in a dark cave. A passage goes north.")
+        case Room.HALL
+            if self.has_key
+                print("A long hall. The cave is south, and a door is east.")
+            else
+                print("A long hall with a key on the floor. The cave is south, and a door is east.")
+            end
+        case Room.VAULT
+            print(f"You unlock the door and find the treasure! You won in {self.moves} moves.")
+    end
+end
+
+func Game.go(way: string)
+    if self.room == Room.CAVE and way == "north"
+        self.room = Room.HALL
+    elif self.room == Room.HALL and way == "south"
+        self.room = Room.CAVE
+    elif self.room == Room.HALL and way == "east"
+        if not self.has_key
+            print("The door is locked.")
+            return
+        end
+        self.room = Room.VAULT
+    else
+        print("You can't go that way.")
+        return
+    end
+    self.describe()
+end
+
+func Game.take()
+    if self.room == Room.HALL and not self.has_key
+        self.has_key = true
+        print("You pick up the key.")
+    else
+        print("There's nothing to take.")
+    end
+end
+
+func main()
+    var game = Game{room: Room.CAVE, has_key: false, moves: 0}
+    print("Commands: north, south, east, west, take, quit")
+    game.describe()
+    while game.room != Room.VAULT
+        var command = input()
+        game.moves += 1
+        match command
+            case "take"
+                game.take()
+            case "quit"
+                print("Bye!")
+                return
+            case ""
+                print("Bye!")
+                return
+            else
+                game.go(command)
+        end
+    end
+end

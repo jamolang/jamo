@@ -1,0 +1,215 @@
+# files: folders, paths, copying, moving, deleting and listing files. use "files.jamo"
+#
+# read_file, write_file and exists are built in. These do the rest. The ones that change things answer true when
+# they worked and false when they didn't, like a file that's in use, so a program can carry on and say why.
+
+use "text.jamo"
+
+extern "kernel32.dll" func CreateDirectoryW(name: int, security: int): bool
+extern "kernel32.dll" func RemoveDirectoryW(name: int): bool
+extern "kernel32.dll" func DeleteFileW(name: int): bool
+extern "kernel32.dll" func CopyFileW(from: int, to: int, fail_if_there: bool): bool
+extern "kernel32.dll" func MoveFileExW(from: int, to: int, flags: i32): bool
+extern "kernel32.dll" func FindFirstFileW(pattern: int, data: int): int
+extern "kernel32.dll" func FindNextFileW(handle: int, data: int): bool
+extern "kernel32.dll" func FindClose(handle: int): bool
+extern "kernel32.dll" func GetFileAttributesW(name: int): i32
+extern "kernel32.dll" func GetFileAttributesExW(name: int, level: i32, data: int): bool
+extern "kernel32.dll" func GetCurrentDirectoryW(size: i32, place: int): i32
+
+const FILES_FOLDER_BIT = 16
+const FILES_FIND_DATA_SIZE = 600
+const FILES_NAME_AT = 44
+# MOVEFILE_REPLACE_EXISTING and MOVEFILE_COPY_ALLOWED, so a move can go to another drive and replace what's there
+const FILES_MOVE_FLAGS = 3
+
+# --- Text from Windows ---
+
+# Turns UTF-16 text that ends in a zero, the way Windows gives it, into Jamo's UTF-8 text
+func files_from_wide(place: int): string
+    var units = 0
+    while peek_u16(place, units * 2) != 0
+        units += 1
+    end
+    var out = memory(units * 3 + 1)
+    var size = 0
+    var i = 0
+    while i < units
+        var code = peek_u16(place, i * 2)
+        i += 1
+        if code >= 55296 and code < 56320 and i < units
+            var low = peek_u16(place, i * 2)
+            if low >= 56320 and low < 57344
+                code = 65536 + (code - 55296) * 1024 + (low - 56320)
+                i += 1
+            end
+        end
+        if code < 128
+            poke_u8(out, size, code)
+            size += 1
+        elif code < 2048
+            poke_u8(out, size, 192 + code / 64)
+            poke_u8(out, size + 1, 128 + code % 64)
+            size += 2
+        elif code < 65536
+            poke_u8(out, size, 224 + code / 4096)
+            poke_u8(out, size + 1, 128 + code / 64 % 64)
+            poke_u8(out, size + 2, 128 + code % 64)
+            size += 3
+        else
+            poke_u8(out, size, 240 + code / 262144)
+            poke_u8(out, size + 1, 128 + code / 4096 % 64)
+            poke_u8(out, size + 2, 128 + code / 64 % 64)
+            poke_u8(out, size + 3, 128 + code % 64)
+            size += 4
+        end
+    end
+    return memory_text(out, size)
+end
+
+# --- Paths ---
+
+func files_is_separator(code: int): bool
+    return code == 47 or code == 92
+end
+
+# A folder and a name joined with a backslash, like path_join("saves", "slot1.txt") gives saves\\slot1.txt
+func path_join(folder: string, name: string): string
+    if folder == ""
+        return name
+    end
+    if files_is_separator(byte(folder, len(folder) - 1))
+        return folder + name
+    end
+    return folder + "\\" + name
+end
+
+# Where the last part of the path starts
+func files_last_part(path: string): int
+    var at = len(path)
+    while at > 0 and not files_is_separator(byte(path, at - 1))
+        at -= 1
+    end
+    return at
+end
+
+# The last part of a path: path_name("games\\ship.png") is ship.png
+func path_name(path: string): string
+    return slice(path, files_last_part(path), len(path))
+end
+
+# The folder a path is in: path_folder("games\\ship.png") is games. A path with no folder gives ""
+func path_folder(path: string): string
+    var at = files_last_part(path)
+    if at == 0
+        return ""
+    end
+    return slice(path, 0, at - 1)
+end
+
+# The ending after the name's last dot, like ".png", or "" when there isn't one
+func path_ending(path: string): string
+    var name = path_name(path)
+    var dot = len(name) - 1
+    while dot > 0 and byte(name, dot) != 46
+        dot -= 1
+    end
+    if dot <= 0
+        return ""
+    end
+    return slice(name, dot, len(name))
+end
+
+# The folder the program is running in
+func current_folder(): string
+    var place = memory(65536)
+    var size = GetCurrentDirectoryW(32768, place)
+    if size <= 0 or size >= 32768
+        return ""
+    end
+    return files_from_wide(place)
+end
+
+# --- Looking ---
+
+func is_folder(path: string): bool
+    var attributes = GetFileAttributesW(wide(path))
+    return attributes != -1 and attributes / FILES_FOLDER_BIT % 2 == 1
+end
+
+# A file's size in bytes, or -1 when there's no such file
+func file_size(path: string): int
+    var data = memory(40)
+    if not GetFileAttributesExW(wide(path), 0, data)
+        return -1
+    end
+    if peek_i32(data, 0) / FILES_FOLDER_BIT % 2 == 1
+        return -1
+    end
+    # The size comes in two 4-byte halves, and the low one counts from 0 up to 4294967295
+    var high = peek_i32(data, 28)
+    var low = peek_i32(data, 32)
+    if low < 0
+        low += 4294967296
+    end
+    return high * 4294967296 + low
+end
+
+# The names of everything in a folder, files and folders alike, sorted. A folder that isn't there gives []
+func list_files(folder: string): [string]
+    var names: [string] = []
+    var data = memory(FILES_FIND_DATA_SIZE)
+    var pattern = path_join(folder, "*")
+    if folder == ""
+        pattern = "*"
+    end
+    var handle = FindFirstFileW(wide(pattern), data)
+    if handle == -1
+        return names
+    end
+    var more = true
+    while more
+        var name = files_from_wide(data + FILES_NAME_AT)
+        if name != "." and name != ".."
+            names.add(name)
+        end
+        more = FindNextFileW(handle, data)
+    end
+    FindClose(handle)
+    sort_strings(names)
+    return names
+end
+
+# --- Changing ---
+
+# Makes a folder, and any folders it's in that aren't there yet. True if it's there afterward
+func make_folder(path: string): bool
+    if path == "" or is_folder(path)
+        return path != ""
+    end
+    var parent = path_folder(path)
+    if parent != "" and not is_folder(parent) and len(parent) > 2
+        make_folder(parent)
+    end
+    CreateDirectoryW(wide(path), 0)
+    return is_folder(path)
+end
+
+func delete_file(path: string): bool
+    return DeleteFileW(wide(path))
+end
+
+# Deletes a folder, which must be empty
+func delete_folder(path: string): bool
+    return RemoveDirectoryW(wide(path))
+end
+
+# Copies a file, replacing one that's already at to
+func copy_file(from: string, to: string): bool
+    return CopyFileW(wide(from), wide(to), false)
+end
+
+# Moves or renames a file or folder, replacing a file that's already at to
+func move_file(from: string, to: string): bool
+    return MoveFileExW(wide(from), wide(to), FILES_MOVE_FLAGS)
+end

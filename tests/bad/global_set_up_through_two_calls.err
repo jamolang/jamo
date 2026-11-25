@@ -1,0 +1,4 @@
+global_set_up_through_two_calls.jamo line 1: inner uses names, which isn't set up yet when this runs.
+    var total = outer()
+                ^^^^^^^
+Variables outside functions are set up in order, top to bottom, so move names above total.

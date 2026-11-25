@@ -1,0 +1,4 @@
+generic_method_needs_types.jamo line 5: Box has types, so its methods need them too.
+    func Box.get(): int
+         ^^^
+Like this: func Box<T>.get()

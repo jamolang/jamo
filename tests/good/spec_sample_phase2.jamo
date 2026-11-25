@@ -1,0 +1,11 @@
+func main()
+    var total = 0.0
+    for i in 1..5
+        total += float(i) * 1.5
+        if i == 2 or i == 3
+            print(f"Step {i}: {total}")
+        elif i == 4
+            print("Last one")
+        end
+    end
+end

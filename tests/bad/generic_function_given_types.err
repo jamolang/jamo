@@ -1,0 +1,3 @@
+generic_function_given_types.jamo line 6: add has no types, so it can't be given any.
+        print(add<int>(1))
+              ^^^^^^^^^^^

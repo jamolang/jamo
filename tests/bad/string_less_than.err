@@ -1,0 +1,6 @@
+string_less_than.jamo line 2: This operator needs a number here, but this is a string.
+        print("a" < "b")
+              ^^^
+string_less_than.jamo line 2: This operator needs a number here, but this is a string.
+        print("a" < "b")
+                    ^^^

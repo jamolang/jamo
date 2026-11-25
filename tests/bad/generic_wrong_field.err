@@ -1,0 +1,3 @@
+generic_wrong_field.jamo line 6: The field item must be an int, but this is a string.
+        var b = Box<int>{item: "no"}
+                               ^^^^

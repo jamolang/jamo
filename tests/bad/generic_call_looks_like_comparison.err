@@ -1,0 +1,7 @@
+generic_call_looks_like_comparison.jamo line 8: x is a variable, so it can't be called like a function.
+        print(both(x < y, y > (x)))
+                   ^^^^^^^^^^^^^^
+A < with a > and ( after it reads as types, like first<int>(...). To compare, take away the ( ) after the >.
+generic_call_looks_like_comparison.jamo line 8: both takes 2 inputs, but this gives it 1.
+        print(both(x < y, y > (x)))
+              ^^^^^^^^^^^^^^^^^^^^

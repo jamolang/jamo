@@ -1,0 +1,165 @@
+# term: colors, tables, progress bars and menus for programs in the console. use "term.jamo"
+#
+# Colors use the codes every modern terminal understands. Windows' own console needs them turned on first, which
+# these functions do for you. Widths count bytes, so text in other languages may not line up exactly.
+
+use "text.jamo"
+
+extern "kernel32.dll" func GetStdHandle(which: i32): int
+extern "kernel32.dll" func GetConsoleMode(console: int, mode: int): bool
+extern "kernel32.dll" func SetConsoleMode(console: int, mode: i32): bool
+
+const TERM_COLOR_CODES = 4
+
+# The escape character that starts every terminal code
+func term_escape(): string
+    var place = memory(1)
+    poke_u8(place, 0, 27)
+    return memory_text(place, 1)
+end
+
+# Turns on color codes in Windows' own console. Answers false when there's no console to turn them on in
+func term_colors_on(): bool
+    var console = GetStdHandle(-11)
+    var mode = memory(8)
+    if not GetConsoleMode(console, mode)
+        return false
+    end
+    var now = peek_i32(mode, 0)
+    if now / TERM_COLOR_CODES % 2 == 0
+        SetConsoleMode(console, now + TERM_COLOR_CODES)
+    end
+    return true
+end
+
+func term_code(number: int): string
+    return term_escape() + "[" + string(number) + "m"
+end
+
+# The text in a color: black, red, green, yellow, blue, magenta, cyan, white or gray
+func colored(text: string, color: string): string
+    term_colors_on()
+    var names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
+    var number = -1
+    for i in 0..len(names)
+        if names[i] == color
+            number = 30 + i
+        end
+    end
+    if color == "gray"
+        number = 90
+    end
+    if number < 0
+        fail(f"colored doesn't know the color {color}. It has black, red, green, yellow, blue, magenta, cyan, white and gray.")
+    end
+    return term_code(number) + text + term_code(0)
+end
+
+func bold(text: string): string
+    term_colors_on()
+    return term_code(1) + text + term_code(0)
+end
+
+# Clears the console and puts the cursor at the top
+func clear_screen()
+    term_colors_on()
+    var e = term_escape()
+    print(e + "[2J" + e + "[H")
+end
+
+# --- Lining text up ---
+
+# The text with spaces after it, up to width bytes
+func pad_right(text: string, width: int): string
+    if len(text) >= width
+        return text
+    end
+    return text + repeat(" ", width - len(text))
+end
+
+# The text with spaces before it, up to width bytes
+func pad_left(text: string, width: int): string
+    if len(text) >= width
+        return text
+    end
+    return repeat(" ", width - len(text)) + text
+end
+
+# The rows as a table, each column as wide as its widest text. The first row is the heading, with a line under it
+func table(rows: [[string]]): string
+    if len(rows) == 0
+        return ""
+    end
+    var widths: [int] = []
+    for row in rows
+        for i in 0..len(row)
+            if i >= len(widths)
+                widths.add(0)
+            end
+            if len(row[i]) > widths[i]
+                widths[i] = len(row[i])
+            end
+        end
+    end
+    var lines: [string] = []
+    for r in 0..len(rows)
+        var cells: [string] = []
+        for i in 0..len(rows[r])
+            if i == len(rows[r]) - 1
+                cells.add(rows[r][i])
+            else
+                cells.add(pad_right(rows[r][i], widths[i]))
+            end
+        end
+        lines.add(join(cells, "  "))
+        if r == 0 and len(rows) > 1
+            var dashes: [string] = []
+            for width in widths
+                dashes.add(repeat("-", width))
+            end
+            lines.add(join(dashes, "  "))
+        end
+    end
+    return join(lines, "\n")
+end
+
+# A bar like [##########----------] 50%, width characters wide between the brackets
+func progress_bar(done: int, total: int, width: int): string
+    var part = 0
+    if total > 0
+        part = done * 100 / total
+    end
+    if part < 0
+        part = 0
+    end
+    if part > 100
+        part = 100
+    end
+    var filled = part * width / 100
+    return "[" + repeat("#", filled) + repeat("-", width - filled) + "] " + string(part) + "%"
+end
+
+# Shows the options numbered from 1, and asks until a number is typed. Answers with the option's place,
+# counting from 0, or -1 when the input runs out
+func menu(title: string, options: [string]): int
+    print(title)
+    for i in 0..len(options)
+        print(f"  {i + 1}. {options[i]}")
+    end
+    var tries = 0
+    while tries < 1000
+        print(f"Pick 1 to {len(options)}:")
+        var typed = trim(input())
+        if is_int(typed)
+            var picked = int(typed)
+            if picked >= 1 and picked <= len(options)
+                return picked - 1
+            end
+        end
+        if typed == ""
+            tries += 100
+        end
+        tries += 1
+    end
+    return -1
+end

@@ -1,0 +1,7 @@
+use "math stuff.jamo"
+
+func main()
+    print("before")
+    print(half(4, 2))
+    print(half(4, 0))
+end

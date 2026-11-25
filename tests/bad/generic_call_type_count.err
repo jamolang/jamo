@@ -1,0 +1,3 @@
+generic_call_type_count.jamo line 6: first takes 1 type, but this gives it 2.
+        print(first<int, int>([1]))
+              ^^^^^^^^^^^^^^^^^^^^

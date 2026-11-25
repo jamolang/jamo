@@ -1,0 +1,41 @@
+extern "kernel32.dll" func MulDiv(number: i32, times: i32, over: i32): i32
+extern "kernel32.dll" func lstrlenW(text: int): i32
+extern "msvcrt.dll" func ldexp(x: float, power: i32): float
+extern "msvcrt.dll" func atan2(y: float, x: float): float
+extern "user32.dll" func CallWindowProcW(procedure: int, window: int, message: i32, first: int, second: int): int
+extern "user32.dll" func IsWindow(window: int): bool
+
+func add_all(window: int, message: int, first: int, second: int): int
+    return window * 1000 + message * 100 + first * 10 + second
+end
+
+func say_hello(): int
+    print("called back")
+    return 7
+end
+
+func main()
+    print(MulDiv(7, 6, 3))
+    print(MulDiv(-7, 6, 3))
+    print(lstrlenW(wide("héllo")))
+    print(lstrlenW(wide("")))
+    print(ldexp(1.5, 3))
+    print(atan2(1.0, 1.0))
+    print(CallWindowProcW(callback(add_all), 1, 2, 3, 4))
+    print(CallWindowProcW(callback(say_hello), 0, 0, 0, 0))
+    print(IsWindow(0))
+    var block = memory(32)
+    print(peek_i64(block, 0))
+    poke_i32(block, 4, -5)
+    print(peek_i32(block, 4))
+    poke_u16(block, 8, 70000)
+    print(peek_u16(block, 8))
+    poke_u8(block, 10, 300)
+    print(peek_u8(block, 10))
+    poke_f32(block, 12, 1.5)
+    print(peek_f32(block, 12))
+    poke_f64(block, 16, -2.25)
+    print(peek_f64(block, 16))
+    poke_i64(block, 24, 9223372036854775807)
+    print(peek_i64(block, 24))
+end

@@ -1,0 +1,14 @@
+func main()
+    print(9223372036854775807)
+    print(-9223372036854775808)
+    print(5000000000)
+    print(5000000000 * 2)
+    print(4294967296 * 4294967295)
+    # Overflow wraps around
+    var biggest = 9223372036854775807
+    print(biggest + 1)
+    var smallest = -9223372036854775808
+    print(smallest - 1)
+    print(biggest * 2)
+    print(-smallest)
+end

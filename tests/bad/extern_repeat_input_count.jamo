@@ -1,0 +1,6 @@
+use "window.jamo"
+
+extern "kernel32.dll" func Sleep(milliseconds: i32, extra: int)
+
+func main()
+end

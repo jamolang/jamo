@@ -1,0 +1,7 @@
+no_main.jamo line 1: This program has no main function, so it has nowhere to start.
+    func helper()
+    ^
+Add one:
+    func main()
+        print(42)
+    end

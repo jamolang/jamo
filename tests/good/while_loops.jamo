@@ -1,0 +1,26 @@
+func main()
+    var i = 0
+    var total = 0
+    while i < 5
+        total = total + i
+        i = i + 1
+    end
+    print(total)
+    print(i)
+
+    # A loop inside a loop, with a variable that restarts each time
+    var row = 0
+    while row < 3
+        var column = 0
+        while column < 2
+            print(row * 10 + column)
+            column = column + 1
+        end
+        row = row + 1
+    end
+
+    # A loop that never runs
+    while false
+        print(999)
+    end
+end

@@ -1,0 +1,3 @@
+float_of_bool.jamo line 2: float( ) can't convert a bool.
+        print(float(true))
+                    ^^^^

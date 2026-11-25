@@ -1,0 +1,4 @@
+enum_never_ends.jamo line 1: This enum never gets its end.
+    enum Mood
+    ^^^^
+Add a line with end to finish it.

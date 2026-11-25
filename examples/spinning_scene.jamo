@@ -1,0 +1,78 @@
+# Spinning Scene: a ring of spinning cubes around a glowing ball, with a lamp circling above them and
+# a camera that slowly flies around. Left and right change how fast the camera flies, up and down
+# move it nearer or farther.
+
+use "g3d.jamo"
+use "math.jamo"
+
+# A checkerboard picture made in memory, for the ground
+func checkers(world: G3d): Texture
+    var size = 64
+    var pixels = memory(size * size * 4)
+    for y in 0..size
+        for x in 0..size
+            var light = (x / 8 + y / 8) % 2 == 0
+            var place = (y * size + x) * 4
+            if light
+                poke_i32(pixels, place, -10463650)
+            else
+                poke_i32(pixels, place, -13617101)
+            end
+        end
+    end
+    return world.make_texture(pixels, size, size)
+end
+
+func main()
+    var window = open_window("Spinning Scene", 900, 560)
+    var screen = start_gfx(window)
+    var world = start_3d(screen)
+    var cube = world.cube()
+    var ball = world.sphere(32)
+    var ground = world.plane(40.0)
+    var floor = checkers(world)
+    var sky = rgb(24, 28, 48)
+    world.fog(sky, 18.0, 45.0)
+    world.ambient(rgb(50, 54, 70))
+    world.sun(vec3(-0.3, -1.0, -0.5), rgb(150, 150, 170))
+    var colors = [rgb(239, 83, 80), rgb(255, 167, 38), rgb(255, 238, 88), rgb(102, 187, 106), rgb(66, 165, 245), rgb(171, 71, 188), rgb(236, 64, 122), rgb(38, 198, 218)]
+    var time = 0.0
+    var fly = 0.25
+    var distance = 11.0
+    while window.is_open()
+        var step = min(window.frame_time(), 0.05)
+        time += step
+        if window.key_down("left")
+            fly -= step * 0.5
+        end
+        if window.key_down("right")
+            fly += step * 0.5
+        end
+        if window.key_down("up")
+            distance = max(distance - step * 6.0, 5.0)
+        end
+        if window.key_down("down")
+            distance = min(distance + step * 6.0, 24.0)
+        end
+        var around = time * fly
+        var height = 3.5 + sin(time * 0.4) * 1.5
+        world.camera(vec3(cos(around) * distance, height, sin(around) * distance), vec3(0.0, 1.0, 0.0))
+        var lamp_angle = time * 1.3
+        var lamp = vec3(cos(lamp_angle) * 4.0, 3.0, sin(lamp_angle) * 4.0)
+        world.lamp(0, lamp, rgb(255, 200, 120), 9.0)
+
+        screen.clear(sky)
+        world.draw_textured(ground, floor, vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec3(80.0, 1.0, 80.0))
+        for i in 0..8
+            var angle = float(i) / 8.0 * 2.0 * pi()
+            var spin = time * (40.0 + float(i) * 12.0)
+            var bob = 0.9 + sin(time * 2.0 + float(i)) * 0.3
+            world.draw(cube, vec3(cos(angle) * 5.0, bob, sin(angle) * 5.0), vec3(spin * 0.5, spin, 0.0), vec3(1.0, 1.0, 1.0), colors[i])
+        end
+        world.draw(ball, vec3(0.0, 1.4, 0.0), vec3(0.0, 0.0, 0.0), vec3(1.8, 1.8, 1.8), rgb(255, 245, 230))
+        world.draw(ball, lamp, vec3(0.0, 0.0, 0.0), vec3(0.3, 0.3, 0.3), rgb(255, 210, 140))
+        screen.text("Left and right: fly speed    Up and down: distance", 16.0, 16.0, 16.0, rgb(200, 206, 225))
+        screen.show()
+        window.wait_frame(60)
+    end
+end

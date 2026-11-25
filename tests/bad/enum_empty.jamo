@@ -1,0 +1,5 @@
+enum Mood
+end
+
+func main()
+end

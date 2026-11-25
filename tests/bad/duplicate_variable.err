@@ -1,0 +1,4 @@
+duplicate_variable.jamo line 3: There's already a variable called x in this block.
+        var x = 2
+            ^
+Use x = ... to change it, or pick a different name.

@@ -1,0 +1,5 @@
+use "a.jamo"
+
+func from_b(n: int): int
+    return from_a(n) + 10
+end

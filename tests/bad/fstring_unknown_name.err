@@ -1,0 +1,4 @@
+fstring_unknown_name.jamo line 3: nothing has this name: scor
+        print(f"a{scor}")
+                  ^^^^
+Did you mean score?

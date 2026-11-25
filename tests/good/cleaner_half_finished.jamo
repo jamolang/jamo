@@ -1,0 +1,49 @@
+struct Pair
+    a: string
+    b: string
+end
+
+func make_text(n: int): string
+    var junk = ""
+    for i in 0..n
+        junk = junk + "x"
+    end
+    return junk
+end
+
+func both(a: string, b: string, c: string): string
+    return a + "|" + b + "|" + c
+end
+
+func Pair.joined(other: string): string
+    return self.a + make_text(2) + self.b + other + make_text(1)
+end
+
+func main()
+    print("a" + make_text(3))
+    print(make_text(1) + make_text(2) + make_text(3))
+    print(both(make_text(1), make_text(2), make_text(3)))
+    print(f"{make_text(1)}-{make_text(2)}-{make_text(3)}")
+    print([make_text(1), make_text(2), make_text(3)])
+    print(Pair{a: make_text(1), b: make_text(2)})
+    print(Pair{a: make_text(2), b: make_text(1)}.joined(make_text(3)))
+    var items = [make_text(1)]
+    items[0] = items[0] + make_text(2)
+    print(items)
+    var pair = Pair{a: "", b: ""}
+    pair.a = pair.a + make_text(2) + make_text(2)
+    print(pair.a)
+    items.add(make_text(1) + make_text(1))
+    print(items[len(make_text(1))])
+    print(len(make_text(2)) + len(make_text(3)))
+    print(make_text(2) == make_text(1) + make_text(1))
+    print(int(string(1) + string(2)) + int(string(3)))
+    print(float(string(1) + ".5") * 2.0)
+    match make_text(2)
+        case "xx"
+            print(make_text(1) + "matched")
+    end
+    if make_text(1) == "x" and make_text(2) + make_text(1) == "xxx"
+        print("both")
+    end
+end

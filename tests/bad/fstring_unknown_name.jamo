@@ -1,0 +1,4 @@
+func main()
+    var score = 1
+    print(f"a{scor}")
+end

@@ -1,0 +1,6 @@
+enum_order.jamo line 7: This operator needs a number here, but this is a Mood.
+        print(Mood.CALM < Mood.ANGRY)
+              ^^^^^^^^^
+enum_order.jamo line 7: This operator needs a number here, but this is a Mood.
+        print(Mood.CALM < Mood.ANGRY)
+                          ^^^^^^^^^^

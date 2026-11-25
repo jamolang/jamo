@@ -1,0 +1,4 @@
+float_no_digit_after_dot.jamo line 2: A decimal number needs a digit after its dot.
+        print(1.)
+              ^^
+Like this: 1.0

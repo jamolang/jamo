@@ -1,0 +1,8 @@
+struct Enemy
+    health: int
+end
+
+func main()
+    var e = Enemy{health: 1}
+    print(e.healt)
+end

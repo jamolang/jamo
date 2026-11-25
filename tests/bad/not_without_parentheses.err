@@ -1,0 +1,4 @@
+not_without_parentheses.jamo line 2: not can't go here without parentheses.
+        print(true == not false)
+                      ^^^
+Like this: x == (not y)

@@ -1,0 +1,9 @@
+var a = print_it()
+
+func print_it()
+    print(1)
+end
+
+func main()
+    print(1)
+end

@@ -1,0 +1,4 @@
+global_needs_value.jamo line 1: A variable always needs a value.
+    var a: int
+               ^
+Like this: var a = 0

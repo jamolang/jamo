@@ -1,0 +1,4 @@
+global_twice.jamo line 2: There's already a variable called a, on line 1.
+    var a = 2
+        ^
+Give this one a different name.

@@ -1,0 +1,911 @@
+# Assembler: writes x86-64 instructions as bytes, and fills in the distances to labels. The same as
+# src/assembler.hpp. Instructions are written as hex text, like "4889e5" for mov rbp, rsp.
+
+use "bytes.jamo"
+
+# Registers, numbered like the processor does
+const REG_RAX = 0
+const REG_RCX = 1
+const REG_RDX = 2
+const REG_RBX = 3
+const REG_RSI = 6
+const REG_RDI = 7
+const REG_R8 = 8
+const REG_R9 = 9
+
+# Things the code points at, whose addresses only the .exe writer knows. Numbered like DataRef
+const DATA_GET_STD_HANDLE = 0
+const DATA_WRITE_FILE = 1
+const DATA_EXIT_PROCESS = 2
+const DATA_GET_PROCESS_HEAP = 3
+const DATA_HEAP_ALLOC = 4
+const DATA_CREATE_FILE_W = 5
+const DATA_READ_FILE = 6
+const DATA_CLOSE_HANDLE = 7
+const DATA_GET_FILE_ATTRIBUTES_W = 8
+const DATA_GET_COMMAND_LINE_W = 9
+const DATA_MULTI_BYTE_TO_WIDE_CHAR = 10
+const DATA_HEAP_FREE = 11
+const DATA_LOAD_LIBRARY_A = 12
+const DATA_GET_PROC_ADDRESS = 13
+const DATA_HEAP_HANDLE = 14
+const DATA_CURRENT_LINE = 15
+const DATA_BUILDER = 16
+const DATA_VISIT_HEAD = 17
+const DATA_STDIN = 18
+const DATA_CLEANER = 19
+const DATA_LETTERS = 20
+const DATA_ERROR_TEXT = 21
+const DATA_CALL_TABLE = 22
+const DATA_STRING = 23
+const DATA_IMPORT = 24
+const DATA_GLOBALS = 25
+
+# Which entry in the program's string table holds each fixed text the runtime uses
+struct RuntimeText
+    file_names: [int]
+    true_word: int
+    false_word: int
+    line_word: int
+    error_word: int
+    divide_by_zero: int
+    out_of_memory: int
+    float_too_large: int
+    index_word: int
+    outside_string: int
+    bytes_word: int
+    pop_empty: int
+    outside_array: int
+    items_word: int
+    quote: int
+    new_line: int
+    cant_turn: int
+    into_int: int
+    into_float: int
+    cant_read: int
+    cant_write: int
+    period: int
+    cleaner_bad_header: int
+    cleaner_freed_changed: int
+    cleaner_freed_reference: int
+    cleaner_double_free: int
+    more_calls: int
+    user32_dll: int
+    message_box: int
+    error_title: int
+end
+
+# The machine code so far. A fixup is a 4-byte gap the .exe writer fills with the distance to a thing in
+# the data section, and a call site is a place a Jamo call returns to, for showing the calls in a run error
+struct Assembler
+    code: Bytes
+    fixup_offsets: [int]
+    fixup_targets: [int]
+    fixup_strings: [int]
+    fixup_extras: [int]
+    call_offsets: [int]
+    call_strings: [int]
+    places: [int]
+    gap_offsets: [int]
+    gap_labels: [int]
+end
+
+func new_assembler(): Assembler
+    return Assembler{code: new_bytes(), fixup_offsets: [], fixup_targets: [], fixup_strings: [], fixup_extras: [], call_offsets: [], call_strings: [], places: [], gap_offsets: [], gap_labels: []}
+end
+
+func hex_digit(letter: int): int
+    if letter >= 97
+        return letter - 87
+    end
+    return letter - 48
+end
+
+# Bytes written as hex text, two letters each
+func Assembler.hex(text: string)
+    var i = 0
+    while i < len(text)
+        self.code.add_u8(hex_digit(byte(text, i)) * 16 + hex_digit(byte(text, i + 1)))
+        i += 2
+    end
+end
+
+func Assembler.byte(value: int)
+    self.code.add_u8(value)
+end
+
+func Assembler.int32(value: int)
+    self.code.add_u32(value)
+end
+
+func Assembler.int64(value: int)
+    self.code.add_u64(value)
+end
+
+func Assembler.size(): int
+    return self.code.length()
+end
+
+func Assembler.new_label(): int
+    self.places.add(-1)
+    return len(self.places) - 1
+end
+
+func Assembler.place(label: int)
+    self.places[label] = self.code.length()
+end
+
+# Adds a 4-byte distance to a label, filled in at the end
+func Assembler.label_gap(label: int)
+    self.gap_offsets.add(self.code.length())
+    self.gap_labels.add(label)
+    self.int32(0)
+end
+
+func Assembler.fixup(target: int, which: int, extra: int)
+    self.fixup_offsets.add(self.code.length())
+    self.fixup_targets.add(target)
+    self.fixup_strings.add(which)
+    self.fixup_extras.add(extra)
+    self.int32(0)
+end
+
+func Assembler.data_gap(target: int, which: int)
+    self.fixup(target, which, 0)
+end
+
+func Assembler.note_call_site(which: int)
+    self.call_offsets.add(self.code.length())
+    self.call_strings.add(which)
+end
+
+func Assembler.finish()
+    for i in 0..len(self.gap_offsets)
+        var offset = self.gap_offsets[i]
+        self.code.set_u32(offset, self.places[self.gap_labels[i]] - (offset + 4))
+    end
+end
+
+func fits_int32(value: int): bool
+    return value >= -2147483648 and value <= 2147483647
+end
+
+# --- Instructions ---
+
+func Assembler.push_rax()
+    self.hex("50")
+end
+
+func Assembler.pop_rax()
+    self.hex("58")
+end
+
+func Assembler.push_rbp()
+    self.hex("55")
+end
+
+func Assembler.mov_rbp_rsp()
+    self.hex("4889e5")
+end
+
+func Assembler.leave_and_return()
+    self.hex("c9c3")
+end
+
+# Dividing by a constant with a multiply
+func Assembler.mov_r8_rax()
+    self.hex("4989c0")
+end
+
+func Assembler.mov_rax_r8()
+    self.hex("4c89c0")
+end
+
+func Assembler.mov_r11_value(value: int)
+    self.hex("49bb")
+    self.int64(value)
+end
+
+# rdx:rax = rax * r11
+func Assembler.imul_r11()
+    self.hex("49f7eb")
+end
+
+func Assembler.add_rdx_r8()
+    self.hex("4c01c2")
+end
+
+func Assembler.sar_rdx(count: int)
+    self.hex("48c1fa")
+    self.byte(count)
+end
+
+func Assembler.shr_rax_63()
+    self.hex("48c1e83f")
+end
+
+func Assembler.add_rdx_rax()
+    self.hex("4801c2")
+end
+
+# Variables outside functions: r11 = where they are, then one of them by its place. r11 holds nothing in Jamo code
+func Assembler.load_r11_globals()
+    self.hex("4c8b1d")
+    self.data_gap(DATA_GLOBALS, 0)
+end
+
+func Assembler.load_rax_global(offset: int)
+    self.hex("498b83")
+    self.int32(offset)
+end
+
+func Assembler.load_rcx_global(offset: int)
+    self.hex("498b8b")
+    self.int32(offset)
+end
+
+func Assembler.store_rax_global(offset: int)
+    self.hex("498983")
+    self.int32(offset)
+end
+
+# Zeroes count words from rsp up, then keeps rsp as where the variables outside functions are
+func Assembler.start_globals(count: int)
+    self.hex("4889e7b9")
+    self.int32(count)
+    self.hex("31c0f348ab488925")
+    self.data_gap(DATA_GLOBALS, 0)
+end
+
+func Assembler.imul_rdx_r11()
+    self.hex("490fafd3")
+end
+
+# rax = text. FNV-1a over its bytes, leaving the number in rax. Uses rcx, rdx, r8 and r9
+func Assembler.hash_text_rax()
+    self.hex("488b08488d500848b825232284e49cf2cb49b8b301000000010000")
+    self.hex("4885c97413440fb60a4c31c8490fafc048ffc248ffc9ebe8")
+end
+
+# Spreads rax's bits (splitmix64's last steps), then halves it so it's never below 0. Uses rcx
+func Assembler.mix_hash_rax()
+    self.hex("4889c148c1e91e4831c848b9b9e5e41c6d4758bf480fafc1")
+    self.hex("4889c148c1e91b4831c848b9eb113113bb49d094480fafc1")
+    self.hex("4889c148c1e91f4831c848d1e8")
+end
+
+func Assembler.imul_rdx_value(value: int)
+    self.hex("4869d2")
+    self.int32(value)
+end
+
+func Assembler.sub_rax_rdx()
+    self.hex("4829d0")
+end
+
+# r12 to r15 hold a function's busiest variables, numbered 0 to 3
+func Assembler.mov_reg_rax(reg: int)
+    self.hex("4989")
+    self.byte(196 + reg)
+end
+
+func Assembler.mov_rax_reg(reg: int)
+    self.hex("4c89")
+    self.byte(224 + reg * 8)
+end
+
+func Assembler.mov_rcx_reg(reg: int)
+    self.hex("4c89")
+    self.byte(225 + reg * 8)
+end
+
+func Assembler.push_reg(reg: int)
+    self.hex("41")
+    self.byte(84 + reg)
+end
+
+# Math straight on a variable held in a register
+func Assembler.inc_reg(reg: int)
+    self.hex("49ff")
+    self.byte(196 + reg)
+end
+
+func Assembler.dec_reg(reg: int)
+    self.hex("49ff")
+    self.byte(204 + reg)
+end
+
+func Assembler.add_reg_rax(reg: int)
+    self.hex("4901")
+    self.byte(196 + reg)
+end
+
+func Assembler.sub_reg_rax(reg: int)
+    self.hex("4929")
+    self.byte(196 + reg)
+end
+
+func Assembler.cmp_reg_rcx(reg: int)
+    self.hex("4939")
+    self.byte(204 + reg)
+end
+
+func Assembler.cmp_reg_reg(reg: int, other: int)
+    self.hex("4d39")
+    self.byte(228 + other * 8 + reg)
+end
+
+func Assembler.add_reg_value(reg: int, value: int)
+    self.hex("4981")
+    self.byte(196 + reg)
+    self.int32(value)
+end
+
+func Assembler.sub_reg_value(reg: int, value: int)
+    self.hex("4981")
+    self.byte(236 + reg)
+    self.int32(value)
+end
+
+func Assembler.cmp_reg_value(reg: int, value: int)
+    self.hex("4981")
+    self.byte(252 + reg)
+    self.int32(value)
+end
+
+func Assembler.mov_reg_value(reg: int, value: int)
+    self.hex("49c7")
+    self.byte(196 + reg)
+    self.int32(value)
+end
+
+func Assembler.load_reg_from_frame(reg: int, offset: int)
+    self.hex("4c8b")
+    self.byte(165 + reg * 8)
+    self.int32(offset)
+end
+
+func Assembler.mov_rcx_rax()
+    self.hex("4889c1")
+end
+
+func Assembler.mov_rax_rdx()
+    self.hex("4889d0")
+end
+
+func Assembler.pop_rcx()
+    self.hex("59")
+end
+
+func Assembler.add_rax_rcx()
+    self.hex("4801c8")
+end
+
+func Assembler.sub_rax_rcx()
+    self.hex("4829c8")
+end
+
+func Assembler.imul_rax_rcx()
+    self.hex("480fafc1")
+end
+
+func Assembler.cmp_rax_rcx()
+    self.hex("4839c8")
+end
+
+func Assembler.cqo()
+    self.hex("4899")
+end
+
+func Assembler.mov_rbx_rsp()
+    self.hex("4889e3")
+end
+
+func Assembler.mov_rsp_rbx()
+    self.hex("4889dc")
+end
+
+func Assembler.align_rsp()
+    self.hex("4883e4f0")
+end
+
+func Assembler.sign_extend_eax()
+    self.hex("4863c0")
+end
+
+func Assembler.eax_to_bool()
+    self.hex("85c00f95c00fb6c0")
+end
+
+func Assembler.pop_rdx()
+    self.hex("5a")
+end
+
+func Assembler.add_rax_rcx_only()
+    self.hex("4801c8")
+end
+
+func Assembler.add_rax_rdx()
+    self.hex("4801d0")
+end
+
+func Assembler.mov_rcx_from_rax()
+    self.hex("488b08")
+end
+
+func Assembler.load_rax_items()
+    self.hex("488b4010")
+end
+
+func Assembler.load_rax_item_rcx()
+    self.hex("488b04c8")
+end
+
+func Assembler.load_rax_from_stack_second()
+    self.hex("488b442408")
+end
+
+func Assembler.load_rcx_from_stack_top()
+    self.hex("488b0c24")
+end
+
+func Assembler.mov_r9_rax()
+    self.hex("4989c1")
+end
+
+func Assembler.store_r9_at_rax()
+    self.hex("4c8908")
+end
+
+func Assembler.inc_rax()
+    self.hex("48ffc0")
+end
+
+func Assembler.zero_eax()
+    self.hex("31c0")
+end
+
+func Assembler.idiv_rcx()
+    self.hex("48f7f9")
+end
+
+func Assembler.neg_rax()
+    self.hex("48f7d8")
+end
+
+func Assembler.test_rax_rax()
+    self.hex("4885c0")
+end
+
+func Assembler.test_rcx_rcx()
+    self.hex("4885c9")
+end
+
+func Assembler.cmp_rcx_minus_one()
+    self.hex("4883f9ff")
+end
+
+func Assembler.movzx_eax_al()
+    self.hex("0fb6c0")
+end
+
+func Assembler.flip_rax_bit_zero()
+    self.hex("4883f001")
+end
+
+func Assembler.load_rax_from_rax()
+    self.hex("488b00")
+end
+
+# Arrays without a runtime call: an array is its length, its room and a pointer to its items
+func Assembler.cmp_rcx_length()
+    self.hex("483b08")
+end
+
+func Assembler.lea_rax_item_rcx()
+    self.hex("488d04c8")
+end
+
+func Assembler.load_rdx_length()
+    self.hex("488b10")
+end
+
+func Assembler.cmp_rdx_room()
+    self.hex("483b5008")
+end
+
+func Assembler.store_rcx_as_item_rdx()
+    self.hex("4c8b401049890cd0")
+end
+
+func Assembler.grow_length()
+    self.hex("48ff00")
+end
+
+# A field reached through rdx or rcx, so the object can stay in a register
+func Assembler.mov_rdx_rax()
+    self.hex("4889c2")
+end
+
+func Assembler.load_rax_field_of_rdx(number: int)
+    self.hex("488b82")
+    self.int32(number * 8)
+end
+
+func Assembler.store_rax_in_rdx_field(number: int)
+    self.hex("488982")
+    self.int32(number * 8)
+end
+
+func Assembler.load_rcx_field(number: int)
+    self.hex("488b89")
+    self.int32(number * 8)
+end
+
+# An int that fits in 32 bits, used straight from the instruction
+func Assembler.cmp_rax_value(value: int)
+    self.hex("483d")
+    self.int32(value)
+end
+
+func Assembler.add_rax_value(value: int)
+    self.hex("4805")
+    self.int32(value)
+end
+
+func Assembler.sub_rax_value(value: int)
+    self.hex("482d")
+    self.int32(value)
+end
+
+func Assembler.flip_rax_sign_bit()
+    self.hex("480fbaf83f")
+end
+
+func Assembler.mov_xmm0_rax()
+    self.hex("66480f6ec0")
+end
+
+func Assembler.mov_xmm1_rcx()
+    self.hex("66480f6ec9")
+end
+
+func Assembler.mov_rax_xmm0()
+    self.hex("66480f7ec0")
+end
+
+func Assembler.addsd()
+    self.hex("f20f58c1")
+end
+
+func Assembler.subsd()
+    self.hex("f20f5cc1")
+end
+
+func Assembler.mulsd()
+    self.hex("f20f59c1")
+end
+
+func Assembler.divsd()
+    self.hex("f20f5ec1")
+end
+
+func Assembler.int_to_float()
+    self.hex("f2480f2ac0")
+end
+
+func Assembler.mov_xmm0_rcx()
+    self.hex("66480f6ec1")
+end
+
+func Assembler.mov_xmm1_xmm0()
+    self.hex("660f28c8")
+end
+
+func Assembler.load_xmm0_field_of_rdx(number: int)
+    self.hex("f20f1082")
+    self.int32(number * 8)
+end
+
+func Assembler.store_xmm0_in_rdx_field(number: int)
+    self.hex("f20f1182")
+    self.int32(number * 8)
+end
+
+func Assembler.compare_xmm0_xmm1()
+    self.hex("660f2ec1")
+end
+
+func Assembler.compare_xmm1_xmm0()
+    self.hex("660f2ec8")
+end
+
+func Assembler.and_al_cl()
+    self.hex("20c8")
+end
+
+func Assembler.or_al_cl()
+    self.hex("08c8")
+end
+
+func Assembler.setcc_cl(condition: int)
+    self.hex("0f")
+    self.byte(condition)
+    self.hex("c1")
+end
+
+func Assembler.setcc_al(condition: int)
+    self.hex("0f")
+    self.byte(condition)
+    self.hex("c0")
+end
+
+func Assembler.mov_rax_number(value: int)
+    if fits_int32(value)
+        self.hex("48c7c0")
+        self.int32(value)
+    else
+        self.hex("48b8")
+        self.int64(value)
+    end
+end
+
+func Assembler.load_rax_from_frame(offset: int)
+    self.hex("488b85")
+    self.int32(offset)
+end
+
+func Assembler.mov_rcx_number(value: int)
+    self.hex("48c7c1")
+    self.int32(value)
+end
+
+func Assembler.load_rax_field(number: int)
+    self.hex("488b80")
+    self.int32(number * 8)
+end
+
+func Assembler.store_r9_in_rax_field(number: int)
+    self.hex("4c8988")
+    self.int32(number * 8)
+end
+
+# Saves a field into a struct being built: the struct is on top of the stack
+func Assembler.store_rax_in_new_struct(number: int)
+    self.hex("488b0c24488981")
+    self.int32(number * 8)
+end
+
+func Assembler.load_rax_from_stack_top()
+    self.hex("488b0424")
+end
+
+func Assembler.mov_rcx_value(value: int)
+    if fits_int32(value)
+        self.hex("48c7c1")
+        self.int32(value)
+    else
+        self.hex("48b9")
+        self.int64(value)
+    end
+end
+
+func Assembler.load_rcx_from_frame(offset: int)
+    self.hex("488b8d")
+    self.int32(offset)
+end
+
+# Saves an item into an array being built: the array is on top of the stack
+func Assembler.store_rax_in_new_array(index: int)
+    self.hex("488b0c24488b4910488981")
+    self.int32(index * 8)
+end
+
+func Assembler.store_rax_to_frame(offset: int)
+    self.hex("488985")
+    self.int32(offset)
+end
+
+# Up to 127 fits in one byte
+func Assembler.sub_rsp(amount: int)
+    if amount >= 0 and amount <= 127
+        self.hex("4883ec")
+        self.byte(amount)
+        return
+    end
+    self.hex("4881ec")
+    self.int32(amount)
+end
+
+func Assembler.add_rsp(amount: int)
+    if amount >= 0 and amount <= 127
+        self.hex("4883c4")
+        self.byte(amount)
+        return
+    end
+    self.hex("4881c4")
+    self.int32(amount)
+end
+
+# Touches memory below the stack, so a big frame can't jump past Windows' stack guard
+func Assembler.touch_stack_below(amount: int)
+    self.hex("488b8424")
+    self.int32(0 - amount)
+end
+
+func Assembler.jump(label: int)
+    self.hex("e9")
+    self.label_gap(label)
+end
+
+func Assembler.jump_when(condition: int, label: int)
+    self.hex("0f")
+    self.byte(condition)
+    self.label_gap(label)
+end
+
+func Assembler.jump_if_equal(label: int)
+    self.jump_when(132, label)
+end
+
+func Assembler.jump_if_not_equal(label: int)
+    self.jump_when(133, label)
+end
+
+func Assembler.jump_if_not_negative(label: int)
+    self.jump_when(137, label)
+end
+
+func Assembler.jump_if_negative(label: int)
+    self.jump_when(136, label)
+end
+
+func Assembler.jump_if_below(label: int)
+    self.jump_when(130, label)
+end
+
+func Assembler.jump_if_at_least(label: int)
+    self.jump_when(131, label)
+end
+
+func Assembler.jump_if_at_most(label: int)
+    self.jump_when(134, label)
+end
+
+func Assembler.jump_if_above(label: int)
+    self.jump_when(135, label)
+end
+
+func Assembler.jump_if_unordered(label: int)
+    self.jump_when(138, label)
+end
+
+func Assembler.jump_if_less(label: int)
+    self.jump_when(140, label)
+end
+
+func Assembler.jump_if_less_equal(label: int)
+    self.jump_when(142, label)
+end
+
+func Assembler.jump_if_greater(label: int)
+    self.jump_when(143, label)
+end
+
+func Assembler.jump_if_greater_equal(label: int)
+    self.jump_when(141, label)
+end
+
+func Assembler.call(label: int)
+    self.hex("e8")
+    self.label_gap(label)
+end
+
+func Assembler.call_windows(function: int)
+    self.hex("ff15")
+    self.data_gap(function, 0)
+end
+
+func Assembler.lea_data(reg: int, target: int, which: int)
+    self.byte(72 + reg / 8 * 4)
+    self.hex("8d")
+    self.byte(reg % 8 * 8 + 5)
+    self.data_gap(target, which)
+end
+
+func Assembler.lea_string(reg: int, which: int)
+    self.lea_data(reg, DATA_STRING, which)
+end
+
+func Assembler.call_import(import: int)
+    self.hex("ff15")
+    self.data_gap(DATA_IMPORT, import)
+end
+
+# A spare 8 bytes in the data section, which only the code generator uses
+func Assembler.load_rax_string_bytes(which: int)
+    self.hex("488b05")
+    self.fixup(DATA_STRING, which, 8)
+end
+
+func Assembler.store_rax_string_bytes(which: int)
+    self.hex("488905")
+    self.fixup(DATA_STRING, which, 8)
+end
+
+func Assembler.call_r11()
+    self.hex("41ffd3")
+end
+
+func Assembler.mov_r11_rax()
+    self.hex("4989c3")
+end
+
+func Assembler.lea_rax_label(label: int)
+    self.hex("488d05")
+    self.label_gap(label)
+end
+
+# Loads input number reg_number into its register for a Windows call, from where rbx points
+func Assembler.load_reg_from_inputs(reg_number: int, is_float: bool, offset: int)
+    if is_float
+        var floats = ["f20f1083", "f20f108b", "f20f1093", "f20f109b"]
+        self.hex(floats[reg_number])
+    else
+        var ints = ["488b8b", "488b93", "4c8b83", "4c8b8b"]
+        self.hex(ints[reg_number])
+    end
+    self.int32(offset)
+end
+
+# An f32 input: the float shrinks to 32 bits in its register
+func Assembler.shrink_float_in(reg_number: int)
+    self.hex("f20f5a")
+    self.byte(192 + reg_number * 8 + reg_number)
+end
+
+func Assembler.copy_f32_input_to_stack(from: int, to: int)
+    self.hex("f20f1083")
+    self.int32(from)
+    self.hex("f20f5ac0f30f118424")
+    self.int32(to)
+end
+
+func Assembler.grow_float_answer()
+    self.hex("f30f5ac0")
+end
+
+func Assembler.copy_input_to_stack(from: int, to: int)
+    self.hex("488b83")
+    self.int32(from)
+    self.hex("48898424")
+    self.int32(to)
+end
+
+func Assembler.lea_rax_string(which: int)
+    self.hex("488d05")
+    self.data_gap(DATA_STRING, which)
+end
+
+func Assembler.load_rax_data(target: int)
+    self.hex("488b05")
+    self.data_gap(target, 0)
+end
+
+func Assembler.load_rcx_data(target: int)
+    self.hex("488b0d")
+    self.data_gap(target, 0)
+end
+
+func Assembler.store_rax_data(target: int)
+    self.hex("488905")
+    self.data_gap(target, 0)
+end
+
+# Remembers the file and line for run errors. Uses r11, which holds nothing in Jamo code
+func Assembler.note_line(line: int)
+    self.hex("49bb")
+    self.int64(line)
+    self.hex("4c891d")
+    self.data_gap(DATA_CURRENT_LINE, 0)
+end

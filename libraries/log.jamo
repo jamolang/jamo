@@ -1,0 +1,95 @@
+# log: messages with levels, to the screen, a file or both. use "log.jamo"
+#
+#     var log = new_log("game.log")
+#     log.info("Level 2 started")
+#     log.warn("Low on memory")
+#
+# Each message gets the time and its level: [14:03:27] WARN  Low on memory. A file is added to, never replaced.
+
+use "time.jamo"
+use "text.jamo"
+
+extern "kernel32.dll" func CreateFileW(name: int, access: i32, share: i32, security: int, how: i32, flags: i32, template: int): int
+extern "kernel32.dll" func WriteFile(file: int, data: int, size: i32, written: int, overlapped: int): bool
+extern "kernel32.dll" func CloseHandle(handle: int): bool
+
+# FILE_APPEND_DATA, shared for reading and writing, OPEN_ALWAYS, so it's made if it isn't there yet
+const LOG_APPEND = 4
+const LOG_SHARE = 3
+const LOG_OPEN_ALWAYS = 4
+
+struct Log
+    file: string
+    level: int
+    to_screen: bool
+end
+
+# A log that writes to the screen and, unless file is "", to that file too
+func new_log(file: string): Log
+    return Log{file: file, level: 1, to_screen: true}
+end
+
+func log_level_number(name: string): int
+    var names = ["debug", "info", "warn", "error"]
+    for i in 0..len(names)
+        if names[i] == name
+            return i
+        end
+    end
+    fail(f"A log's level is debug, info, warn or error, not {name}.")
+    return 0
+end
+
+# Only messages at this level or above are kept: debug, info (the start), warn or error
+func Log.set_level(name: string)
+    self.level = log_level_number(name)
+end
+
+func Log.screen(on: bool)
+    self.to_screen = on
+end
+
+func log_append(path: string, text: string): bool
+    var file = CreateFileW(wide(path), LOG_APPEND, LOG_SHARE, 0, LOG_OPEN_ALWAYS, 128, 0)
+    if file == -1
+        return false
+    end
+    var place = memory(len(text) + 1)
+    for i in 0..len(text)
+        poke_u8(place, i, byte(text, i))
+    end
+    var written = memory(8)
+    var wrote = WriteFile(file, place, len(text), written, 0)
+    CloseHandle(file)
+    return wrote
+end
+
+func Log.write(level: int, words: string)
+    if level < self.level
+        return
+    end
+    var names = ["DEBUG", "INFO ", "WARN ", "ERROR"]
+    var line = "[" + now().time_text() + "] " + names[level] + " " + words
+    if self.to_screen
+        print(line)
+    end
+    if self.file != ""
+        log_append(self.file, line + "\r\n")
+    end
+end
+
+func Log.debug(words: string)
+    self.write(0, words)
+end
+
+func Log.info(words: string)
+    self.write(1, words)
+end
+
+func Log.warn(words: string)
+    self.write(2, words)
+end
+
+func Log.error(words: string)
+    self.write(3, words)
+end

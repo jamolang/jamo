@@ -1,0 +1,3 @@
+match_duplicate_case.jamo line 5: This case is already covered on line 3.
+            case 1
+                 ^

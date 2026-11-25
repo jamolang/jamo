@@ -1,0 +1,98 @@
+enum Mood
+    CALM
+    ANGRY
+    SLEEPY
+end
+
+enum Color
+    RED
+    CALM
+end
+
+struct Pet
+    name: string
+    mood: Mood
+end
+
+func describe(mood: Mood): string
+    match mood
+        case Mood.CALM
+            return "calm"
+        case Mood.ANGRY
+            return "angry"
+        case Mood.SLEEPY
+            return "sleepy"
+    end
+end
+
+func size(n: int): string
+    match n
+        case 0
+            return "none"
+        case -1
+            return "negative one"
+        else
+            return "some"
+    end
+end
+
+func sound(word: string): int
+    match word
+        case "cat"
+            return 1
+        case "dog"
+            return 2
+        case ""
+            return 3
+    end
+    return 0
+end
+
+func main()
+    var mood = Mood.ANGRY
+    print(mood)
+    print(mood == Mood.ANGRY)
+    print(mood != Mood.ANGRY)
+    print(mood == Mood.CALM)
+    print(describe(mood))
+    print(describe(Mood.SLEEPY))
+    mood = Mood.CALM
+    print(f"now {mood}")
+    print(string(mood) + "!")
+    print(Color.CALM)
+    print(size(0))
+    print(size(-1))
+    print(size(5))
+    print(sound("dog"))
+    print(sound(""))
+    print(sound("fish"))
+
+    var pet = Pet{name: "Rex", mood: Mood.CALM}
+    pet.mood = Mood.SLEEPY
+    print(pet)
+    var moods = [Mood.CALM, Mood.ANGRY]
+    moods.add(pet.mood)
+    print(moods)
+
+    match pet.mood
+        case Mood.CALM
+            print("no")
+        else
+            print("else ran")
+    end
+    match 3
+        case 1
+            print("no")
+    end
+    for i in 0..4
+        match i
+            case 1
+                continue
+            case 2
+                break
+            else
+                print(i)
+        end
+        print("after")
+    end
+end

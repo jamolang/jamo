@@ -1,0 +1,7 @@
+func five(a: int, b: int, c: int, d: int, e: int): int
+    return a
+end
+
+func main()
+    print(callback(five))
+end

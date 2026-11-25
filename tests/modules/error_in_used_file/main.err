@@ -1,0 +1,3 @@
+other.jamo line 2: nothing has this name: nope
+        print(nope)
+              ^^^^

@@ -1,0 +1,3 @@
+generic_struct_given_types.jamo line 6: Plain has no types, so it can't be given any.
+        var p = Plain<int>{x: 1}
+                ^^^^^^^^^^^^^^^^

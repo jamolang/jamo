@@ -1,0 +1,5 @@
+func main()
+    for item in [1, 2]
+        item = 3
+    end
+end

@@ -1,0 +1,20 @@
+func main()
+    var text = "a\r\n\r\nb"
+    print(len(text))
+    print(text[1] == "\r")
+    print(len(f"\r"))
+    write_file("windows.txt", text)
+    var words = 0
+    var in_word = false
+    var read = read_file("windows.txt")
+    for i in 0..len(read)
+        var letter = read[i]
+        if letter == "\r" or letter == "\n"
+            in_word = false
+        elif not in_word
+            in_word = true
+            words += 1
+        end
+    end
+    print(words)
+end

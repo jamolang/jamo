@@ -1,0 +1,5 @@
+func main()
+    var items = [1]
+    print(items.pop())
+    print(items.pop())
+end

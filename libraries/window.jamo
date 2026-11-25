@@ -1,0 +1,459 @@
+# window: opens a window, and reads the keyboard, mouse and frame timing. use "window.jamo"
+#
+# Each window keeps what Windows tells it in a block of memory, whose address Windows stores with the
+# window. The block: closed at 0, width at 8, height at 16, mouse x at 24, mouse y at 32, wheel at 40,
+# mouse buttons at 48 to 50, focus at 56, minimized at 64, resized at 72, then a byte for each key
+# being held at 128, pressed at 384, and let go at 640. Those three, from wheel to let go, collect what
+# happens between frames. Each frame they move to the copies the program reads: wheel at 44,
+# resized at 76, pressed at 896 and let go at 1152. After those: keys pressed or repeating while held at
+# 1408, copied to 1664; typed letters, a count at 1920 then up to 64 bytes from 1928, copied to 2000 and
+# 2008; and mouse buttons pressed at 2080, copied to 2088.
+
+extern "kernel32.dll" func GetModuleHandleW(name: int): int
+extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
+extern "kernel32.dll" func QueryPerformanceFrequency(place: int): bool
+extern "kernel32.dll" func Sleep(milliseconds: i32)
+extern "winmm.dll" func timeBeginPeriod(period: i32): i32
+extern "winmm.dll" func timeEndPeriod(period: i32): i32
+extern "user32.dll" func RegisterClassExW(details: int): i32
+extern "user32.dll" func CreateWindowExW(extra_style: i32, class_name: int, title: int, style: i32, x: i32, y: i32, width: i32, height: i32, parent: int, menu: int, instance: int, extra: int): int
+extern "user32.dll" func DefWindowProcW(window: int, message: i32, first: int, second: int): int
+extern "user32.dll" func DestroyWindow(window: int): bool
+extern "user32.dll" func ShowWindow(window: int, how: i32): bool
+extern "user32.dll" func PeekMessageW(message: int, window: int, first: i32, last: i32, remove: i32): bool
+extern "user32.dll" func TranslateMessage(message: int): bool
+extern "user32.dll" func DispatchMessageW(message: int): int
+extern "user32.dll" func SetWindowLongPtrW(window: int, index: i32, value: int): int
+extern "user32.dll" func GetWindowLongPtrW(window: int, index: i32): int
+extern "user32.dll" func AdjustWindowRect(rect: int, style: i32, has_menu: bool): bool
+extern "user32.dll" func LoadCursorW(instance: int, name: int): int
+extern "user32.dll" func SetWindowTextW(window: int, text: int): bool
+extern "user32.dll" func SetWindowPos(window: int, after: int, x: i32, y: i32, width: i32, height: i32, flags: i32): bool
+
+struct Window
+    handle: int
+    state: int
+    timing: int
+    open: bool
+    closed_by_program: bool
+    shown: bool
+    quiet_start: bool
+    frame_seconds: float
+end
+
+func open_window(title: string, width: int, height: int): Window
+    var style = 13565952
+    var instance = GetModuleHandleW(0)
+    var class_name = wide("JamoWindow")
+    var details = memory(80)
+    poke_i32(details, 0, 80)
+    poke_i32(details, 4, 35)
+    poke_i64(details, 8, callback(window_message))
+    poke_i64(details, 24, instance)
+    poke_i64(details, 40, LoadCursorW(0, 32512))
+    poke_i64(details, 64, class_name)
+    RegisterClassExW(details)
+    var rect = memory(16)
+    poke_i32(rect, 8, width)
+    poke_i32(rect, 12, height)
+    AdjustWindowRect(rect, style, false)
+    var outer_width = peek_i32(rect, 8) - peek_i32(rect, 0)
+    var outer_height = peek_i32(rect, 12) - peek_i32(rect, 4)
+    var handle = CreateWindowExW(0, class_name, wide(title), style, -2147483648, -2147483648, outer_width, outer_height, 0, 0, instance, 0)
+    if handle == 0
+        fail("Windows couldn't open a window.")
+    end
+    var state = memory(2560)
+    poke_i32(state, 8, width)
+    poke_i32(state, 16, height)
+    SetWindowLongPtrW(handle, -21, state)
+    timeBeginPeriod(1)
+    var timing = memory(32)
+    QueryPerformanceFrequency(timing + 8)
+    QueryPerformanceCounter(timing)
+    return Window{handle: handle, state: state, timing: timing, open: true, closed_by_program: false, shown: false, quiet_start: false, frame_seconds: 0.0}
+end
+
+# Keeps the window from taking the keyboard when it first appears
+func Window.quiet()
+    self.quiet_start = true
+end
+
+# Handles what Windows sent, and answers false once the window is closed. Call it once a frame
+func Window.is_open(): bool
+    if not self.open
+        return false
+    end
+    if not self.shown
+        self.shown = true
+        if self.quiet_start
+            ShowWindow(self.handle, 4)
+        else
+            ShowWindow(self.handle, 5)
+        end
+    end
+    var message = memory(48)
+    while PeekMessageW(message, 0, 0, 0, 1)
+        TranslateMessage(message)
+        DispatchMessageW(message)
+    end
+    for i in 0..64
+        poke_i64(self.state, 896 + i * 8, peek_i64(self.state, 384 + i * 8))
+        poke_i64(self.state, 384 + i * 8, 0)
+    end
+    poke_i32(self.state, 44, peek_i32(self.state, 40))
+    poke_i32(self.state, 40, 0)
+    poke_u8(self.state, 76, peek_u8(self.state, 72))
+    poke_u8(self.state, 72, 0)
+    for i in 0..32
+        poke_i64(self.state, 1664 + i * 8, peek_i64(self.state, 1408 + i * 8))
+        poke_i64(self.state, 1408 + i * 8, 0)
+    end
+    for i in 0..9
+        poke_i64(self.state, 2000 + i * 8, peek_i64(self.state, 1920 + i * 8))
+    end
+    poke_i64(self.state, 1920, 0)
+    poke_i64(self.state, 2088, peek_i64(self.state, 2080))
+    poke_i64(self.state, 2080, 0)
+    if peek_u8(self.state, 0) != 0
+        self.shut()
+        return false
+    end
+    return true
+end
+
+func Window.shut()
+    if self.open
+        self.open = false
+        SetWindowLongPtrW(self.handle, -21, 0)
+        DestroyWindow(self.handle)
+        timeEndPeriod(1)
+    end
+end
+
+func Window.close()
+    if self.closed_by_program
+        fail("This window is already closed.")
+    end
+    self.closed_by_program = true
+    self.shut()
+end
+
+func Window.must_be_open()
+    if not self.open
+        fail("This window is closed, so it can't be used.")
+    end
+end
+
+func Window.key_down(name: string): bool
+    self.must_be_open()
+    return peek_u8(self.state, 128 + window_key_code(name)) != 0
+end
+
+func Window.key_pressed(name: string): bool
+    self.must_be_open()
+    return peek_u8(self.state, 896 + window_key_code(name)) != 0
+end
+
+func Window.key_released(name: string): bool
+    self.must_be_open()
+    return peek_u8(self.state, 1152 + window_key_code(name)) != 0
+end
+
+func Window.mouse_x(): int
+    return peek_i32(self.state, 24)
+end
+
+func Window.mouse_y(): int
+    return peek_i32(self.state, 32)
+end
+
+func Window.mouse_down(button: string): bool
+    self.must_be_open()
+    return peek_u8(self.state, 48 + window_button(button)) != 0
+end
+
+# True in the frame a mouse button went down, even if it came back up in the same frame
+func Window.mouse_pressed(button: string): bool
+    self.must_be_open()
+    return peek_u8(self.state, 2088 + window_button(button)) != 0
+end
+
+# True in the frame a key went down, and again each time it repeats while held, like in a text box
+func Window.key_repeated(name: string): bool
+    self.must_be_open()
+    return peek_u8(self.state, 1664 + window_key_code(name)) != 0
+end
+
+# The letters typed this frame. Only English letters, digits, spaces and symbols come through
+func Window.typed(): string
+    self.must_be_open()
+    var letters = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    var words = ""
+    for i in 0..peek_u8(self.state, 2000)
+        words = words + letters[peek_u8(self.state, 2008 + i) - 32]
+    end
+    return words
+end
+
+# How far the mouse wheel turned this frame. Away from you is more than 0
+func Window.wheel(): int
+    return peek_i32(self.state, 44)
+end
+
+func Window.width(): int
+    return peek_i32(self.state, 8)
+end
+
+func Window.height(): int
+    return peek_i32(self.state, 16)
+end
+
+func Window.resized(): bool
+    return peek_u8(self.state, 76) != 0
+end
+
+func Window.has_focus(): bool
+    return peek_u8(self.state, 56) != 0
+end
+
+func Window.minimized(): bool
+    return peek_u8(self.state, 64) != 0
+end
+
+func Window.set_title(title: string)
+    self.must_be_open()
+    SetWindowTextW(self.handle, wide(title))
+end
+
+func Window.move(x: int, y: int)
+    self.must_be_open()
+    SetWindowPos(self.handle, 0, x, y, 0, 0, 21)
+end
+
+func Window.resize(width: int, height: int)
+    self.must_be_open()
+    var rect = memory(16)
+    poke_i32(rect, 8, width)
+    poke_i32(rect, 12, height)
+    AdjustWindowRect(rect, 13565952, false)
+    SetWindowPos(self.handle, 0, 0, 0, peek_i32(rect, 8) - peek_i32(rect, 0), peek_i32(rect, 12) - peek_i32(rect, 4), 22)
+end
+
+# Waits until it's time for the next frame. A game that falls behind starts counting again from now
+func Window.wait_frame(frames_a_second: int)
+    var frequency = peek_i64(self.timing, 8)
+    var last = peek_i64(self.timing, 0)
+    var target = last + frequency / frames_a_second
+    var now = 0
+    while true
+        QueryPerformanceCounter(self.timing + 16)
+        now = peek_i64(self.timing, 16)
+        if now >= target
+            break
+        end
+        var left = (target - now) * 1000 / frequency
+        if left > 1
+            Sleep(left - 1)
+        end
+    end
+    self.frame_seconds = float(now - last) / float(frequency)
+    if now - target > frequency / frames_a_second
+        poke_i64(self.timing, 0, now)
+    else
+        poke_i64(self.timing, 0, target)
+    end
+end
+
+# How long the last frame took, in seconds
+func Window.frame_time(): float
+    return self.frame_seconds
+end
+
+# --- Inside the library ---
+func window_button(button: string): int
+    match button
+        case "left"
+            return 0
+        case "right"
+            return 1
+        case "middle"
+            return 2
+    end
+    fail(f"window doesn't know the mouse button {button}. It knows left, right and middle.")
+    return 0
+end
+
+func window_key_code(name: string): int
+    var letters = "abcdefghijklmnopqrstuvwxyz"
+    if len(name) == 1
+        for i in 0..26
+            if letters[i] == name
+                return 65 + i
+            end
+        end
+        var digits = "0123456789"
+        for i in 0..10
+            if digits[i] == name
+                return 48 + i
+            end
+        end
+    end
+    match name
+        case "left"
+            return 37
+        case "up"
+            return 38
+        case "right"
+            return 39
+        case "down"
+            return 40
+        case "space"
+            return 32
+        case "enter"
+            return 13
+        case "escape"
+            return 27
+        case "shift"
+            return 16
+        case "ctrl"
+            return 17
+        case "alt"
+            return 18
+        case "tab"
+            return 9
+        case "backspace"
+            return 8
+        case "delete"
+            return 46
+        case "home"
+            return 36
+        case "end"
+            return 35
+    end
+    fail(f"window doesn't know the key {name}. It knows a to z, 0 to 9, the arrows, space, enter, escape, shift, ctrl, alt, tab, backspace, delete, home and end.")
+    return 0
+end
+
+# Windows packs two 16-bit numbers into one. These unpack them, with their signs
+func window_low_part(value: int): int
+    var whole = value % 4294967296
+    if whole < 0
+        whole += 4294967296
+    end
+    var part = whole % 65536
+    if part >= 32768
+        part -= 65536
+    end
+    return part
+end
+
+func window_high_part(value: int): int
+    var whole = value % 4294967296
+    if whole < 0
+        whole += 4294967296
+    end
+    var part = whole / 65536
+    if part >= 32768
+        part -= 65536
+    end
+    return part
+end
+
+func window_key(state: int, code: int, down: bool)
+    var key = code % 256
+    if down
+        if peek_u8(state, 128 + key) == 0
+            poke_u8(state, 384 + key, 1)
+        end
+        poke_u8(state, 128 + key, 1)
+        poke_u8(state, 1408 + key, 1)
+    else
+        poke_u8(state, 128 + key, 0)
+        poke_u8(state, 640 + key, 1)
+    end
+end
+
+func window_mouse(state: int, place: int)
+    poke_i32(state, 24, window_low_part(place))
+    poke_i32(state, 32, window_high_part(place))
+end
+
+func window_message(handle: int, message: int, first: int, second: int): int
+    var kind = message % 4294967296
+    if kind < 0
+        kind += 4294967296
+    end
+    var state = GetWindowLongPtrW(handle, -21)
+    if state == 0
+        return DefWindowProcW(handle, kind, first, second)
+    end
+    match kind
+        case 16
+            poke_u8(state, 0, 1)
+            return 0
+        case 20
+            return 1
+        case 5
+            if first != 1
+                poke_i32(state, 8, window_low_part(second))
+                poke_i32(state, 16, window_high_part(second))
+                poke_u8(state, 72, 1)
+            end
+            if first == 1
+                poke_u8(state, 64, 1)
+            else
+                poke_u8(state, 64, 0)
+            end
+        case 7
+            poke_u8(state, 56, 1)
+        case 8
+            poke_u8(state, 56, 0)
+            for i in 0..256
+                poke_u8(state, 128 + i, 0)
+            end
+            for i in 0..3
+                poke_u8(state, 48 + i, 0)
+            end
+        case 256
+            window_key(state, first, true)
+        case 260
+            window_key(state, first, true)
+        case 257
+            window_key(state, first, false)
+        case 261
+            window_key(state, first, false)
+        case 258
+            var count = peek_u8(state, 1920)
+            if first >= 32 and first <= 126 and count < 64
+                poke_u8(state, 1928 + count, first)
+                poke_u8(state, 1920, count + 1)
+            end
+        case 512
+            window_mouse(state, second)
+        case 513
+            window_mouse(state, second)
+            poke_u8(state, 48, 1)
+            poke_u8(state, 2080, 1)
+        case 514
+            window_mouse(state, second)
+            poke_u8(state, 48, 0)
+        case 516
+            window_mouse(state, second)
+            poke_u8(state, 49, 1)
+            poke_u8(state, 2081, 1)
+        case 517
+            window_mouse(state, second)
+            poke_u8(state, 49, 0)
+        case 519
+            window_mouse(state, second)
+            poke_u8(state, 50, 1)
+            poke_u8(state, 2082, 1)
+        case 520
+            window_mouse(state, second)
+            poke_u8(state, 50, 0)
+        case 522
+            poke_i32(state, 40, peek_i32(state, 40) + window_high_part(first) / 120)
+    end
+    return DefWindowProcW(handle, kind, first, second)
+end

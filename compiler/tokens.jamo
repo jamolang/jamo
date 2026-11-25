@@ -1,0 +1,44 @@
+# Prints every token and lexer error of a file, the same way as 'jamo tokens', so the two lexers can be
+# compared. jamo run tokens.jamo some_file.jamo
+
+use "lexer.jamo"
+use "builder.jamo"
+
+# \, new lines, tabs and carriage returns as escapes, so each token fits on one line
+func escaped(text: string): string
+    var out = new_builder()
+    for i in 0..len(text)
+        var letter = byte(text, i)
+        if letter == 92
+            out.add("\\\\")
+        elif letter == 10
+            out.add("\\n")
+        elif letter == 9
+            out.add("\\t")
+        elif letter == 13
+            out.add("\\r")
+        else
+            out.add(text[i])
+        end
+    end
+    return out.text()
+end
+
+func float_bits(value: float): int
+    var place = memory(8)
+    poke_f64(place, 0, value)
+    return peek_i64(place, 0)
+end
+
+func main()
+    var lexer = new_lexer(read_file(args()[0]))
+    lexer.read_tokens()
+    var out = new_builder()
+    for token in lexer.tokens
+        out.line(f"{token.kind} {token.line} {token.column} {token.length} [{escaped(token.text)}] [{escaped(token.value)}] {token.number} {float_bits(token.real)}")
+    end
+    for problem in lexer.errors
+        out.line(f"error {problem.line} {problem.column} {problem.length} {problem.words} | {problem.hint}")
+    end
+    write_file("tokens.out", out.text())
+end

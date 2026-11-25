@@ -1,0 +1,9 @@
+func both(a: bool, b: bool): bool
+    return a and b
+end
+
+func main()
+    var x = 1
+    var y = 2
+    print(both(x < y, y > (x)))
+end

@@ -1,0 +1,210 @@
+# Errors: collects the mistakes found in Jamo files, and prints them with the line and a marker. The
+# same as src/errors.cpp.
+
+use "builder.jamo"
+use "text.jamo"
+
+const MOST_MESSAGES = 20
+const BUILT_IN_LABEL = " (built in)"
+
+# A file's source is only cut into lines when a message shows one, since most builds have no mistakes
+struct ErrorFile
+    name: string
+    source: string
+end
+
+struct ErrorMessage
+    line: int
+    column: int
+    length: int
+    file: int
+    words: string
+    hint: string
+end
+
+struct Errors
+    files: [ErrorFile]
+    current: int
+    messages: [ErrorMessage]
+    warnings: [ErrorMessage]
+end
+
+func new_errors(): Errors
+    return Errors{files: [], current: -1, messages: [], warnings: []}
+end
+
+func Errors.add_file(name: string, source: string): int
+    self.files.add(ErrorFile{name: name, source: source})
+    self.current = len(self.files) - 1
+    return self.current
+end
+
+# Line number at, counting from 0, with its carriage returns taken out. found is false when there's no such line
+struct SourceLine
+    found: bool
+    text: string
+end
+
+func source_line(source: string, at: int): SourceLine
+    var start = 0
+    var line = 0
+    while line < at
+        var i = start
+        while i < len(source) and byte(source, i) != 10
+            i += 1
+        end
+        if i >= len(source)
+            return SourceLine{found: false, text: ""}
+        end
+        start = i + 1
+        line += 1
+    end
+    var finish = start
+    while finish < len(source) and byte(source, finish) != 10
+        finish += 1
+    end
+    return SourceLine{found: true, text: replace(slice(source, start, finish), "\r", "")}
+end
+
+func Errors.name_of_file(file: int): string
+    return self.files[file].name
+end
+
+func Errors.add(line: int, column: int, length: int, file: int, words: string, hint: string)
+    var where = file
+    if where < 0
+        where = self.current
+    end
+    if not self.is_full()
+        self.messages.add(ErrorMessage{line: line, column: column, length: length, file: where, words: words, hint: hint})
+    end
+end
+
+func Errors.is_full(): bool
+    return len(self.messages) >= MOST_MESSAGES
+end
+
+func Errors.any(): bool
+    return len(self.messages) > 0
+end
+
+func Errors.count(): int
+    return len(self.messages)
+end
+
+func ends_with_label(name: string): bool
+    var size = len(BUILT_IN_LABEL)
+    if len(name) <= size
+        return false
+    end
+    for i in 0..size
+        if byte(name, len(name) - size + i) != byte(BUILT_IN_LABEL, i)
+            return false
+        end
+    end
+    return true
+end
+
+# The built-in libraries are tested already, and their warnings would only get in the way
+func Errors.warn(line: int, column: int, length: int, file: int, words: string, hint: string)
+    var where = file
+    if where < 0
+        where = self.current
+    end
+    if ends_with_label(self.files[where].name)
+        return
+    end
+    self.warnings.add(ErrorMessage{line: line, column: column, length: length, file: where, words: words, hint: hint})
+end
+
+# Keeps the marker lined up under the mistake, and strange bytes out of the terminal
+func readable_line(line: string): string
+    var out = new_builder()
+    for i in 0..len(line)
+        var code = byte(line, i)
+        if code == 9
+            out.add(" ")
+        elif code < 32 or code >= 127
+            out.add("?")
+        else
+            out.add(line[i])
+        end
+    end
+    return out.text()
+end
+
+func Errors.text_of(message: ErrorMessage, label: string, out: TextBuilder)
+    var file = self.files[message.file]
+    out.add(file.name)
+    out.add(" line ")
+    out.add_int(message.line)
+    out.add(": ")
+    out.add(label)
+    out.line(message.words)
+    var at = message.line - 1
+    var shown = SourceLine{found: false, text: ""}
+    if message.line >= 1
+        shown = source_line(file.source, at)
+    end
+    if shown.found
+        var text = shown.text
+        out.add("    ")
+        out.line(readable_line(text))
+        out.add("    ")
+        for i in 0..message.column
+            out.add(" ")
+        end
+        # A file with Windows line endings has an extra character that isn't shown, so the marker stops at the line's end
+        var room = len(text) - message.column
+        var length = message.length
+        if room < length
+            length = room
+        end
+        if length < 1
+            length = 1
+        end
+        for i in 0..length
+            out.add("^")
+        end
+        out.add("\n")
+    end
+    if message.hint != ""
+        out.line(message.hint)
+    end
+end
+
+func Errors.text(): string
+    var out = new_builder()
+    for message in self.messages
+        self.text_of(message, "", out)
+    end
+    return out.text()
+end
+
+# In the order they appear, up to the same limit as errors. The sort keeps the order of ties, like std::stable_sort
+func Errors.warnings_text(): string
+    var sorted: [ErrorMessage] = []
+    for message in self.warnings
+        var at = len(sorted)
+        sorted.add(message)
+        while at > 0 and comes_before(message, sorted[at - 1])
+            sorted[at] = sorted[at - 1]
+            at -= 1
+        end
+        sorted[at] = message
+    end
+    var out = new_builder()
+    for i in 0..len(sorted)
+        if i < MOST_MESSAGES
+            self.text_of(sorted[i], "Warning: ", out)
+        end
+    end
+    return out.text()
+end
+
+func comes_before(a: ErrorMessage, b: ErrorMessage): bool
+    if a.file != b.file
+        return a.file < b.file
+    end
+    return a.line < b.line
+end

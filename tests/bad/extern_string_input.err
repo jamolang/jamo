@@ -1,0 +1,4 @@
+extern_string_input.jamo line 1: An extern function's inputs can be int, i32, float, f32 or bool, but this is a string.
+    extern "user32.dll" func MessageBoxW(window: int, text: string): i32
+                                                      ^^^^
+Pass text with wide(text), and other things with memory( ) and poke.

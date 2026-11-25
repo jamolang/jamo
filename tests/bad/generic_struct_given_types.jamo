@@ -1,0 +1,7 @@
+struct Plain
+    x: int
+end
+
+func main()
+    var p = Plain<int>{x: 1}
+end

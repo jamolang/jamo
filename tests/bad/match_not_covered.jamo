@@ -1,0 +1,12 @@
+enum Mood
+    CALM
+    ANGRY
+end
+
+func main()
+    var m = Mood.CALM
+    match m
+        case Mood.CALM
+            print(1)
+    end
+end

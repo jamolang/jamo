@@ -1,0 +1,5 @@
+func Enmy.hit()
+end
+
+func main()
+end

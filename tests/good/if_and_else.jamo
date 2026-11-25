@@ -1,0 +1,29 @@
+func main()
+    var x = 5
+    if x > 3
+        print(1)
+    end
+    if x > 9
+        print(2)
+    end
+    if x > 9
+        print(3)
+    else
+        print(4)
+    end
+    if x == 5
+        if x != 5
+            print(5)
+        else
+            print(6)
+        end
+    else
+        print(7)
+    end
+    # An inner block can hide a name until it ends
+    if true
+        var x = true
+        print(x)
+    end
+    print(x)
+end

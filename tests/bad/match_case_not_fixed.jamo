@@ -1,0 +1,7 @@
+func main()
+    var x = 1
+    match 1
+        case x
+            print(1)
+    end
+end

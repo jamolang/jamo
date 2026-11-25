@@ -1,0 +1,4 @@
+method_twice.jamo line 8: There's already a function called Enemy.hit, on line 5.
+    func Enemy.hit()
+               ^^^
+Give this one a different name.

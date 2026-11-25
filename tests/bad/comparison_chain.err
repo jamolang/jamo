@@ -1,0 +1,4 @@
+comparison_chain.jamo line 2: This can't compare in a chain, because the first comparison gives a bool.
+        print(1 < 2 < 3)
+              ^^^^^^^^^
+Compare one pair at a time, in separate steps.

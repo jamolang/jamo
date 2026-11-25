@@ -1,0 +1,5 @@
+func main()
+    var word = "cat"
+    print("before")
+    print(word[3])
+end

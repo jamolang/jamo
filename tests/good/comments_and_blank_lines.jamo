@@ -1,0 +1,9 @@
+# café: other languages are fine in comments
+
+func main()   # here too
+
+    print(1)  # and here
+
+
+end
+# the end

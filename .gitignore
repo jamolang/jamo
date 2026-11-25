@@ -1,0 +1,9 @@
+compiler/tokens.out
+compiler/tree.out
+compiler/check.out
+compiler/code.out
+compiler/out.exe
+release/*.zip
+*.exe
+__pycache__/
+*.vsix

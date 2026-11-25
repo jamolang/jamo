@@ -1,0 +1,4 @@
+constant_in_a_circle.jamo line 1: A is worked out from itself.
+    const A = B + 1
+          ^
+A constant can use other constants, but not in a circle.

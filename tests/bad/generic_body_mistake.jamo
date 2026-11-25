@@ -1,0 +1,7 @@
+func plus_one<T>(x: T): T
+    return x + 1
+end
+
+func main()
+    print(plus_one("x"))
+end

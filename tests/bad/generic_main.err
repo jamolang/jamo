@@ -1,0 +1,3 @@
+generic_main.jamo line 1: main can't have types.
+    func main<T>()
+         ^^^^

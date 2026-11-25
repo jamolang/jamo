@@ -1,0 +1,13 @@
+# main uses a and b, and b uses a too: a, then b, then main
+use "a.jamo"
+use "b.jamo"
+
+var total = from_a + from_b
+var everything = b_total() + total
+
+func main()
+    print(total)
+    print(everything)
+    from_a = 100
+    print(from_a + from_b)
+end

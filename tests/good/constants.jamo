@@ -1,0 +1,27 @@
+# Constants: names for values known before the program runs
+const MAX = 64
+const HALF = MAX / 2
+const NAME = "Jamo"
+const GREETING = "Hi from " + NAME
+const RATE = 1.5
+const DEBUG = false
+const NEGATIVE = -MAX
+const LATER = EARLIER + 1
+const EARLIER = 9
+
+func main()
+    print(MAX)
+    print(HALF)
+    print(GREETING)
+    print(RATE * 2.0)
+    print(DEBUG or true)
+    print(NEGATIVE)
+    print(LATER)
+    var total = 0
+    for i in 0..MAX
+        total += i
+    end
+    print(total)
+    var items = [MAX, HALF]
+    print(items)
+end

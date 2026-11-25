@@ -1,0 +1,482 @@
+# png: reads PNG pictures into memory as rows of red, green, blue and alpha bytes. use "png.jamo"
+# It includes its own reader for PNG's compression (deflate). Damaged files stop with a clear error.
+
+struct PngImage
+    width: int
+    height: int
+    pixels: int
+end
+
+struct PngInflater
+    data: int
+    size: int
+    place: int
+    bits: int
+    bit_count: int
+    out: int
+    out_size: int
+    out_place: int
+    powers: [int]
+end
+
+struct PngCode
+    counts: [int]
+    symbols: [int]
+end
+
+func png_damaged(why: string)
+    fail(f"This PNG file is damaged or not a PNG: {why}.")
+end
+
+func png_number(data: string, place: int): int
+    return byte(data, place) * 16777216 + byte(data, place + 1) * 65536 + byte(data, place + 2) * 256 + byte(data, place + 3)
+end
+
+func png_name(data: string, place: int): string
+    return data[place] + data[place + 1] + data[place + 2] + data[place + 3]
+end
+
+func decode_png(data: string): PngImage
+    var signature = [137, 80, 78, 71, 13, 10, 26, 10]
+    if len(data) < 8
+        png_damaged("it's too short")
+    end
+    for i in 0..8
+        if byte(data, i) != signature[i]
+            png_damaged("it doesn't start like a PNG file")
+        end
+    end
+    var width = 0
+    var height = 0
+    var color_type = -1
+    var palette: [int] = []
+    var see_through: [int] = []
+    var parts: [int] = []
+    var packed_size = 0
+    var place = 8
+    var finished = false
+    while not finished
+        if place + 12 > len(data)
+            png_damaged("it ends too soon")
+        end
+        var size = png_number(data, place)
+        var name = png_name(data, place + 4)
+        var start = place + 8
+        if size > len(data) - start - 4
+            png_damaged(f"the {name} part says it's longer than the file")
+        end
+        match name
+            case "IHDR"
+                if size != 13
+                    png_damaged("its header is the wrong size")
+                end
+                width = png_number(data, start)
+                height = png_number(data, start + 4)
+                var depth = byte(data, start + 8)
+                color_type = byte(data, start + 9)
+                if width < 1 or height < 1 or width > 16384 or height > 16384
+                    png_damaged(f"its size of {width} by {height} isn't allowed")
+                end
+                if depth != 8
+                    fail(f"Jamo can only read PNG files with 8 bits for each color, and this one has {depth}.")
+                end
+                if color_type != 0 and color_type != 2 and color_type != 3 and color_type != 4 and color_type != 6
+                    png_damaged(f"its color type {color_type} doesn't exist")
+                end
+                if byte(data, start + 12) != 0
+                    fail("Jamo can't read interlaced PNG files yet. Save it again without interlacing.")
+                end
+            case "PLTE"
+                for i in 0..size
+                    palette.add(byte(data, start + i))
+                end
+            case "tRNS"
+                for i in 0..size
+                    see_through.add(byte(data, start + i))
+                end
+            case "IDAT"
+                parts.add(start)
+                parts.add(size)
+                packed_size += size
+            case "IEND"
+                finished = true
+        end
+        place = start + size + 4
+    end
+    if color_type < 0
+        png_damaged("it has no header")
+    end
+    if color_type == 3 and len(palette) == 0
+        png_damaged("it uses a palette but doesn't have one")
+    end
+    var packed = memory(packed_size + 1)
+    var at = 0
+    var i = 0
+    while i < len(parts)
+        for j in 0..parts[i + 1]
+            poke_u8(packed, at, byte(data, parts[i] + j))
+            at += 1
+        end
+        i += 2
+    end
+    var channels = png_channels(color_type)
+    var row_bytes = width * channels
+    var raw = png_inflate(packed, packed_size, height * (row_bytes + 1))
+    png_unfilter(raw, width, height, channels)
+    return PngImage{width: width, height: height, pixels: png_to_rgba(raw, width, height, color_type, palette, see_through)}
+end
+
+func png_channels(color_type: int): int
+    match color_type
+        case 0
+            return 1
+        case 2
+            return 3
+        case 3
+            return 1
+        case 4
+            return 2
+    end
+    return 4
+end
+
+# --- Filters: each row was stored as its difference from the pixels before it ---
+func png_paeth(left: int, above: int, corner: int): int
+    var guess = left + above - corner
+    var to_left = guess - left
+    var to_above = guess - above
+    var to_corner = guess - corner
+    if to_left < 0
+        to_left = -to_left
+    end
+    if to_above < 0
+        to_above = -to_above
+    end
+    if to_corner < 0
+        to_corner = -to_corner
+    end
+    if to_left <= to_above and to_left <= to_corner
+        return left
+    end
+    if to_above <= to_corner
+        return above
+    end
+    return corner
+end
+
+func png_unfilter(raw: int, width: int, height: int, channels: int)
+    var row_bytes = width * channels
+    for y in 0..height
+        var row = raw + y * (row_bytes + 1)
+        var filter = peek_u8(row, 0)
+        if filter > 4
+            png_damaged(f"row {y} uses filter {filter}, which doesn't exist")
+        end
+        for x in 0..row_bytes
+            var left = 0
+            if x >= channels
+                left = peek_u8(row, 1 + x - channels)
+            end
+            var above = 0
+            var corner = 0
+            if y > 0
+                above = peek_u8(row - row_bytes - 1, 1 + x)
+                if x >= channels
+                    corner = peek_u8(row - row_bytes - 1, 1 + x - channels)
+                end
+            end
+            var value = peek_u8(row, 1 + x)
+            match filter
+                case 1
+                    value += left
+                case 2
+                    value += above
+                case 3
+                    value += (left + above) / 2
+                case 4
+                    value += png_paeth(left, above, corner)
+            end
+            poke_u8(row, 1 + x, value % 256)
+        end
+    end
+end
+
+func png_to_rgba(raw: int, width: int, height: int, color_type: int, palette: [int], see_through: [int]): int
+    var pixels = memory(width * height * 4)
+    var channels = png_channels(color_type)
+    for y in 0..height
+        var row = raw + y * (width * channels + 1) + 1
+        for x in 0..width
+            var from = row + x * channels
+            var to = pixels + (y * width + x) * 4
+            var red = 0
+            var green = 0
+            var blue = 0
+            var alpha = 255
+            match color_type
+                case 0
+                    red = peek_u8(from, 0)
+                    green = red
+                    blue = red
+                case 2
+                    red = peek_u8(from, 0)
+                    green = peek_u8(from, 1)
+                    blue = peek_u8(from, 2)
+                case 3
+                    var index = peek_u8(from, 0)
+                    if index * 3 + 2 >= len(palette)
+                        png_damaged("a pixel uses a color past the end of the palette")
+                    end
+                    red = palette[index * 3]
+                    green = palette[index * 3 + 1]
+                    blue = palette[index * 3 + 2]
+                    if index < len(see_through)
+                        alpha = see_through[index]
+                    end
+                case 4
+                    red = peek_u8(from, 0)
+                    green = red
+                    blue = red
+                    alpha = peek_u8(from, 1)
+                case 6
+                    red = peek_u8(from, 0)
+                    green = peek_u8(from, 1)
+                    blue = peek_u8(from, 2)
+                    alpha = peek_u8(from, 3)
+            end
+            poke_u8(to, 0, red)
+            poke_u8(to, 1, green)
+            poke_u8(to, 2, blue)
+            poke_u8(to, 3, alpha)
+        end
+    end
+    return pixels
+end
+
+# --- Deflate, read the way zlib's small "puff" reader does it ---
+func png_inflate(packed: int, size: int, out_size: int): int
+    if size < 2
+        png_damaged("its picture data is missing")
+    end
+    var first = peek_u8(packed, 0)
+    var second = peek_u8(packed, 1)
+    if first % 16 != 8 or (first * 256 + second) % 31 != 0 or (second / 32) % 2 != 0
+        png_damaged("its picture data doesn't start right")
+    end
+    var powers: [int] = []
+    var power = 1
+    for i in 0..33
+        powers.add(power)
+        power *= 2
+    end
+    var reader = PngInflater{data: packed, size: size, place: 2, bits: 0, bit_count: 0, out: memory(out_size + 1), out_size: out_size, out_place: 0, powers: powers}
+    var last = false
+    while not last
+        last = reader.take(1) == 1
+        var kind = reader.take(2)
+        match kind
+            case 0
+                reader.copy_stored()
+            case 1
+                reader.copy_coded(png_fixed_lengths(), png_fixed_distances())
+            case 2
+                reader.copy_dynamic()
+            else
+                png_damaged("its picture data uses a block type that doesn't exist")
+        end
+    end
+    if reader.out_place != out_size
+        png_damaged(f"its picture data makes {reader.out_place} bytes, but its size needs {out_size}")
+    end
+    return reader.out
+end
+
+func PngInflater.take(count: int): int
+    while self.bit_count < count
+        if self.place >= self.size
+            png_damaged("its picture data ends too soon")
+        end
+        self.bits += peek_u8(self.data, self.place) * self.powers[self.bit_count]
+        self.place += 1
+        self.bit_count += 8
+    end
+    var value = self.bits % self.powers[count]
+    self.bits = self.bits / self.powers[count]
+    self.bit_count -= count
+    return value
+end
+
+func PngInflater.put(value: int)
+    if self.out_place >= self.out_size
+        png_damaged("its picture data is too big for its size")
+    end
+    poke_u8(self.out, self.out_place, value)
+    self.out_place += 1
+end
+
+func PngInflater.copy_stored()
+    self.bits = 0
+    self.bit_count = 0
+    if self.place + 4 > self.size
+        png_damaged("its picture data ends too soon")
+    end
+    var length = peek_u8(self.data, self.place) + peek_u8(self.data, self.place + 1) * 256
+    var check = peek_u8(self.data, self.place + 2) + peek_u8(self.data, self.place + 3) * 256
+    if length + check != 65535
+        png_damaged("a stored block's length doesn't match its check")
+    end
+    self.place += 4
+    if self.place + length > self.size
+        png_damaged("its picture data ends too soon")
+    end
+    for i in 0..length
+        self.put(peek_u8(self.data, self.place + i))
+    end
+    self.place += length
+end
+
+func png_make_code(lengths: [int], start: int, count: int): PngCode
+    var counts: [int] = []
+    for i in 0..16
+        counts.add(0)
+    end
+    for i in 0..count
+        counts[lengths[start + i]] += 1
+    end
+    var offsets: [int] = [0, 0]
+    for length in 1..15
+        offsets.add(offsets[length] + counts[length])
+    end
+    var symbols: [int] = []
+    for i in 0..count
+        symbols.add(0)
+    end
+    for i in 0..count
+        var length = lengths[start + i]
+        if length != 0
+            symbols[offsets[length]] = i
+            offsets[length] += 1
+        end
+    end
+    return PngCode{counts: counts, symbols: symbols}
+end
+
+func PngInflater.decode(code: PngCode): int
+    var value = 0
+    var first = 0
+    var index = 0
+    for length in 1..16
+        value += self.take(1)
+        var count = code.counts[length]
+        if value - count < first
+            return code.symbols[index + value - first]
+        end
+        index += count
+        first = (first + count) * 2
+        value *= 2
+    end
+    png_damaged("its picture data has a code that doesn't exist")
+    return 0
+end
+
+func png_fixed_lengths(): PngCode
+    var lengths: [int] = []
+    for i in 0..288
+        if i < 144
+            lengths.add(8)
+        elif i < 256
+            lengths.add(9)
+        elif i < 280
+            lengths.add(7)
+        else
+            lengths.add(8)
+        end
+    end
+    return png_make_code(lengths, 0, 288)
+end
+
+func png_fixed_distances(): PngCode
+    var lengths: [int] = []
+    for i in 0..30
+        lengths.add(5)
+    end
+    return png_make_code(lengths, 0, 30)
+end
+
+func PngInflater.copy_dynamic()
+    var length_count = self.take(5) + 257
+    var distance_count = self.take(5) + 1
+    var code_count = self.take(4) + 4
+    if length_count > 286 or distance_count > 30
+        png_damaged("its picture data asks for too many codes")
+    end
+    var order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+    var code_lengths: [int] = []
+    for i in 0..19
+        code_lengths.add(0)
+    end
+    for i in 0..code_count
+        code_lengths[order[i]] = self.take(3)
+    end
+    var lengths_code = png_make_code(code_lengths, 0, 19)
+    var lengths: [int] = []
+    while len(lengths) < length_count + distance_count
+        var symbol = self.decode(lengths_code)
+        if symbol < 16
+            lengths.add(symbol)
+        else
+            var repeat = 0
+            var value = 0
+            if symbol == 16
+                if len(lengths) == 0
+                    png_damaged("its picture data repeats a length before there is one")
+                end
+                value = lengths[len(lengths) - 1]
+                repeat = 3 + self.take(2)
+            elif symbol == 17
+                repeat = 3 + self.take(3)
+            else
+                repeat = 11 + self.take(7)
+            end
+            if len(lengths) + repeat > length_count + distance_count
+                png_damaged("its picture data repeats too many lengths")
+            end
+            for i in 0..repeat
+                lengths.add(value)
+            end
+        end
+    end
+    self.copy_coded(png_make_code(lengths, 0, length_count), png_make_code(lengths, length_count, distance_count))
+end
+
+func PngInflater.copy_coded(lengths: PngCode, distances: PngCode)
+    var length_base = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+    var length_extra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+    var distance_base = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    var distance_extra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+    while true
+        var symbol = self.decode(lengths)
+        if symbol < 256
+            self.put(symbol)
+        elif symbol == 256
+            return
+        else
+            symbol -= 257
+            if symbol >= 29
+                png_damaged("its picture data has a length that doesn't exist")
+            end
+            var length = length_base[symbol] + self.take(length_extra[symbol])
+            var which = self.decode(distances)
+            if which >= 30
+                png_damaged("its picture data has a distance that doesn't exist")
+            end
+            var distance = distance_base[which] + self.take(distance_extra[which])
+            if distance > self.out_place
+                png_damaged("its picture data points before its start")
+            end
+            for i in 0..length
+                self.put(peek_u8(self.out, self.out_place - distance))
+            end
+        end
+    end
+end

@@ -1,0 +1,4 @@
+extern func Beep()
+
+func main()
+end

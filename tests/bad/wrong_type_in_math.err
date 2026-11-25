@@ -1,0 +1,3 @@
+wrong_type_in_math.jamo line 2: This operator needs a number here, but this is a bool.
+        print(1 + true)
+                  ^^^^

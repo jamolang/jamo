@@ -1,0 +1,4 @@
+string_is_reserved.jamo line 2: string is a reserved word, so it can't be used as a name.
+        var string = 1
+            ^^^^^^
+Try a different name.

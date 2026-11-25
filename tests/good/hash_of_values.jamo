@@ -1,0 +1,25 @@
+# hash_of's exact numbers, worked out in Python
+
+enum Mood
+    CALM
+    ANGRY
+end
+
+func main()
+    print(hash_of(0))
+    print(hash_of(1))
+    print(hash_of(-1))
+    print(hash_of(42))
+    print(hash_of(9223372036854775807))
+    print(hash_of(-9223372036854775808))
+    print(hash_of(1000003))
+    print(hash_of(""))
+    print(hash_of("a"))
+    print(hash_of("ab"))
+    print(hash_of("ba"))
+    print(hash_of("hello world"))
+    print(hash_of("café"))
+    print(hash_of(true))
+    print(hash_of(false))
+    print(hash_of(Mood.ANGRY))
+end

@@ -1,0 +1,10 @@
+struct A
+    b: B
+end
+
+struct B
+    a: A
+end
+
+func main()
+end

@@ -1,0 +1,4 @@
+func main()
+    var word = "a"
+    word[0] = "b"
+end

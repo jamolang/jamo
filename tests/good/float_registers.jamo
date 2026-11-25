@@ -1,0 +1,82 @@
+# Float math stays in float registers through whole expressions. This checks the answers and the order things run in
+struct Body
+    x: float
+    v: float
+    mass: float
+end
+
+struct Counter
+    calls: int
+end
+
+func Counter.bump(by: float): float
+    self.calls += 1
+    return by
+end
+
+func Body.energy(): float
+    return 0.5 * self.mass * self.v * self.v
+end
+
+func main()
+    var k = Counter{calls: 0}
+    var a = 3.0
+    var b = 4.0
+    var c = 0.5
+    var n = 7
+    print(a + b * c)
+    print((a + b) * (a - b) / (c + 1.0))
+    print(a - (b - (c - (a / b))))
+    print(1.0 - a * c)
+    print(10.0 / (b * c))
+    print(a * float(n) + float(n / 2))
+    print(float(n) - a)
+    print(-a + b)
+    print(a + k.bump(2.0) * b)
+    print(k.bump(1.5) - a * k.bump(2.0))
+    print(k.calls)
+    print(a % 2.0 + b)
+    var total = 0.0
+    total += a * b
+    total -= c
+    total *= 2.0
+    total /= a + c
+    total += float(n)
+    print(total)
+    var body = Body{x: 1.0, v: 2.0, mass: 3.0}
+    body.x += body.v * c
+    body.v -= 0.25
+    body.mass *= a - b
+    body.x /= 4.0
+    body.v += k.bump(1.0)
+    print(body.x)
+    print(body.v)
+    print(body.mass)
+    print(body.energy())
+    body.x = 0.0 - body.v * 0.8
+    print(body.x)
+    var nan = 0.0 / 0.0
+    print(nan < a)
+    print(nan > a)
+    print(nan == nan)
+    print(nan != nan)
+    print(a * c < b - c)
+    print(a * c >= b / 8.0)
+    if a + c > b * c
+        print("more")
+    end
+    if nan + 1.0 <= a
+        print("never")
+    else
+        print("nan is not smaller")
+    end
+    var sum = 0.0
+    for i in 0..100
+        var f = float(i)
+        sum += f * f / (f + 1.0) - c
+        if sum > 1000.0
+            sum = sum - 1000.0 * c
+        end
+    end
+    print(sum)
+end

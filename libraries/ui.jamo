@@ -1,0 +1,596 @@
+# ui: labels, panels, buttons, checkboxes, sliders, lists and text boxes, drawn with gfx. use "ui.jamo"
+#
+# Controls are drawn fresh every frame between begin() and finish(), and each call answers with the
+# control's value, so there's nothing to set up or keep in step. They stack down the window from the top
+# left, as wide as the window or the panel they're in. Every control that can take the keyboard gets a
+# number from the order it's drawn in: focus holds the number of the one that has the keyboard, and Tab
+# moves to the next number at the end of the frame.
+
+use "gfx.jamo"
+
+# How everything looks. Change any field of ui.theme to restyle
+struct Theme
+    background: Color
+    panel: Color
+    text: Color
+    soft_text: Color
+    control: Color
+    hover: Color
+    accent: Color
+    on_accent: Color
+    field: Color
+    text_size: float
+    gap: float
+    padding: float
+    height: float
+    round: float
+end
+
+struct Ui
+    gfx: Gfx
+    window: Window
+    theme: Theme
+    surface: Color
+    left: float
+    y: float
+    width: float
+    columns: int
+    column: int
+    row_height: float
+    count: int
+    focus: int
+    active: int
+    pressed: bool
+    claimed: bool
+    caret: int
+    view: int
+    blink_from: int
+    frame: int
+    scrolls: [int]
+    last_x: float
+    last_y: float
+    last_width: float
+    last_height: float
+end
+
+# --- Starting ---
+
+func start_ui(g: Gfx): Ui
+    return Ui{gfx: g, window: g.window, theme: light_theme(), surface: rgb(0, 0, 0), left: 0.0, y: 0.0, width: 0.0, columns: 1, column: 0, row_height: 0.0, count: 0, focus: -1, active: -1, pressed: false, claimed: false, caret: -1, view: 0, blink_from: 0, frame: 0, scrolls: [], last_x: 0.0, last_y: 0.0, last_width: 0.0, last_height: 0.0}
+end
+
+func light_theme(): Theme
+    return Theme{background: rgb(236, 238, 234), panel: rgb(252, 252, 250), text: rgb(26, 30, 28), soft_text: rgb(84, 92, 88), control: rgb(224, 228, 223), hover: rgb(206, 212, 206), accent: rgb(22, 112, 90), on_accent: rgb(255, 255, 255), field: rgb(238, 240, 236), text_size: 17.0, gap: 8.0, padding: 16.0, height: 36.0, round: 6.0}
+end
+
+func dark_theme(): Theme
+    return Theme{background: rgb(22, 24, 28), panel: rgb(33, 36, 41), text: rgb(236, 238, 240), soft_text: rgb(160, 166, 172), control: rgb(50, 54, 61), hover: rgb(66, 71, 80), accent: rgb(72, 196, 156), on_accent: rgb(12, 24, 20), field: rgb(25, 27, 32), text_size: 17.0, gap: 8.0, padding: 16.0, height: 36.0, round: 6.0}
+end
+
+# Starts a frame of controls, at the window's top left
+func Ui.begin()
+    self.frame += 1
+    self.count = 0
+    self.claimed = false
+    self.pressed = self.window.mouse_pressed("left")
+    self.place(self.theme.padding, self.theme.padding, float(self.window.width()) - 2.0 * self.theme.padding)
+    self.surface = self.theme.background
+end
+
+# Ends the frame: a click on nothing drops the keyboard focus, and Tab or Shift+Tab moves it
+func Ui.finish()
+    if self.pressed and not self.claimed
+        self.focus = -1
+    end
+    if not self.window.mouse_down("left")
+        self.active = -1
+    end
+    if self.window.key_repeated("tab") and self.count > 0
+        var next = self.focus + 1
+        if self.window.key_down("shift")
+            next = self.focus - 1
+            if next < 0
+                next = self.count - 1
+            end
+        elif next >= self.count
+            next = 0
+        end
+        self.focus_on(next)
+    end
+end
+
+func Ui.focus_on(id: int)
+    if self.focus != id
+        self.focus = id
+        self.caret = -1
+        self.view = 0
+        self.blink_from = self.frame
+    end
+end
+
+# --- Layout ---
+
+# Puts the next controls at x and y, this wide
+func Ui.place(x: float, y: float, width: float)
+    self.left = x
+    self.y = y
+    self.width = width
+    self.columns = 1
+    self.column = 0
+end
+
+# Draws a panel, and puts the next controls inside it
+func Ui.panel(x: float, y: float, width: float, height: float)
+    ui_round(self.gfx, x, y, width, height, self.theme.round * 1.5, self.theme.panel)
+    self.place(x + self.theme.padding, y + self.theme.padding, width - 2.0 * self.theme.padding)
+    self.surface = self.theme.panel
+end
+
+# The next few controls sit side by side, sharing the width
+func Ui.columns(count: int)
+    if count < 1
+        fail(f"ui needs at least 1 column, not {count}.")
+    end
+    self.columns = count
+    self.column = 0
+    self.row_height = 0.0
+end
+
+# Leaves an empty gap before the next control
+func Ui.space(height: float)
+    self.y += height
+end
+
+# Saves where the next control goes in last_x, last_y, last_width and last_height
+func Ui.next(height: float)
+    var x = self.left
+    var width = self.width
+    if self.columns > 1
+        width = (self.width - self.theme.gap * float(self.columns - 1)) / float(self.columns)
+        x = self.left + float(self.column) * (width + self.theme.gap)
+    end
+    self.last_x = x
+    self.last_y = self.y
+    self.last_width = width
+    self.last_height = height
+    if self.columns > 1
+        if height > self.row_height
+            self.row_height = height
+        end
+        self.column += 1
+        if self.column == self.columns
+            self.y += self.row_height + self.theme.gap
+            self.columns = 1
+            self.column = 0
+        end
+    else
+        self.y += height + self.theme.gap
+    end
+end
+
+func Ui.hovered(): bool
+    var x = float(self.window.mouse_x())
+    var y = float(self.window.mouse_y())
+    return x >= self.last_x and x < self.last_x + self.last_width and y >= self.last_y and y < self.last_y + self.last_height
+end
+
+# Gives the control its number, and takes the keyboard for it when it's clicked
+func Ui.control(drag: bool): int
+    var id = self.count
+    self.count += 1
+    if self.pressed and self.hovered()
+        self.claimed = true
+        self.focus_on(id)
+        if drag
+            self.active = id
+        end
+    end
+    return id
+end
+
+# True when the mouse went down on this control and came back up over it
+func Ui.clicked(id: int): bool
+    return self.active == id and not self.window.mouse_down("left") and self.hovered()
+end
+
+# --- Drawing ---
+
+func Ui.text_at(words: string, x: float, top: float, height: float, color: Color)
+    var size = self.theme.text_size
+    self.gfx.text(words, x, top + height / 2.0 - size * 0.62, size, color)
+end
+
+func Ui.ring(id: int)
+    if self.focus == id
+        ui_round(self.gfx, self.last_x - 3.0, self.last_y - 3.0, self.last_width + 6.0, self.last_height + 6.0, self.theme.round + 3.0, self.theme.accent)
+        ui_round(self.gfx, self.last_x - 1.0, self.last_y - 1.0, self.last_width + 2.0, self.last_height + 2.0, self.theme.round + 1.0, self.surface)
+    end
+end
+
+# A rectangle with round corners
+func ui_round(g: Gfx, x: float, y: float, width: float, height: float, radius: float, color: Color)
+    var r = radius
+    if r > width / 2.0
+        r = width / 2.0
+    end
+    if r > height / 2.0
+        r = height / 2.0
+    end
+    if r < 1.0
+        g.rect(x, y, width, height, color)
+        return
+    end
+    g.rect(x + r, y, width - 2.0 * r, height, color)
+    g.rect(x, y + r, r, height - 2.0 * r, color)
+    g.rect(x + width - r, y + r, r, height - 2.0 * r, color)
+    g.circle(x + r, y + r, r, color)
+    g.circle(x + width - r, y + r, r, color)
+    g.circle(x + r, y + height - r, r, color)
+    g.circle(x + width - r, y + height - r, r, color)
+end
+
+# Part of a text, from one place up to another
+func ui_part(words: string, from: int, to: int): string
+    var part = ""
+    for i in from..to
+        part = part + words[i]
+    end
+    return part
+end
+
+# The front of a text that fits in a width, with ... when it's cut
+func Ui.fit(words: string, width: float): string
+    var size = self.theme.text_size
+    if self.gfx.text_width(words, size) <= width
+        return words
+    end
+    var room = width - self.gfx.text_width("...", size)
+    var used = 0.0
+    var count = 0
+    while count < len(words)
+        var next = self.gfx.text_width(words[count], size)
+        if used + next > room
+            break
+        end
+        used += next
+        count += 1
+    end
+    return ui_part(words, 0, count) + "..."
+end
+
+# A number with up to 2 decimals, and none when it's whole
+func ui_short(value: float): string
+    var hundredths = int(value * 100.0 + 0.5)
+    if value < 0.0
+        hundredths = int(value * 100.0 - 0.5)
+    end
+    if hundredths % 100 == 0
+        return string(hundredths / 100)
+    end
+    return string(float(hundredths) / 100.0)
+end
+
+# --- Controls ---
+
+func Ui.label(words: string)
+    self.next(self.theme.text_size * 1.6)
+    self.text_at(words, self.last_x, self.last_y, self.last_height, self.theme.text)
+end
+
+# Larger text, for the top of a page or panel
+func Ui.title(words: string)
+    var size = self.theme.text_size * 1.4
+    self.next(size * 1.6)
+    self.gfx.text(words, self.last_x, self.last_y + self.last_height / 2.0 - size * 0.62, size, self.theme.text)
+end
+
+# Text in the softer color, for notes and hints
+func Ui.note(words: string)
+    self.next(self.theme.text_size * 1.6)
+    self.text_at(words, self.last_x, self.last_y, self.last_height, self.theme.soft_text)
+end
+
+# True in the frame it's clicked, or pressed with Space or Enter while it has the keyboard
+func Ui.button(words: string): bool
+    self.next(self.theme.height)
+    var id = self.control(true)
+    var clicked = self.clicked(id)
+    if self.focus == id and (self.window.key_pressed("space") or self.window.key_pressed("enter"))
+        clicked = true
+    end
+    var color = self.theme.control
+    if self.hovered()
+        color = self.theme.hover
+    end
+    self.ring(id)
+    ui_round(self.gfx, self.last_x, self.last_y, self.last_width, self.last_height, self.theme.round, color)
+    var shown = self.fit(words, self.last_width - 16.0)
+    var x = self.last_x + (self.last_width - self.gfx.text_width(shown, self.theme.text_size)) / 2.0
+    self.text_at(shown, x, self.last_y, self.last_height, self.theme.text)
+    return clicked
+end
+
+# Answers whether it's checked, after any click or Space
+func Ui.checkbox(words: string, checked: bool): bool
+    self.next(28.0)
+    var id = self.control(true)
+    var result = checked
+    if self.clicked(id)
+        result = not result
+    end
+    if self.focus == id and self.window.key_pressed("space")
+        result = not result
+    end
+    var box = 22.0
+    var top = self.last_y + 3.0
+    if self.focus == id
+        ui_round(self.gfx, self.last_x - 3.0, top - 3.0, box + 6.0, box + 6.0, 8.0, self.theme.accent)
+        ui_round(self.gfx, self.last_x - 1.0, top - 1.0, box + 2.0, box + 2.0, 6.0, self.surface)
+    end
+    if result
+        ui_round(self.gfx, self.last_x, top, box, box, 5.0, self.theme.accent)
+        self.gfx.line(self.last_x + 5.5, top + 11.5, self.last_x + 9.5, top + 15.5, 2.5, self.theme.on_accent)
+        self.gfx.line(self.last_x + 9.5, top + 15.5, self.last_x + 16.5, top + 7.0, 2.5, self.theme.on_accent)
+    else
+        var color = self.theme.soft_text
+        if self.hovered()
+            color = self.theme.text
+        end
+        ui_round(self.gfx, self.last_x, top, box, box, 5.0, color)
+        ui_round(self.gfx, self.last_x + 2.0, top + 2.0, box - 4.0, box - 4.0, 3.5, self.theme.field)
+    end
+    self.text_at(self.fit(words, self.last_width - box - 12.0), self.last_x + box + 12.0, self.last_y, self.last_height, self.theme.text)
+    return result
+end
+
+# Answers the value, from low to high, after any drag or arrow key
+func Ui.slider(words: string, value: float, low: float, high: float): float
+    if not (high > low)
+        fail(f"A slider's high end must be above its low end, but they're {low} and {high}.")
+    end
+    self.next(self.theme.height)
+    var label_width = self.last_width * 0.35
+    var track_x = self.last_x + label_width + 10.0
+    var track_width = self.last_width - label_width - 76.0
+    if track_width < 20.0
+        track_width = 20.0
+    end
+    var id = self.control(false)
+    var mouse = float(self.window.mouse_x())
+    if self.pressed and self.hovered() and mouse >= track_x - 12.0 and mouse <= track_x + track_width + 12.0
+        self.active = id
+    end
+    var result = value
+    if self.active == id and self.window.mouse_down("left")
+        result = low + (mouse - track_x) / track_width * (high - low)
+    end
+    if self.focus == id
+        var step = (high - low) / 20.0
+        if self.window.key_repeated("left") or self.window.key_repeated("down")
+            result -= step
+        end
+        if self.window.key_repeated("right") or self.window.key_repeated("up")
+            result += step
+        end
+        if self.window.key_pressed("home")
+            result = low
+        end
+        if self.window.key_pressed("end")
+            result = high
+        end
+    end
+    if result < low or result != result
+        result = low
+    end
+    if result > high
+        result = high
+    end
+    self.text_at(self.fit(words, label_width), self.last_x, self.last_y, self.last_height, self.theme.text)
+    var middle = self.last_y + self.last_height / 2.0
+    var knob = track_x + (result - low) / (high - low) * track_width
+    ui_round(self.gfx, track_x, middle - 2.0, track_width, 4.0, 2.0, self.theme.hover)
+    ui_round(self.gfx, track_x, middle - 2.0, knob - track_x, 4.0, 2.0, self.theme.accent)
+    if self.focus == id
+        self.gfx.circle(knob, middle, 14.0, self.theme.accent)
+        self.gfx.circle(knob, middle, 12.0, self.surface)
+    end
+    self.gfx.circle(knob, middle, 9.0, self.theme.accent)
+    self.text_at(ui_short(result), track_x + track_width + 16.0, self.last_y, self.last_height, self.theme.soft_text)
+    return result
+end
+
+# Answers the chosen item's place, or -1 for none. Shows this many rows, and scrolls for the rest
+func Ui.list(items: [string], selected: int, rows: int): int
+    if rows < 1
+        fail(f"A list shows at least 1 row, not {rows}.")
+    end
+    var row_height = 30.0
+    self.next(float(rows) * row_height + 8.0)
+    var id = self.control(false)
+    while len(self.scrolls) <= id
+        self.scrolls.add(0)
+    end
+    var scroll = self.scrolls[id]
+    var count = len(items)
+    var pick = selected
+    var over = self.hovered()
+    var top = self.last_y + 4.0
+    if self.pressed and over
+        var row = int((float(self.window.mouse_y()) - top) / row_height) + scroll
+        if row >= 0 and row < count and float(self.window.mouse_y()) >= top
+            pick = row
+        end
+    end
+    if over
+        scroll -= self.window.wheel()
+    end
+    if self.focus == id and count > 0
+        var moved = false
+        if self.window.key_repeated("up")
+            pick -= 1
+            moved = true
+        end
+        if self.window.key_repeated("down")
+            pick += 1
+            moved = true
+        end
+        if self.window.key_pressed("home")
+            pick = 0
+            moved = true
+        end
+        if self.window.key_pressed("end")
+            pick = count - 1
+            moved = true
+        end
+        if moved and pick < 0
+            pick = 0
+        end
+        if moved and pick >= count
+            pick = count - 1
+        end
+        if pick != selected
+            if pick < scroll
+                scroll = pick
+            end
+            if pick >= scroll + rows
+                scroll = pick - rows + 1
+            end
+        end
+    end
+    if scroll > count - rows
+        scroll = count - rows
+    end
+    if scroll < 0
+        scroll = 0
+    end
+    self.scrolls[id] = scroll
+    self.ring(id)
+    ui_round(self.gfx, self.last_x, self.last_y, self.last_width, self.last_height, self.theme.round, self.theme.field)
+    var text_room = self.last_width - 32.0
+    var row_width = self.last_width - 8.0
+    if count > rows
+        row_width -= 10.0
+        text_room -= 10.0
+    end
+    var mouse_row = -1
+    if over
+        mouse_row = int((float(self.window.mouse_y()) - top) / row_height) + scroll
+    end
+    var shown = scroll
+    while shown < count and shown < scroll + rows
+        var y = top + float(shown - scroll) * row_height
+        var color = self.theme.text
+        if shown == pick
+            ui_round(self.gfx, self.last_x + 4.0, y, row_width, row_height, self.theme.round - 2.0, self.theme.accent)
+            color = self.theme.on_accent
+        elif shown == mouse_row
+            ui_round(self.gfx, self.last_x + 4.0, y, row_width, row_height, self.theme.round - 2.0, self.theme.control)
+        end
+        self.text_at(self.fit(items[shown], text_room), self.last_x + 16.0, y, row_height, color)
+        shown += 1
+    end
+    if count > rows
+        var track = self.last_height - 8.0
+        var thumb = track * float(rows) / float(count)
+        var thumb_y = top + (track - thumb) * float(scroll) / float(count - rows)
+        ui_round(self.gfx, self.last_x + self.last_width - 10.0, thumb_y, 5.0, thumb, 2.5, self.theme.hover)
+    end
+    return pick
+end
+
+# Answers the text after any typing. Click it or Tab to it, then type, with Backspace, Delete, the
+# arrows, Home and End
+func Ui.text_box(words: string): string
+    self.next(self.theme.height)
+    var id = self.control(false)
+    var size = self.theme.text_size
+    var inner_x = self.last_x + 12.0
+    var inner_width = self.last_width - 24.0
+    var text = words
+    if self.pressed and self.hovered()
+        self.caret = self.caret_at(text, float(self.window.mouse_x()) - inner_x)
+        self.blink_from = self.frame
+    end
+    if self.focus == id
+        if self.caret < 0 or self.caret > len(text)
+            self.caret = len(text)
+        end
+        var before = self.caret
+        var before_text = text
+        var typed = self.window.typed()
+        if len(typed) > 0
+            text = ui_part(text, 0, self.caret) + typed + ui_part(text, self.caret, len(text))
+            self.caret += len(typed)
+        end
+        if self.window.key_repeated("backspace") and self.caret > 0
+            text = ui_part(text, 0, self.caret - 1) + ui_part(text, self.caret, len(text))
+            self.caret -= 1
+        end
+        if self.window.key_repeated("delete") and self.caret < len(text)
+            text = ui_part(text, 0, self.caret) + ui_part(text, self.caret + 1, len(text))
+        end
+        if self.window.key_repeated("left") and self.caret > 0
+            self.caret -= 1
+        end
+        if self.window.key_repeated("right") and self.caret < len(text)
+            self.caret += 1
+        end
+        if self.window.key_pressed("home")
+            self.caret = 0
+        end
+        if self.window.key_pressed("end")
+            self.caret = len(text)
+        end
+        if self.caret != before or text != before_text
+            self.blink_from = self.frame
+        end
+    end
+    self.ring(id)
+    ui_round(self.gfx, self.last_x, self.last_y, self.last_width, self.last_height, self.theme.round, self.theme.field)
+    var start = 0
+    if self.focus == id
+        start = self.view
+        if self.caret < start
+            start = self.caret
+        end
+        while start < self.caret and self.gfx.text_width(ui_part(text, start, self.caret), size) > inner_width
+            start += 1
+        end
+        self.view = start
+    end
+    var finish = start
+    var used = 0.0
+    while finish < len(text)
+        var next = self.gfx.text_width(text[finish], size)
+        if used + next > inner_width
+            break
+        end
+        used += next
+        finish += 1
+    end
+    self.text_at(ui_part(text, start, finish), inner_x, self.last_y, self.last_height, self.theme.text)
+    if self.focus == id and (self.frame - self.blink_from) / 30 % 2 == 0
+        var caret_x = inner_x + self.gfx.text_width(ui_part(text, start, self.caret), size)
+        self.gfx.rect(caret_x, self.last_y + self.last_height / 2.0 - size * 0.65, 2.0, size * 1.3, self.theme.accent)
+    end
+    return text
+end
+
+# The place in a text nearest to a spot this far into the box, counting from the box's view
+func Ui.caret_at(words: string, spot: float): int
+    var start = 0
+    if self.focus == self.count - 1
+        start = self.view
+    end
+    var used = 0.0
+    var place = start
+    while place < len(words)
+        var next = self.gfx.text_width(words[place], self.theme.text_size)
+        if used + next / 2.0 > spot
+            break
+        end
+        used += next
+        place += 1
+    end
+    return place
+end

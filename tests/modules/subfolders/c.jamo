@@ -1,0 +1,3 @@
+func c(): int
+    return 100
+end

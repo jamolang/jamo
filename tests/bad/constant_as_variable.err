@@ -1,0 +1,4 @@
+constant_as_variable.jamo line 4: LIMIT is already a constant, so a variable can't use that name.
+        var LIMIT = 20
+            ^^^^^
+Pick a different name.

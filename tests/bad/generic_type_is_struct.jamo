@@ -1,0 +1,11 @@
+struct Foo
+    x: int
+end
+
+func show<Foo>(item: Foo)
+    print(1)
+end
+
+func main()
+    print(2)
+end

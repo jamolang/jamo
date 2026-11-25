@@ -1,0 +1,4 @@
+string_plus_int.jamo line 2: + can only join a string to another string, but this is an int.
+        print("a" + 1)
+                    ^
+Use string(x) to convert it.

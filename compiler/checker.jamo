@@ -1,0 +1,2592 @@
+# Checker: finds mistakes in types and names, and fills in what the code generator needs: each value's
+# type, each variable's slot, and constants swapped for their values. The same as src/checker.cpp.
+#
+# The C++ checker keeps names in std::map, which goes through them in sorted order. Wherever that order
+# shows, like which name "Did you mean" suggests, this sorts the names the same way.
+
+use "ast.jamo"
+use "errors.jamo"
+use "dict.jamo"
+use "text.jamo"
+
+const MOST_DIFFERENT_LETTERS = 2
+const MOST_EXTERN_INPUTS = 16
+const MOST_CALLBACK_INPUTS = 4
+const MOST_GENERIC_COPIES = 500
+const MATCH_NUMBERS = "Use float(x) or int(x) to make them match."
+
+struct Variable
+    type: int
+    slot: int
+    read_only: bool
+    used: bool
+    warn_if_unused: bool
+    line: int
+    column: int
+    length: int
+    file: int
+end
+
+struct Scope
+    places: Dict
+    names: [string]
+    variables: [Variable]
+end
+
+struct Claim
+    word: string
+    line: int
+    file: int
+end
+
+struct Checker
+    program: Program
+    errors: Errors
+    names: Dict
+    claims: [Claim]
+    function_places: Dict
+    function_list: [Function]
+    constants: Dict
+    constant_state: Dict
+    structs: Dict
+    enums: Dict
+    scopes: [Scope]
+    current: Function
+    next_slot: int
+    loops_open: int
+    generic_structs: Dict
+    generic_functions: Dict
+    generic_methods: Dict
+    generic_list: [Function]
+    copy_of: Dict
+    warned_patterns: [int]
+    copies_made: int
+    quiet: bool
+    global_vars: [Variable]
+    global_places: Dict
+    global_order: Dict
+    setting_up: int
+    user: string
+    calls_by: Dict
+    call_lists: [[string]]
+    reads_by: Dict
+    read_lists: [[int]]
+end
+
+func new_scope(): Scope
+    return Scope{places: new_dict(), names: [], variables: []}
+end
+
+func is_number(type: int): bool
+    return type == TYPE_INT or type == TYPE_FLOAT
+end
+
+func letters_different(a: string, b: string): int
+    var row: [int] = []
+    for j in 0..len(b) + 1
+        row.add(j)
+    end
+    for i in 1..len(a) + 1
+        var diagonal = row[0]
+        row[0] = i
+        for j in 1..len(b) + 1
+            var above = row[j]
+            var best = above + 1
+            if row[j - 1] + 1 < best
+                best = row[j - 1] + 1
+            end
+            var change = 1
+            if byte(a, i - 1) == byte(b, j - 1)
+                change = 0
+            end
+            if diagonal + change < best
+                best = diagonal + change
+            end
+            row[j] = best
+            diagonal = above
+        end
+    end
+    return row[len(b)]
+end
+
+func closest(name: string, options: [string]): string
+    var best = ""
+    var best_score = MOST_DIFFERENT_LETTERS + 1
+    for option in options
+        var score = letters_different(name, option)
+        var longest = len(name)
+        if len(option) > longest
+            longest = len(option)
+        end
+        if score < best_score and score < longest
+            best = option
+            best_score = score
+        end
+    end
+    return best
+end
+
+func did_you_mean(close: string, otherwise: string): string
+    if close == ""
+        return otherwise
+    end
+    return "Did you mean " + close + "?"
+end
+
+func count_words(count: int): string
+    if count == 1
+        return "1 input"
+    end
+    return f"{count} inputs"
+end
+
+func is_builtin(name: string): bool
+    match name
+        case "input"
+            return true
+        case "args"
+            return true
+        case "read_file"
+            return true
+        case "write_file"
+            return true
+        case "exists"
+            return true
+        case "fail"
+            return true
+        case "byte"
+            return true
+        case "callback"
+            return true
+        case "wide"
+            return true
+        case "memory"
+            return true
+        case "memory_text"
+            return true
+        case "peek_i64"
+            return true
+        case "peek_i32"
+            return true
+        case "peek_u16"
+            return true
+        case "peek_u8"
+            return true
+        case "peek_f64"
+            return true
+        case "peek_f32"
+            return true
+        case "poke_i64"
+            return true
+        case "poke_i32"
+            return true
+        case "poke_u16"
+            return true
+        case "poke_u8"
+            return true
+        case "poke_f64"
+            return true
+        case "poke_f32"
+            return true
+        case "hash_of"
+            return true
+    end
+    return false
+end
+
+func sorted_keys(d: Dict): [string]
+    var keys = d.key_list()
+    sort_strings(keys)
+    return keys
+end
+
+# --- Starting ---
+
+func check_program(program: Program, errors: Errors)
+    var c = Checker{program: program, errors: errors, names: new_dict(), claims: [], function_places: new_dict(), function_list: [], constants: new_dict(), constant_state: new_dict(), structs: new_dict(), enums: new_dict(), scopes: [], current: new_function(), next_slot: 0, loops_open: 0, generic_structs: new_dict(), generic_functions: new_dict(), generic_methods: new_dict(), generic_list: [], copy_of: new_dict(), warned_patterns: [], copies_made: 0, quiet: false, global_vars: [], global_places: new_dict(), global_order: new_dict(), setting_up: -1, user: "", calls_by: new_dict(), call_lists: [], reads_by: new_dict(), read_lists: []}
+    c.check()
+end
+
+func Checker.ex(place: int): Expr
+    return self.program.exprs[place]
+end
+
+func Checker.st(place: int): Stmt
+    return self.program.stmts[place]
+end
+
+func Checker.type_name(type: int): string
+    return self.program.types.name(type)
+end
+
+func Checker.with_article(type: int): string
+    var name = self.type_name(type)
+    if type == TYPE_NOTHING or type == TYPE_UNKNOWN
+        return name
+    end
+    if contains("aeiouAEIOU", name[0])
+        return "an " + name
+    end
+    return "a " + name
+end
+
+func Checker.add(line: int, column: int, length: int, file: int, words: string, hint: string)
+    self.errors.add(line, column, length, file, words, hint)
+end
+
+func Checker.add_at(e: Expr, words: string, hint: string)
+    self.errors.add(e.line, e.column, e.length, e.file, words, hint)
+end
+
+func Checker.has_function(name: string): bool
+    return self.function_places.has(name)
+end
+
+func Checker.function_named(name: string): Function
+    return self.function_list[self.function_places.get(name)]
+end
+
+func Checker.check()
+    self.check_structs()
+    self.check_enums()
+    self.check_generic_struct_params()
+    for i in 0..len(self.program.consts)
+        var decl = self.program.consts[i]
+        if self.claim_name(decl.name, decl.line, decl.column, decl.length, decl.file, "constant")
+            self.constants.set(decl.name, i)
+        end
+    end
+    for i in 0..len(self.program.consts)
+        var decl = self.program.consts[i]
+        if self.constants.has(decl.name) and self.constants.get(decl.name) == i
+            self.check_constant(decl)
+        end
+    end
+    var repeats: [Function] = []
+    var kept: [Function] = []
+    for function in self.program.functions
+        if len(function.type_params) > 0
+            self.add_generic_function(function)
+            continue
+        end
+        var left_out = self.extern_repeat(function)
+        if left_out.name != ""
+            repeats.add(left_out)
+            continue
+        end
+        if self.claim_name(function.name, function.line, function.column, function.length, function.file, "function")
+            self.function_places.set(function.name, len(self.function_list))
+            self.function_list.add(function)
+        end
+    end
+    # A repeat of an extern is the same Windows function, so only the first one is kept. Generic functions
+    # move out too: only their copies for real types get checked and made into code
+    for function in self.program.functions
+        if len(function.type_params) > 0
+            continue
+        end
+        var repeated = false
+        for left_out in repeats
+            if left_out.line == function.line and left_out.column == function.column and left_out.file == function.file and left_out.name == function.name
+                repeated = true
+            end
+        end
+        if not repeated
+            kept.add(function)
+        end
+    end
+    self.program.functions = kept
+    self.make_setup_function()
+    self.check_main()
+    for decl in self.program.structs
+        if len(decl.type_params) > 0
+            continue
+        end
+        for field in decl.fields
+            self.check_type_exists(field.type, field.line, field.column, field.length, decl.file)
+        end
+    end
+    for decl in self.program.structs
+        if len(decl.type_params) == 0
+            self.check_struct_isnt_endless(decl.type, decl.name, decl.line, decl.column, decl.length, decl.file)
+        end
+    end
+    # Copies of generic functions join the end of the list as they're needed, and get checked in turn.
+    # The setup comes first, so every function knows the variables outside functions
+    var setup = new_function()
+    for function in self.program.functions
+        if function.name == SETUP_NAME
+            setup = function
+            self.check_setup(function)
+        else
+            self.check_function(function)
+        end
+    end
+    if setup.name == SETUP_NAME
+        self.check_setup_order(setup)
+    end
+end
+
+# --- Variables outside functions ---
+#
+# Their var lines become one function, (setup), which the program runs before main. Each gets a slot from
+# -2 down. They're set up in order, so a value can only use the ones above it, even through a function it calls
+
+func Checker.make_setup_function()
+    if len(self.program.globals) == 0
+        return
+    end
+    # Each file's come after those of the files it uses, and stay in order within a file
+    if len(self.program.setup_order) > 0
+        var ranks: [int] = []
+        for i in 0..len(self.program.file_names)
+            ranks.add(0)
+        end
+        for i in 0..len(self.program.setup_order)
+            ranks[self.program.setup_order[i]] = i
+        end
+        var sorted: [int] = []
+        for place in self.program.globals
+            var rank = ranks[self.st(place).file]
+            var at = len(sorted)
+            sorted.add(place)
+            while at > 0 and ranks[self.st(sorted[at - 1]).file] > rank
+                sorted[at] = sorted[at - 1]
+                at -= 1
+            end
+            sorted[at] = place
+        end
+        self.program.globals = sorted
+    end
+    for i in 0..len(self.program.globals)
+        var s = self.st(self.program.globals[i])
+        if self.claim_name(s.name, s.name_line, s.name_column, s.name_length, s.file, "variable")
+            self.global_order.set(s.name, i)
+        end
+    end
+    var first = self.st(self.program.globals[0])
+    var made = new_function()
+    made.name = SETUP_NAME
+    made.line = first.line
+    made.column = first.column
+    made.length = first.length
+    made.file = first.file
+    for place in self.program.globals
+        made.body.add(place)
+    end
+    self.program.globals = []
+    var functions: [Function] = [made]
+    for function in self.program.functions
+        functions.add(function)
+    end
+    self.program.functions = functions
+end
+
+func Checker.check_setup(setup: Function)
+    self.current = setup
+    self.next_slot = 0
+    self.loops_open = 0
+    self.scopes = [new_scope()]
+    self.quiet = false
+    for i in 0..len(setup.body)
+        var s = self.st(setup.body[i])
+        self.user = SETUP_NAME + string(i)
+        self.setting_up = i
+        if s.has_type
+            self.check_type_exists(s.declared_type, s.name_line, s.name_column, s.name_length, s.file)
+        end
+        var wanted = TYPE_NOTHING
+        if s.has_type
+            wanted = s.declared_type
+        end
+        var type = self.check_wanting(s.value, wanted)
+        if type == TYPE_NOTHING
+            self.add_at(self.ex(s.value), "This doesn't give back a value, so it can't go in a variable.", "")
+            type = TYPE_UNKNOWN
+        end
+        if s.has_type
+            if type != TYPE_UNKNOWN and type != s.declared_type
+                self.add_at(self.ex(s.value), s.name + " is declared as " + self.with_article(s.declared_type) + ", but this value is " + self.with_article(type) + ".", "")
+            end
+            type = s.declared_type
+        end
+        s.slot = FIRST_GLOBAL_SLOT - i
+        if not self.global_order.has(s.name) or self.global_order.get(s.name) != i
+            continue
+        end
+        self.global_vars.add(Variable{type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: false, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+        self.global_places.set(s.name, len(self.global_vars) - 1)
+    end
+    self.setting_up = -1
+    self.user = ""
+    setup.slot_count = self.next_slot
+end
+
+func Checker.calls_of(name: string): [string]
+    if self.calls_by.has(name)
+        return self.call_lists[self.calls_by.get(name)]
+    end
+    var none: [string] = []
+    return none
+end
+
+func Checker.reads_of(name: string): [int]
+    if self.reads_by.has(name)
+        return self.read_lists[self.reads_by.get(name)]
+    end
+    var none: [int] = []
+    return none
+end
+
+# A value that calls a function using a variable outside functions that isn't set up yet would find it empty
+func Checker.check_setup_order(setup: Function)
+    for i in 0..len(setup.body)
+        var s = self.st(setup.body[i])
+        var to_visit: [string] = []
+        var first_calls = self.calls_of(SETUP_NAME + string(i))
+        var k = len(first_calls) - 1
+        while k >= 0
+            to_visit.add(first_calls[k])
+            k -= 1
+        end
+        var seen = new_dict()
+        var reported = false
+        while len(to_visit) > 0 and not reported
+            var name = to_visit.pop()
+            if seen.has(name)
+                continue
+            end
+            seen.set(name, 1)
+            for read in self.reads_of(name)
+                if read < i
+                    continue
+                end
+                var later = self.st(setup.body[read]).name
+                self.add_at(self.ex(s.value), name + " uses " + later + ", which isn't set up yet when this runs.", "Variables outside functions are set up in order, top to bottom, so move " + later + " above " + s.name + ".")
+                reported = true
+                break
+            end
+            var calls = self.calls_of(name)
+            k = len(calls) - 1
+            while k >= 0
+                to_visit.add(calls[k])
+                k -= 1
+            end
+        end
+    end
+end
+
+func Checker.note_call(name: string)
+    if self.user == ""
+        return
+    end
+    if not self.calls_by.has(self.user)
+        self.calls_by.set(self.user, len(self.call_lists))
+        var empty: [string] = []
+        self.call_lists.add(empty)
+    end
+    self.call_lists[self.calls_by.get(self.user)].add(name)
+end
+
+func Checker.note_global_read(slot: int)
+    if self.user == "" or slot > FIRST_GLOBAL_SLOT
+        return
+    end
+    if not self.reads_by.has(self.user)
+        self.reads_by.set(self.user, len(self.read_lists))
+        var empty: [int] = []
+        self.read_lists.add(empty)
+    end
+    self.read_lists[self.reads_by.get(self.user)].add(FIRST_GLOBAL_SLOT - slot)
+end
+
+# Every function, struct and enum shares one set of names, across all files
+func Checker.claim_name(name: string, line: int, column: int, length: int, file: int, word: string): bool
+    if is_builtin(name)
+        self.add(line, column, length, file, name + " is built into Jamo, so this needs a different name.", "")
+        return false
+    end
+    if not self.names.has(name)
+        self.names.set(name, len(self.claims))
+        self.claims.add(Claim{word: word, line: line, file: file})
+        return true
+    end
+    var other = self.claims[self.names.get(name)]
+    if other.file != file
+        self.add(line, column, length, file, name + " is used in both " + self.errors.name_of_file(other.file) + " and " + self.errors.name_of_file(file) + ".", "Each name can only be used once in a program, so rename one of them.")
+    else
+        self.add(line, column, length, file, "There's already a " + other.word + " called " + name + ", on line " + string(other.line) + ".", "Give this one a different name.")
+    end
+    return false
+end
+
+# --- Constants ---
+
+func Checker.check_constant(decl: ConstDecl): bool
+    if self.constant_state.has(decl.name)
+        var state = self.constant_state.get(decl.name)
+        if state == 1
+            self.add(decl.line, decl.column, decl.length, decl.file, decl.name + " is worked out from itself.", "A constant can use other constants, but not in a circle.")
+            self.constant_state.set(decl.name, 3)
+            return false
+        end
+        return state == 2
+    end
+    self.constant_state.set(decl.name, 1)
+    var errors_before = self.errors.count()
+    var type = self.check_expression(decl.value)
+    if self.constant_state.get(decl.name) == 3
+        return false
+    end
+    if self.errors.count() != errors_before
+        self.constant_state.set(decl.name, 3)
+        return false
+    end
+    if type == TYPE_UNKNOWN
+        self.constant_state.set(decl.name, 3)
+        return false
+    end
+    if not self.is_constant_value(decl.value)
+        self.add_at(self.ex(decl.value), "A constant needs a value that's known before the program runs.", "Use numbers, text, true or false, other constants, and operators like + and *.")
+        self.constant_state.set(decl.name, 3)
+        return false
+    end
+    self.constant_state.set(decl.name, 2)
+    return true
+end
+
+func Checker.is_constant_value(place: int): bool
+    var e = self.ex(place)
+    if e.kind == EX_NUMBER or e.kind == EX_FLOAT or e.kind == EX_STRING or e.kind == EX_BOOL or e.kind == EX_ENUM_VALUE
+        return true
+    end
+    if e.kind == EX_NEGATE or e.kind == EX_NOT
+        return self.is_constant_value(e.left)
+    end
+    if e.kind == EX_BINARY
+        return self.is_constant_value(e.left) and self.is_constant_value(e.right)
+    end
+    return false
+end
+
+# Makes a fresh copy of a checked constant's value, which only holds the kinds above, and gives back its place
+func Checker.copy_constant(place: int): int
+    var from = self.ex(place)
+    var copy = self.program.new_expr(from.kind, from.line, from.column, from.length)
+    self.fill_from(copy, place)
+    return copy
+end
+
+# Sets the node at place to a copy of the node at from, with fresh copies of its parts
+func Checker.fill_from(place: int, from: int)
+    var source = self.ex(from)
+    var left = -1
+    var right = -1
+    if source.left >= 0
+        left = self.copy_constant(source.left)
+    end
+    if source.right >= 0
+        right = self.copy_constant(source.right)
+    end
+    var e = self.ex(place)
+    e.kind = source.kind
+    e.line = source.line
+    e.column = source.column
+    e.length = source.length
+    e.file = source.file
+    e.number = source.number
+    e.real = source.real
+    e.truth = source.truth
+    e.text = source.text
+    e.name = source.name
+    e.field_names = []
+    e.field_lines = []
+    e.field_columns = []
+    e.field_lengths = []
+    e.field_numbers = []
+    e.op = source.op
+    e.convert_to = TYPE_NOTHING
+    e.left = left
+    e.right = right
+    e.inputs = []
+    e.depth = source.depth
+    e.type = source.type
+    e.slot = -1
+end
+
+# Errors in a constant's use point at the use, not at the constant
+func Checker.set_spot(place: int, line: int, column: int, length: int, file: int)
+    var e = self.ex(place)
+    e.line = line
+    e.column = column
+    e.length = length
+    e.file = file
+    if e.left >= 0
+        self.set_spot(e.left, line, column, length, file)
+    end
+    if e.right >= 0
+        self.set_spot(e.right, line, column, length, file)
+    end
+end
+
+# --- An extern declared again, like sqrt in a program and in gfx.jamo ---
+
+func extern_type_name(type: int, is_i32: bool, is_f32: bool): string
+    if is_i32
+        return "i32"
+    end
+    if is_f32
+        return "f32"
+    end
+    if type == TYPE_INT
+        return "int"
+    elif type == TYPE_FLOAT
+        return "float"
+    elif type == TYPE_BOOL
+        return "bool"
+    elif type == TYPE_NOTHING
+        return "nothing"
+    end
+    return ""
+end
+
+func Checker.extern_input_type(function: Function, i: int): string
+    var name = extern_type_name(function.inputs[i].type, function.input_is_i32[i], function.input_is_f32[i])
+    if name == ""
+        return self.type_name(function.inputs[i].type)
+    end
+    return name
+end
+
+func Checker.extern_answer_type(function: Function): string
+    var name = extern_type_name(function.return_type, function.returns_i32, function.returns_f32)
+    if name == ""
+        return self.type_name(function.return_type)
+    end
+    return name
+end
+
+# How two externs with one name differ, or "" when they're the same function
+func Checker.extern_difference(first: Function, again: Function): string
+    if first.dll != again.dll
+        return "it comes from " + again.dll + " here but " + first.dll + " there"
+    end
+    if len(first.inputs) != len(again.inputs)
+        return "it takes " + count_words(len(again.inputs)) + " here but " + count_words(len(first.inputs)) + " there"
+    end
+    for i in 0..len(first.inputs)
+        var here = self.extern_input_type(again, i)
+        var there = self.extern_input_type(first, i)
+        if here != there
+            return f"its input {i + 1} is {here} here but {there} there"
+        end
+    end
+    var here = self.extern_answer_type(again)
+    var there = self.extern_answer_type(first)
+    if here != there
+        return "it answers with " + here + " here but " + there + " there"
+    end
+    return ""
+end
+
+func Checker.is_builtin_file(file: int): bool
+    return ends_with_label(self.errors.name_of_file(file))
+end
+
+# When this extern has the name of an earlier one, gives back the one to leave out, or a function with no
+# name if it's a new name. A different one gets an error that says how it differs, on the program's own
+# line rather than a built-in library's
+func Checker.extern_repeat(function: Function): Function
+    var none = new_function()
+    if function.dll == "" or not self.has_function(function.name)
+        return none
+    end
+    var first = self.function_named(function.name)
+    if first.dll == ""
+        return none
+    end
+    if self.extern_difference(first, function) == ""
+        return function
+    end
+    var mine = function
+    var other = first
+    if self.is_builtin_file(function.file) and not self.is_builtin_file(first.file)
+        mine = first
+        other = function
+        # The library keeps its own, so its calls give no extra errors
+        self.function_list[self.function_places.get(function.name)] = other
+    end
+    var where = "on line "
+    if other.file != mine.file
+        where = "in " + self.errors.name_of_file(other.file) + " line "
+    end
+    self.add(mine.line, mine.column, mine.length, mine.file, mine.name + " is already declared " + where + string(other.line) + ", and this one is different: " + self.extern_difference(other, mine) + ".", "An extern can be declared again only if its DLL, inputs and answer are exactly the same.")
+    return mine
+end
+
+# --- Structs, enums and types ---
+
+func Checker.check_structs()
+    for i in 0..len(self.program.structs)
+        var decl = self.program.structs[i]
+        if not self.claim_name(decl.name, decl.line, decl.column, decl.length, decl.file, "struct")
+            continue
+        end
+        for a in 0..len(decl.fields)
+            for b in 0..a
+                if decl.fields[b].name == decl.fields[a].name
+                    var field = decl.fields[a]
+                    self.add(field.line, field.column, field.length, decl.file, "There's already a field called " + field.name + " in this struct.", "")
+                end
+            end
+        end
+        if len(decl.type_params) > 0
+            # Only its copies for real types, like Pair<string, int>, become structs
+            self.generic_structs.set(decl.name, i)
+            continue
+        end
+        self.structs.set(decl.name, i)
+        var entry = self.program.types.entry(decl.type)
+        entry.is_struct = true
+        entry.fields = decl.fields
+    end
+end
+
+func Checker.check_enums()
+    for i in 0..len(self.program.enums)
+        var decl = self.program.enums[i]
+        if not self.claim_name(decl.name, decl.line, decl.column, decl.length, decl.file, "enum")
+            continue
+        end
+        self.enums.set(decl.name, i)
+        if len(decl.members) == 0
+            self.add(decl.line, decl.column, decl.length, decl.file, "An enum needs at least one member.", "")
+        end
+        for a in 0..len(decl.members)
+            for b in 0..a
+                if decl.members[b] == decl.members[a]
+                    self.add(decl.member_lines[a], decl.member_columns[a], decl.member_lengths[a], decl.file, "There's already a member called " + decl.members[a] + " in this enum.", "")
+                end
+            end
+        end
+        var entry = self.program.types.entry(decl.type)
+        entry.is_enum = true
+        entry.members = decl.members
+    end
+end
+
+# A generic struct's type names can only be checked once every struct and enum has its name
+func Checker.check_generic_struct_params()
+    for i in 0..len(self.program.structs)
+        var decl = self.program.structs[i]
+        if self.generic_structs.has(decl.name) and self.generic_structs.get(decl.name) == i
+            self.check_type_params(decl.type_params, decl.type_param_lines, decl.type_param_columns, decl.type_param_lengths, decl.file)
+        end
+    end
+end
+
+# --- Generics ---
+#
+# A generic function or struct is a pattern. Each set of real types it's used with gets its own copy, with
+# the types swapped in, and only the copies are checked and made into code, like C++ templates
+
+# T in first<T> can't be a real type's name, or used twice
+func Checker.check_type_params(params: [int], lines: [int], columns: [int], lengths: [int], file: int)
+    for i in 0..len(params)
+        var name = self.type_name(params[i])
+        if self.structs.has(name) or self.enums.has(name) or self.generic_structs.has(name)
+            self.add(lines[i], columns[i], lengths[i], file, name + " is already a type, so it can't name a generic's type too.", "Use a different name, like T.")
+        end
+        for j in 0..i
+            if params[j] == params[i]
+                self.add(lines[i], columns[i], lengths[i], file, "There's already a type called " + name + " here.", "")
+            end
+        end
+    end
+end
+
+func Checker.add_generic_function(function: Function)
+    if function.owner == TYPE_NOTHING
+        self.check_type_params(function.type_params, function.type_param_lines, function.type_param_columns, function.type_param_lengths, function.file)
+        # A generic main is still kept, so there's no second error about main being missing
+        if function.name == "main"
+            self.add(function.line, function.column, function.length, function.file, "main can't have types.", "")
+        end
+        if self.claim_name(function.name, function.line, function.column, function.length, function.file, "function")
+            self.generic_functions.set(function.name, len(self.generic_list))
+            self.generic_list.add(function)
+        end
+        return
+    end
+    # A method of a generic struct, like Box<T>.get
+    var base = self.program.types.entry(function.owner).base
+    if not self.generic_structs.has(base)
+        if self.structs.has(base)
+            self.add(function.owner_line, function.owner_column, function.owner_length, function.file, base + " has no types, so its methods don't either.", "")
+        else
+            self.add(function.owner_line, function.owner_column, function.owner_length, function.file, "There's no generic struct called " + base + ", so it can't have this method.", "")
+        end
+        return
+    end
+    var decl = self.program.structs[self.generic_structs.get(base)]
+    if len(decl.type_params) != len(function.type_params)
+        self.add(function.owner_line, function.owner_column, function.owner_length, function.file, base + " has " + type_words(len(decl.type_params)) + ", but this gives it " + string(len(function.type_params)) + ".", "")
+        return
+    end
+    self.check_type_params(function.type_params, function.type_param_lines, function.type_param_columns, function.type_param_lengths, function.file)
+    if self.claim_name(function.name, function.line, function.column, function.length, function.file, "function")
+        self.generic_methods.set(function.name, len(self.generic_list))
+        self.generic_list.add(function)
+    end
+end
+
+func type_words(count: int): string
+    if count == 1
+        return "1 type"
+    end
+    return f"{count} types"
+end
+
+func Checker.uses_params(type: int, params: [int]): bool
+    for param in params
+        if type == param
+            return true
+        end
+    end
+    if self.is_array(type)
+        return self.uses_params(self.element_of(type), params)
+    end
+    if self.program.types.is_generic(type)
+        for arg in self.program.types.entry(type).args
+            if self.uses_params(arg, params)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+# The type with each of from swapped for the one in the same place in to
+func Checker.substitute(type: int, from: [int], to: [int]): int
+    for i in 0..len(from)
+        if type == from[i]
+            return to[i]
+        end
+    end
+    if self.is_array(type)
+        var element = self.substitute(self.element_of(type), from, to)
+        return self.program.types.array_of(element)
+    end
+    if self.program.types.is_generic(type)
+        var entry = self.program.types.entry(type)
+        var base = entry.base
+        var args: [int] = []
+        for arg in entry.args
+            args.add(self.substitute(arg, from, to))
+        end
+        return self.program.types.generic(base, args)
+    end
+    return type
+end
+
+# Works out a generic function's types by matching an input's type in the pattern with what was given
+func Checker.work_out_types(pattern: int, given: int, params: [int], found: [int])
+    if given == TYPE_UNKNOWN or given == TYPE_NOTHING
+        return
+    end
+    for i in 0..len(params)
+        if pattern == params[i]
+            if found[i] == TYPE_NOTHING
+                found[i] = given
+            end
+            return
+        end
+    end
+    if self.is_array(pattern) and self.is_array(given)
+        self.work_out_types(self.element_of(pattern), self.element_of(given), params, found)
+        return
+    end
+    var types = self.program.types
+    if types.is_generic(pattern) and types.is_generic(given) and types.entry(pattern).base == types.entry(given).base
+        var pattern_args = types.entry(pattern).args
+        var given_args = types.entry(given).args
+        if len(pattern_args) != len(given_args)
+            return
+        end
+        for i in 0..len(pattern_args)
+            self.work_out_types(pattern_args[i], given_args[i], params, found)
+        end
+    end
+end
+
+# Fills in a generic struct's fields once it's given real types. Answers false when it can't be
+func Checker.make_generic_struct(type: int, line: int, column: int, length: int, file: int): bool
+    if self.is_struct(type)
+        return true
+    end
+    var entry = self.program.types.entry(type)
+    var base = entry.base
+    var args = entry.args
+    if not self.generic_structs.has(base)
+        if self.structs.has(base)
+            self.add(line, column, length, file, base + " has no types, so it can't be given any.", "")
+        else
+            var close = closest(base, sorted_keys(self.generic_structs))
+            self.add(line, column, length, file, "There's no generic struct called " + base + ".", did_you_mean(close, ""))
+        end
+        return false
+    end
+    var decl = self.program.structs[self.generic_structs.get(base)]
+    if len(args) != len(decl.type_params)
+        self.add(line, column, length, file, base + " takes " + type_words(len(decl.type_params)) + ", but this gives it " + string(len(args)) + ".", "")
+        return false
+    end
+    var errors_before = self.errors.count()
+    for arg in args
+        self.check_type_exists(arg, line, column, length, file)
+    end
+    if self.errors.count() != errors_before
+        return false
+    end
+    self.copies_made += 1
+    if self.copies_made > MOST_GENERIC_COPIES
+        if self.copies_made == MOST_GENERIC_COPIES + 1
+            self.add(line, column, length, file, "This makes too many copies of generics, like a struct that holds a bigger copy of itself.", "A program can use up to 500 different sets of types.")
+        end
+        return false
+    end
+    var fields: [StructField] = []
+    for field in decl.fields
+        fields.add(StructField{name: field.name, line: field.line, column: field.column, length: field.length, type: self.substitute(field.type, decl.type_params, args)})
+    end
+    entry.is_struct = true
+    entry.fields = fields
+    for field in fields
+        self.check_type_exists(field.type, field.line, field.column, field.length, decl.file)
+    end
+    self.check_struct_isnt_endless(type, self.type_name(type), decl.line, decl.column, decl.length, decl.file)
+    return true
+end
+
+func copy_texts(items: [string]): [string]
+    var out: [string] = []
+    for item in items
+        out.add(item)
+    end
+    return out
+end
+
+func copy_ints(items: [int]): [int]
+    var out: [int] = []
+    for item in items
+        out.add(item)
+    end
+    return out
+end
+
+func Checker.copy_expr(place: int, params: [int], args: [int]): int
+    if place < 0
+        return -1
+    end
+    var from = self.ex(place)
+    var made = self.program.new_expr(from.kind, from.line, from.column, from.length)
+    var e = self.ex(made)
+    e.file = from.file
+    e.number = from.number
+    e.real = from.real
+    e.truth = from.truth
+    e.text = from.text
+    e.name = from.name
+    e.field_names = copy_texts(from.field_names)
+    e.field_lines = copy_ints(from.field_lines)
+    e.field_columns = copy_ints(from.field_columns)
+    e.field_lengths = copy_ints(from.field_lengths)
+    e.op = from.op
+    e.convert_to = from.convert_to
+    e.depth = from.depth
+    for type in from.type_args
+        e.type_args.add(self.substitute(type, params, args))
+    end
+    e.left = self.copy_expr(from.left, params, args)
+    e.right = self.copy_expr(from.right, params, args)
+    for input in from.inputs
+        e.inputs.add(self.copy_expr(input, params, args))
+    end
+    return made
+end
+
+func Checker.copy_block(block: [int], params: [int], args: [int]): [int]
+    var out: [int] = []
+    for place in block
+        var from = self.st(place)
+        var made = self.program.new_stmt(from.kind, from.line, from.column, from.length)
+        var s = self.st(made)
+        s.file = from.file
+        s.name = from.name
+        s.name_line = from.name_line
+        s.name_column = from.name_column
+        s.name_length = from.name_length
+        s.has_operation = from.has_operation
+        s.operation = from.operation
+        s.has_type = from.has_type
+        s.declared_type = self.substitute(from.declared_type, params, args)
+        s.has_else = from.has_else
+        s.target = self.copy_expr(from.target, params, args)
+        s.value = self.copy_expr(from.value, params, args)
+        s.range_end = self.copy_expr(from.range_end, params, args)
+        s.body = self.copy_block(from.body, params, args)
+        for part in from.elifs
+            var condition = self.copy_expr(part.condition, params, args)
+            s.elifs.add(ElifPart{condition: condition, body: self.copy_block(part.body, params, args)})
+        end
+        for part in from.cases
+            var value = self.copy_expr(part.value, params, args)
+            s.cases.add(CasePart{value: value, body: self.copy_block(part.body, params, args)})
+        end
+        s.other_body = self.copy_block(from.other_body, params, args)
+        out.add(made)
+    end
+    return out
+end
+
+# The copy of a generic function or method for these types, made the first time it's needed. It joins the
+# program's functions, so it gets checked after the ones before it. Its name is "" when it can't be made
+func Checker.make_generic_copy(pattern_place: int, args: [int], name: string, line: int, column: int, length: int, file: int): Function
+    if self.has_function(name)
+        return self.function_named(name)
+    end
+    self.copies_made += 1
+    if self.copies_made > MOST_GENERIC_COPIES
+        if self.copies_made == MOST_GENERIC_COPIES + 1
+            self.add(line, column, length, file, "This makes too many copies of generics, like a function that calls itself with a bigger type.", "A program can use up to 500 different sets of types.")
+        end
+        return new_function()
+    end
+    var pattern = self.generic_list[pattern_place]
+    var made = new_function()
+    made.name = name
+    made.line = pattern.line
+    made.column = pattern.column
+    made.length = pattern.length
+    made.file = pattern.file
+    made.owner = self.substitute(pattern.owner, pattern.type_params, args)
+    made.owner_line = pattern.owner_line
+    made.owner_column = pattern.owner_column
+    made.owner_length = pattern.owner_length
+    for input in pattern.inputs
+        made.inputs.add(Input{name: input.name, line: input.line, column: input.column, length: input.length, type: self.substitute(input.type, pattern.type_params, args)})
+    end
+    made.return_type = self.substitute(pattern.return_type, pattern.type_params, args)
+    made.body = self.copy_block(pattern.body, pattern.type_params, args)
+    self.program.functions.add(made)
+    self.function_places.set(name, len(self.function_list))
+    self.function_list.add(made)
+    self.copy_of.set(name, pattern_place)
+    for input in made.inputs
+        self.check_type_exists(input.type, line, column, length, file)
+    end
+    self.check_type_exists(made.return_type, line, column, length, file)
+    return made
+end
+
+func Checker.generic_name(base: string, args: [int]): string
+    var name = base + "<"
+    for i in 0..len(args)
+        if i > 0
+            name = name + ", "
+        end
+        name = name + self.type_name(args[i])
+    end
+    return name + ">"
+end
+
+func Checker.check_generic_call(place: int, pattern_place: int): int
+    var e = self.ex(place)
+    var pattern = self.generic_list[pattern_place]
+    var params = pattern.type_params
+    var types_given = len(e.type_args) > 0
+    var found: [int] = []
+    for param in params
+        found.add(TYPE_NOTHING)
+    end
+    if types_given and len(e.type_args) != len(params)
+        for input in e.inputs
+            self.check_expression(input)
+        end
+        self.add_at(e, pattern.name + " takes " + type_words(len(params)) + ", but this gives it " + string(len(e.type_args)) + ".", "")
+        return TYPE_UNKNOWN
+    end
+    if types_given
+        var errors_before = self.errors.count()
+        for i in 0..len(params)
+            self.check_type_exists(e.type_args[i], e.line, e.column, e.length, e.file)
+            found[i] = e.type_args[i]
+        end
+        if self.errors.count() != errors_before
+            for input in e.inputs
+                self.check_expression(input)
+            end
+            return TYPE_UNKNOWN
+        end
+    end
+    # An input whose type is already known is checked wanting it, so an empty [ ] works there
+    var given: [int] = []
+    for i in 0..len(e.inputs)
+        var wanted = TYPE_NOTHING
+        if i < len(pattern.inputs)
+            var type = pattern.inputs[i].type
+            if types_given
+                wanted = self.substitute(type, params, found)
+            elif not self.uses_params(type, params)
+                wanted = type
+            end
+        end
+        given.add(self.check_wanting(e.inputs[i], wanted))
+    end
+    if len(given) != len(pattern.inputs)
+        self.add_at(e, pattern.name + " takes " + count_words(len(pattern.inputs)) + ", but this gives it " + string(len(given)) + ".", "")
+        return TYPE_UNKNOWN
+    end
+    if not types_given
+        for i in 0..len(given)
+            self.work_out_types(pattern.inputs[i].type, given[i], params, found)
+        end
+        for i in 0..len(params)
+            if found[i] != TYPE_NOTHING
+                continue
+            end
+            for type in given
+                if type == TYPE_UNKNOWN
+                    return TYPE_UNKNOWN
+                end
+            end
+            # An input of the wrong shape, like 5 for [T], says more than the missing type
+            var types = self.program.types
+            for j in 0..len(given)
+                var wanted = pattern.inputs[j].type
+                var wrong_shape = self.is_array(wanted) and not self.is_array(given[j])
+                if types.is_generic(wanted)
+                    if not (types.is_generic(given[j]) and types.entry(given[j]).base == types.entry(wanted).base)
+                        wrong_shape = true
+                    end
+                end
+                if wrong_shape and given[j] != TYPE_NOTHING
+                    self.add_at(self.ex(e.inputs[j]), "The input " + pattern.inputs[j].name + " must be " + self.with_article(wanted) + ", but this is " + self.with_article(given[j]) + ".", "")
+                    return TYPE_UNKNOWN
+                end
+            end
+            self.add_at(e, "Jamo can't work out " + self.type_name(params[i]) + " for " + pattern.name + " from its inputs.", "Give the types in < >, like " + pattern.name + "<int>(...)")
+            return TYPE_UNKNOWN
+        end
+    end
+    var name = self.generic_name(pattern.name, found)
+    var made = self.make_generic_copy(pattern_place, found, name, e.line, e.column, e.length, e.file)
+    if made.name == ""
+        return TYPE_UNKNOWN
+    end
+    e.name = name
+    self.note_call(name)
+    for i in 0..len(given)
+        if given[i] == TYPE_NOTHING
+            self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't be an input.", "")
+        elif given[i] != TYPE_UNKNOWN and given[i] != made.inputs[i].type
+            self.add_at(self.ex(e.inputs[i]), "The input " + made.inputs[i].name + " must be " + self.with_article(made.inputs[i].type) + ", but this is " + self.with_article(given[i]) + ".", "")
+        end
+    end
+    return made.return_type
+end
+
+func Checker.is_array(type: int): bool
+    return type_is_custom(type) and self.program.types.entry(type).is_array
+end
+
+func Checker.is_struct(type: int): bool
+    return type_is_custom(type) and self.program.types.entry(type).is_struct
+end
+
+func Checker.is_enum(type: int): bool
+    return type_is_custom(type) and self.program.types.entry(type).is_enum
+end
+
+func Checker.is_known(type: int): bool
+    if not type_is_custom(type)
+        return true
+    end
+    var entry = self.program.types.entry(type)
+    if entry.is_array
+        return self.is_known(entry.element)
+    end
+    return entry.is_struct or entry.is_enum
+end
+
+func Checker.element_of(type: int): int
+    return self.program.types.entry(type).element
+end
+
+func Checker.fields_of(type: int): [StructField]
+    return self.program.types.entry(type).fields
+end
+
+func Checker.check_type_exists(type: int, line: int, column: int, length: int, file: int)
+    var named = type
+    while self.is_array(named)
+        named = self.element_of(named)
+    end
+    if self.program.types.is_generic(named)
+        self.make_generic_struct(named, line, column, length, file)
+        return
+    end
+    if self.is_known(type)
+        return
+    end
+    if self.generic_structs.has(self.type_name(named))
+        self.add(line, column, length, file, self.type_name(named) + " needs its types, like " + self.type_name(named) + "<int>.", "")
+        return
+    end
+    var options: [string] = []
+    for name in sorted_keys(self.structs)
+        options.add(name)
+    end
+    for name in sorted_keys(self.enums)
+        options.add(name)
+    end
+    for name in sorted_keys(self.generic_structs)
+        options.add(name)
+    end
+    var close = closest(self.type_name(named), options)
+    self.add(line, column, length, file, "There's no type called " + self.type_name(named) + ".", did_you_mean(close, ""))
+end
+
+# A struct holding itself would need another inside that, forever. An array can start out empty, so it's fine
+func Checker.check_struct_isnt_endless(struct_type: int, struct_name: string, line: int, column: int, length: int, file: int)
+    var to_visit = [struct_type]
+    var visited: [int] = []
+    while len(to_visit) > 0
+        var type = to_visit.pop()
+        var seen = false
+        for v in visited
+            if v == type
+                seen = true
+            end
+        end
+        if not self.is_struct(type) or seen
+            continue
+        end
+        visited.add(type)
+        for field in self.fields_of(type)
+            if field.type == struct_type
+                self.add(line, column, length, file, struct_name + " can't contain itself, since each one would need another one inside it, forever.", "An array is fine, because it can be empty: [" + struct_name + "]")
+                return
+            end
+            to_visit.add(field.type)
+        end
+    end
+end
+
+func Checker.check_extern(function: Function)
+    if function.name == "main"
+        self.add(function.line, function.column, function.length, function.file, "main can't be an extern function.", "")
+    end
+    if len(function.inputs) > MOST_EXTERN_INPUTS
+        self.add(function.line, function.column, function.length, function.file, "An extern function can take up to 16 inputs.", "")
+    end
+    for input in function.inputs
+        if input.type != TYPE_INT and input.type != TYPE_FLOAT and input.type != TYPE_BOOL
+            self.add(input.line, input.column, input.length, function.file, "An extern function's inputs can be int, i32, float, f32 or bool, but this is " + self.with_article(input.type) + ".", "Pass text with wide(text), and other things with memory( ) and poke.")
+        end
+    end
+    var answer = function.return_type
+    if answer != TYPE_NOTHING and answer != TYPE_INT and answer != TYPE_FLOAT and answer != TYPE_BOOL
+        self.add(function.line, function.column, function.length, function.file, "An extern function can answer with int, i32, float, f32 or bool, but this is " + self.with_article(answer) + ".", "")
+    end
+end
+
+func Checker.check_main()
+    if not self.has_function("main") and self.generic_functions.has("main")
+        return
+    end
+    if not self.has_function("main")
+        self.add(1, 0, 1, -1, "This program has no main function, so it has nowhere to start.", "Add one:\n    func main()\n        print(42)\n    end")
+        return
+    end
+    var function = self.function_named("main")
+    if len(function.inputs) > 0
+        self.add(function.line, function.column, function.length, function.file, "main can't have any inputs.", "")
+    end
+    if function.return_type != TYPE_NOTHING
+        self.add(function.line, function.column, function.length, function.file, "main can't return a value.", "")
+    end
+end
+
+# --- Functions and blocks ---
+
+func Checker.check_function(function: Function)
+    if function.dll != ""
+        self.check_extern(function)
+        return
+    end
+    self.current = function
+    self.user = function.name
+    self.next_slot = 0
+    self.loops_open = 0
+    self.scopes = [new_scope()]
+    # Every copy of a generic would give the same warnings, so only its first copy gives them
+    self.quiet = false
+    if self.copy_of.has(function.name)
+        var pattern = self.copy_of.get(function.name)
+        for warned in self.warned_patterns
+            if warned == pattern
+                self.quiet = true
+            end
+        end
+        if not self.quiet
+            self.warned_patterns.add(pattern)
+        end
+    end
+    if function.owner != TYPE_NOTHING and not self.is_struct(function.owner)
+        if self.generic_structs.has(self.type_name(function.owner))
+            var method = slice(function.name, find(function.name, ".") + 1, len(function.name))
+            self.add(function.owner_line, function.owner_column, function.owner_length, function.file, self.type_name(function.owner) + " has types, so its methods need them too.", "Like this: func " + self.type_name(function.owner) + "<T>." + method + "()")
+            return
+        end
+        self.add(function.owner_line, function.owner_column, function.owner_length, function.file, "There's no struct called " + self.type_name(function.owner) + ", so it can't have this method.", "")
+        return
+    end
+    self.check_type_exists(function.return_type, function.line, function.column, function.length, function.file)
+    for input in function.inputs
+        self.check_type_exists(input.type, input.line, input.column, input.length, function.file)
+        var scope = self.scopes[len(self.scopes) - 1]
+        if scope.places.has(input.name)
+            self.add(input.line, input.column, input.length, function.file, "There's already an input called " + input.name + ".", "")
+        else
+            self.declare(input.name, Variable{type: input.type, slot: self.next_slot, read_only: function.owner != TYPE_NOTHING and self.next_slot == 0, used: false, warn_if_unused: false, line: input.line, column: input.column, length: input.length, file: function.file})
+        end
+        self.next_slot += 1
+    end
+    self.check_statements(function.body)
+    self.warn_about_unused_variables()
+    function.slot_count = self.next_slot
+    if function.return_type != TYPE_NOTHING and not self.always_returns(function.body)
+        self.add(function.line, function.column, function.length, function.file, function.name + " must return " + self.with_article(function.return_type) + " on every path, but it can reach its end without one.", "Add a return before its end. A while doesn't count, and an if needs an else that returns too.")
+    end
+end
+
+func Checker.declare(name: string, variable: Variable)
+    var scope = self.scopes[len(self.scopes) - 1]
+    if scope.places.has(name)
+        scope.variables[scope.places.get(name)] = variable
+        return
+    end
+    scope.places.set(name, len(scope.variables))
+    scope.names.add(name)
+    scope.variables.add(variable)
+end
+
+func Checker.check_block(block: [int])
+    self.scopes.add(new_scope())
+    self.check_statements(block)
+    self.warn_about_unused_variables()
+    self.scopes.pop()
+end
+
+func Checker.check_statements(block: [int])
+    var warned = false
+    for i in 0..len(block)
+        self.check_statement(block[i])
+        if not warned and i + 1 < len(block) and self.always_leaves(block[i])
+            var next = self.st(block[i + 1])
+            if not self.quiet
+                self.errors.warn(next.line, next.column, next.length, next.file, "This code can never run, because the code above it always leaves first.", "")
+            end
+            warned = true
+        end
+    end
+end
+
+func Checker.warn_about_unused_variables()
+    if self.quiet
+        return
+    end
+    var scope = self.scopes[len(self.scopes) - 1]
+    var names: [string] = []
+    for name in scope.names
+        names.add(name)
+    end
+    sort_strings(names)
+    for name in names
+        var variable = scope.variables[scope.places.get(name)]
+        if variable.warn_if_unused and not variable.used
+            self.errors.warn(variable.line, variable.column, variable.length, variable.file, name + " is never used.", "Use it, or remove it.")
+        end
+    end
+end
+
+func Checker.always_returns(block: [int]): bool
+    for s in block
+        if self.statement_always_returns(s)
+            return true
+        end
+    end
+    return false
+end
+
+func Checker.statement_always_returns(place: int): bool
+    var s = self.st(place)
+    if s.kind == ST_RETURN
+        return true
+    end
+    if s.kind == ST_IF and s.has_else and self.always_returns(s.body) and self.always_returns(s.other_body)
+        var every_elif_returns = true
+        for part in s.elifs
+            every_elif_returns = every_elif_returns and self.always_returns(part.body)
+        end
+        if every_elif_returns
+            return true
+        end
+    end
+    if s.kind == ST_MATCH and s.covers_all
+        var every_case_returns = not s.has_else or self.always_returns(s.other_body)
+        for part in s.cases
+            every_case_returns = every_case_returns and self.always_returns(part.body)
+        end
+        if every_case_returns
+            return true
+        end
+    end
+    return false
+end
+
+func Checker.always_leaves(place: int): bool
+    var s = self.st(place)
+    return s.kind == ST_BREAK or s.kind == ST_CONTINUE or self.statement_always_returns(place)
+end
+
+# --- Statements ---
+
+func Checker.check_statement(place: int)
+    var s = self.st(place)
+    var kind = s.kind
+    if kind == ST_VAR
+        self.check_var(s)
+    elif kind == ST_ASSIGN
+        self.check_assign(s)
+    elif kind == ST_IF
+        self.check_condition(s.value, "if")
+        self.check_block(s.body)
+        for part in s.elifs
+            self.check_condition(part.condition, "elif")
+            self.check_block(part.body)
+        end
+        if s.has_else
+            self.check_block(s.other_body)
+        end
+    elif kind == ST_WHILE
+        self.check_condition(s.value, "while")
+        self.loops_open += 1
+        self.check_block(s.body)
+        self.loops_open -= 1
+    elif kind == ST_FOR
+        self.check_for(s)
+    elif kind == ST_MATCH
+        self.check_match(s)
+    elif kind == ST_BREAK
+        if self.loops_open == 0
+            self.add(s.line, s.column, s.length, s.file, "break can only go inside a loop.", "")
+        end
+    elif kind == ST_CONTINUE
+        if self.loops_open == 0
+            self.add(s.line, s.column, s.length, s.file, "continue can only go inside a loop.", "")
+        end
+    elif kind == ST_RETURN
+        self.check_return(s)
+    elif kind == ST_CALL
+        self.check_expression(s.value)
+    elif kind == ST_PRINT
+        var type = self.check_expression(s.value)
+        if type == TYPE_NOTHING
+            self.add_at(self.ex(s.value), "This doesn't give back a value, so there's nothing to print.", "")
+        end
+    end
+end
+
+func Checker.check_var(s: Stmt)
+    if s.has_type
+        self.check_type_exists(s.declared_type, s.name_line, s.name_column, s.name_length, s.file)
+    end
+    # The value comes first, so var x = x means an outer x, or a mistake
+    var wanted = TYPE_NOTHING
+    if s.has_type
+        wanted = s.declared_type
+    end
+    var type = self.check_wanting(s.value, wanted)
+    if type == TYPE_NOTHING
+        self.add_at(self.ex(s.value), "This doesn't give back a value, so it can't go in a variable.", "")
+        type = TYPE_UNKNOWN
+    end
+    if s.has_type
+        if type != TYPE_UNKNOWN and type != s.declared_type
+            self.add_at(self.ex(s.value), s.name + " is declared as " + self.with_article(s.declared_type) + ", but this value is " + self.with_article(type) + ".", "")
+        end
+        type = s.declared_type
+    end
+    if self.constants.has(s.name)
+        self.add(s.name_line, s.name_column, s.name_length, s.file, s.name + " is already a constant, so a variable can't use that name.", "Pick a different name.")
+        s.slot = self.next_slot
+        self.next_slot += 1
+        return
+    end
+    var scope = self.scopes[len(self.scopes) - 1]
+    if scope.places.has(s.name)
+        self.add(s.name_line, s.name_column, s.name_length, s.file, "There's already a variable called " + s.name + " in this block.", "Use " + s.name + " = ... to change it, or pick a different name.")
+        s.slot = scope.variables[scope.places.get(s.name)].slot
+        return
+    end
+    s.slot = self.next_slot
+    self.next_slot += 1
+    self.declare(s.name, Variable{type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+end
+
+func Checker.check_match(s: Stmt)
+    var type = self.check_expression(s.value)
+    var is_enum = self.is_enum(type)
+    var value = self.ex(s.value)
+    if type == TYPE_NOTHING
+        self.add_at(value, "This doesn't give back a value, so it can't be matched.", "")
+    elif type != TYPE_UNKNOWN and not is_enum and type != TYPE_INT and type != TYPE_STRING
+        self.add_at(value, "match works on enums, ints and strings, but this is " + self.with_article(type) + ".", "")
+    end
+    s.slot = self.next_slot
+    self.next_slot += 1
+    var seen = new_dict()
+    for part in s.cases
+        var case_type = self.check_expression(part.value)
+        var case_value = self.ex(part.value)
+        var key = self.fixed_value_text(part.value)
+        if key == ""
+            if case_type != TYPE_UNKNOWN
+                self.add_at(case_value, "A case needs a fixed value, like 1, \"a\" or Mood.CALM.", "Use if and elif to compare with anything else.")
+            end
+        elif seen.has(key)
+            self.add_at(case_value, "This case is already covered on line " + string(seen.get(key)) + ".", "")
+        else
+            seen.set(key, case_value.line)
+        end
+        if case_type != TYPE_UNKNOWN and type != TYPE_UNKNOWN and case_type != type
+            self.add_at(case_value, "This match is on " + self.with_article(type) + ", but this case is " + self.with_article(case_type) + ".", "")
+        end
+        self.check_block(part.body)
+    end
+    if s.has_else
+        self.check_block(s.other_body)
+    end
+    s.covers_all = s.has_else
+    if not is_enum or s.has_else
+        return
+    end
+    s.covers_all = true
+    for member in self.program.types.entry(type).members
+        if not seen.has(self.type_name(type) + "." + member)
+            self.add(s.line, s.column, s.length, s.file, "This match doesn't cover " + self.type_name(type) + "." + member + ".", "Add a case for it, or an else.")
+        end
+    end
+end
+
+# How a case's value reads, or nothing if it isn't fixed
+func Checker.fixed_value_text(place: int): string
+    var e = self.ex(place)
+    if e.kind == EX_NUMBER
+        return number_text(e.number)
+    elif e.kind == EX_STRING
+        return "\"" + e.text
+    elif e.kind == EX_ENUM_VALUE
+        return self.type_name(e.type) + "." + self.program.types.entry(e.type).members[e.number]
+    elif e.kind == EX_NEGATE
+        var left = self.ex(e.left)
+        if left.kind == EX_NUMBER
+            return "-" + number_text(left.number)
+        end
+    end
+    return ""
+end
+
+# A number as the C++ checker shows it, which reads 2^63 as 9223372036854775808, not as a minus number
+func number_text(number: int): string
+    if number < 0
+        return "9223372036854775808"
+    end
+    return string(number)
+end
+
+func Checker.check_range_end(place: int)
+    var type = self.check_expression(place)
+    var e = self.ex(place)
+    if type == TYPE_NOTHING
+        self.add_at(e, "This doesn't give back a value, so it can't be used here.", "")
+    elif type != TYPE_INT and type != TYPE_UNKNOWN
+        self.add_at(e, "A for loop's start and end must be ints, but this is " + self.with_article(type) + ".", "")
+    end
+end
+
+func Checker.check_for(s: Stmt)
+    var item_type = TYPE_INT
+    if s.range_end >= 0
+        self.check_range_end(s.value)
+        self.check_range_end(s.range_end)
+    else
+        var type = self.check_expression(s.value)
+        item_type = TYPE_UNKNOWN
+        if self.is_array(type)
+            item_type = self.element_of(type)
+        elif type != TYPE_UNKNOWN
+            self.add_at(self.ex(s.value), "A for loop needs an array or a range, but this is " + self.with_article(type) + ".", "Like this: for i in 0..10")
+        end
+        s.array_slot = self.next_slot
+        self.next_slot += 1
+    end
+    s.slot = self.next_slot
+    self.next_slot += 1
+    s.end_slot = self.next_slot
+    self.next_slot += 1
+    self.scopes.add(new_scope())
+    self.declare(s.name, Variable{type: item_type, slot: s.slot, read_only: true, used: false, warn_if_unused: false, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+    self.loops_open += 1
+    self.check_statements(s.body)
+    self.warn_about_unused_variables()
+    self.loops_open -= 1
+    self.scopes.pop()
+end
+
+func Checker.check_assign(s: Stmt)
+    if s.target >= 0
+        self.check_assign_to_target(s)
+        return
+    end
+    var found = self.find_variable(s.name)
+    var wanted = TYPE_NOTHING
+    if found.slot != -1
+        wanted = found.type
+    end
+    var type = self.check_wanting(s.value, wanted)
+    if found.slot == -1 and self.constants.has(s.name)
+        self.add(s.name_line, s.name_column, s.name_length, s.file, s.name + " is a constant, so it can't be changed.", "")
+        return
+    end
+    if found.slot == -1
+        self.report_unknown_name(s.name, s.name_line, s.name_column, s.name_length, s.file, "Use var to make a new variable: var " + s.name + " = ...")
+        return
+    end
+    s.slot = found.slot
+    if s.has_operation
+        self.mark_used(s.name)
+        self.note_global_read(found.slot)
+    end
+    if found.read_only
+        if self.current.owner != TYPE_NOTHING and s.name == "self" and s.slot == 0
+            self.add(s.name_line, s.name_column, s.name_length, s.file, "self can't be changed, but its fields can.", "Like this: self.health = 1")
+        else
+            self.add(s.name_line, s.name_column, s.name_length, s.file, s.name + " is a for loop's variable, so it can't be changed.", "Copy it into a new variable first.")
+        end
+        return
+    end
+    var joins_text = found.type == TYPE_STRING and s.operation == OP_ADD
+    if s.has_operation and found.type != TYPE_UNKNOWN and not is_number(found.type) and not joins_text
+        var hint = ""
+        if found.type == TYPE_STRING
+            hint = "Text only takes +=."
+        end
+        self.add(s.name_line, s.name_column, s.name_length, s.file, "This only works on numbers, but " + s.name + " holds " + self.with_article(found.type) + ".", hint)
+        return
+    end
+    var value = self.ex(s.value)
+    if s.has_operation and s.operation == OP_DIVIDE and self.is_literal_zero(s.value)
+        self.add_at(value, "This divides by zero, which has no answer.", "")
+    end
+    if type == TYPE_NOTHING
+        self.add_at(value, "This doesn't give back a value, so it can't go in a variable.", "")
+    elif type != TYPE_UNKNOWN and found.type != TYPE_UNKNOWN and type != found.type
+        self.add_at(value, s.name + " holds " + self.with_article(found.type) + ", but this value is " + self.with_article(type) + ".", "")
+    end
+end
+
+func Checker.check_assign_to_target(s: Stmt)
+    var wanted = self.check_expression(s.target)
+    var type = self.check_wanting(s.value, wanted)
+    var target = self.ex(s.target)
+    if target.kind == EX_INDEX and self.ex(target.left).type == TYPE_STRING
+        self.add_at(target, "Strings can't be changed in place.", "Build a new string with + instead.")
+        return
+    end
+    if s.has_operation and wanted != TYPE_UNKNOWN and not is_number(wanted) and not (wanted == TYPE_STRING and s.operation == OP_ADD)
+        var hint = ""
+        if wanted == TYPE_STRING
+            hint = "Text only takes +=."
+        end
+        self.add_at(target, "This only works on numbers, but this holds " + self.with_article(wanted) + ".", hint)
+        return
+    end
+    var value = self.ex(s.value)
+    if s.has_operation and s.operation == OP_DIVIDE and self.is_literal_zero(s.value)
+        self.add_at(value, "This divides by zero, which has no answer.", "")
+    end
+    if type == TYPE_NOTHING
+        self.add_at(value, "This doesn't give back a value, so it can't be stored.", "")
+    elif type != TYPE_UNKNOWN and wanted != TYPE_UNKNOWN and type != wanted
+        self.add_at(value, "This holds " + self.with_article(wanted) + ", but this value is " + self.with_article(type) + ".", "")
+    end
+end
+
+func Checker.check_condition(place: int, word: string)
+    var type = self.check_expression(place)
+    if type != TYPE_BOOL and type != TYPE_UNKNOWN
+        var article = "An "
+        if word == "while"
+            article = "A "
+        end
+        var hint = ""
+        if type == TYPE_INT
+            hint = "Try comparing it, like x != 0."
+        end
+        self.add_at(self.ex(place), article + word + " condition must be a bool, but this is " + self.with_article(type) + ".", hint)
+    end
+end
+
+func Checker.check_return(s: Stmt)
+    var wanted = self.current.return_type
+    if s.value < 0
+        if wanted != TYPE_NOTHING
+            self.add(s.line, s.column, s.length, s.file, self.current.name + " must return " + self.with_article(wanted) + " here.", "")
+        end
+        return
+    end
+    var type = self.check_wanting(s.value, wanted)
+    var value = self.ex(s.value)
+    if wanted == TYPE_NOTHING
+        self.add_at(value, self.current.name + " doesn't return a value.", "Add a return type to it, like func " + self.current.name + "(): int")
+    elif type == TYPE_NOTHING
+        self.add_at(value, "This doesn't give back a value, so it can't be returned.", "")
+    elif type != TYPE_UNKNOWN and type != wanted
+        self.add_at(value, self.current.name + " returns " + self.with_article(wanted) + ", but this value is " + self.with_article(type) + ".", "")
+    end
+end
+
+func Checker.is_literal_zero(place: int): bool
+    var e = self.ex(place)
+    if e.kind == EX_NEGATE
+        return self.is_literal_zero(e.left)
+    end
+    return e.kind == EX_NUMBER and e.number == 0
+end
+
+func Checker.is_order_comparison(place: int): bool
+    var e = self.ex(place)
+    if e.kind != EX_BINARY
+        return false
+    end
+    return e.op == OP_LESS or e.op == OP_GREATER or e.op == OP_LESS_EQUAL or e.op == OP_GREATER_EQUAL
+end
+
+# --- Expressions ---
+
+# An empty [ ] only has a type if where it's going says what type that is
+func Checker.check_wanting(place: int, wanted: int): int
+    var e = self.ex(place)
+    if e.kind != EX_ARRAY_LITERAL
+        return self.check_expression(place)
+    end
+    e.type = self.check_array_literal(place, wanted)
+    return e.type
+end
+
+func Checker.check_array_literal(place: int, wanted: int): int
+    var e = self.ex(place)
+    var knows_type = self.is_array(wanted)
+    if len(e.inputs) == 0
+        if knows_type
+            return wanted
+        end
+        self.add_at(e, "An empty [ ] needs a type.", "Like this: var items: [int] = []")
+        return TYPE_UNKNOWN
+    end
+    var wanted_item = TYPE_NOTHING
+    if knows_type
+        wanted_item = self.element_of(wanted)
+    end
+    var item_type = TYPE_UNKNOWN
+    for item in e.inputs
+        var hope = item_type
+        if item_type == TYPE_UNKNOWN
+            hope = wanted_item
+        end
+        var type = self.check_wanting(item, hope)
+        if type == TYPE_NOTHING
+            self.add_at(self.ex(item), "This doesn't give back a value, so it can't go in an array.", "")
+        elif item_type == TYPE_UNKNOWN
+            item_type = type
+        elif type != TYPE_UNKNOWN and type != item_type
+            self.add_at(self.ex(item), "All the items in an array share one type, but this is " + self.with_article(type) + " and the first is " + self.with_article(item_type) + ".", "")
+        end
+    end
+    if item_type == TYPE_UNKNOWN
+        return TYPE_UNKNOWN
+    end
+    return self.program.types.array_of(item_type)
+end
+
+func Checker.check_expression(place: int): int
+    var type = self.work_out_type(place)
+    self.ex(place).type = type
+    return type
+end
+
+func Checker.work_out_type(place: int): int
+    var e = self.ex(place)
+    var kind = e.kind
+    if kind == EX_NUMBER
+        if e.number < 0
+            self.add_at(e, "This number is too large for 64 bits.", "The largest int is 9223372036854775807.")
+            return TYPE_UNKNOWN
+        end
+        return TYPE_INT
+    elif kind == EX_FLOAT
+        return TYPE_FLOAT
+    elif kind == EX_BOOL
+        return TYPE_BOOL
+    elif kind == EX_STRING
+        return TYPE_STRING
+    elif kind == EX_FSTRING
+        for part in e.inputs
+            if self.check_expression(part) == TYPE_NOTHING
+                self.add_at(self.ex(part), "This doesn't give back a value, so it can't go in an f-string.", "")
+            end
+        end
+        return TYPE_STRING
+    elif kind == EX_ARRAY_LITERAL
+        return self.check_array_literal(place, TYPE_NOTHING)
+    elif kind == EX_METHOD_CALL
+        return self.check_method_call(place)
+    elif kind == EX_FIELD
+        return self.check_field(place)
+    elif kind == EX_STRUCT_LITERAL
+        return self.check_struct_literal(place)
+    elif kind == EX_ENUM_VALUE or kind == EX_BUILTIN_CALL
+        return e.type
+    elif kind == EX_INDEX
+        return self.check_index(place)
+    elif kind == EX_LENGTH
+        return self.check_length(place)
+    elif kind == EX_CONVERT
+        return self.check_convert(place)
+    elif kind == EX_NAME
+        return self.check_name(place)
+    elif kind == EX_NEGATE
+        return self.check_negate(place)
+    elif kind == EX_NOT
+        self.check_needs_bool(e.left, "not")
+        return TYPE_BOOL
+    elif kind == EX_BINARY
+        return self.check_binary(place)
+    elif kind == EX_CALL
+        return self.check_call(place)
+    end
+    return TYPE_UNKNOWN
+end
+
+func Checker.check_name(place: int): int
+    var e = self.ex(place)
+    var found = self.find_variable(e.name)
+    if found.slot != -1
+        self.mark_used(e.name)
+        e.slot = found.slot
+        self.note_global_read(found.slot)
+        return found.type
+    end
+    if self.setting_up >= 0 and self.global_order.has(e.name)
+        if self.global_order.get(e.name) == self.setting_up
+            self.add_at(e, e.name + " can't use itself while it's being set up.", "")
+            return TYPE_UNKNOWN
+        end
+        if self.global_order.get(e.name) > self.setting_up
+            self.add_at(e, e.name + " isn't set up yet here.", "Variables outside functions are set up in order, top to bottom, so move " + e.name + " above this one.")
+            return TYPE_UNKNOWN
+        end
+    end
+    if self.constants.has(e.name)
+        var decl = self.program.consts[self.constants.get(e.name)]
+        if not self.check_constant(decl)
+            return TYPE_UNKNOWN
+        end
+        var line = e.line
+        var column = e.column
+        var length = e.length
+        var file = e.file
+        self.fill_from(place, decl.value)
+        self.set_spot(place, line, column, length, file)
+        return self.ex(place).type
+    end
+    if self.enums.has(e.name)
+        var decl = self.program.enums[self.enums.get(e.name)]
+        var first = "VALUE"
+        if len(decl.members) > 0
+            first = decl.members[0]
+        end
+        self.add_at(e, e.name + " is an enum, so it needs one of its members.", "Like this: " + e.name + "." + first)
+        return TYPE_UNKNOWN
+    end
+    if self.has_function(e.name) or self.generic_functions.has(e.name)
+        self.add_at(e, e.name + " is a function, so it needs ( ) to be called.", "Like this: " + e.name + "()")
+        return TYPE_UNKNOWN
+    end
+    self.report_unknown_name(e.name, e.line, e.column, e.length, e.file, "")
+    return TYPE_UNKNOWN
+end
+
+func Checker.check_negate(place: int): int
+    var e = self.ex(place)
+    var value = self.ex(e.left)
+    # -9223372036854775808 is the only place that number is allowed
+    if value.kind == EX_NUMBER and value.number == -9223372036854775808
+        value.type = TYPE_INT
+        return TYPE_INT
+    end
+    var type = self.check_expression(e.left)
+    if type == TYPE_UNKNOWN
+        return TYPE_UNKNOWN
+    end
+    if not is_number(type)
+        self.add_at(value, "A minus sign needs a number, but this is " + self.with_article(type) + ".", "")
+        return TYPE_UNKNOWN
+    end
+    return type
+end
+
+func Checker.check_enum_value(place: int, decl: EnumDecl): int
+    var e = self.ex(place)
+    var found = -1
+    for i in 0..len(decl.members)
+        if found < 0 and decl.members[i] == e.name
+            found = i
+        end
+    end
+    if found < 0
+        var close = closest(e.name, decl.members)
+        self.add_at(e, decl.name + " has no member called " + e.name + ".", did_you_mean(close, ""))
+        return TYPE_UNKNOWN
+    end
+    e.kind = EX_ENUM_VALUE
+    e.number = found
+    return decl.type
+end
+
+func Checker.check_field(place: int): int
+    var e = self.ex(place)
+    var left = self.ex(e.left)
+    if left.kind == EX_NAME and self.find_variable(left.name).slot == -1 and self.enums.has(left.name)
+        return self.check_enum_value(place, self.program.enums[self.enums.get(left.name)])
+    end
+    var type = self.check_expression(e.left)
+    if type == TYPE_UNKNOWN
+        return TYPE_UNKNOWN
+    end
+    if not self.is_struct(type)
+        self.add_at(self.ex(e.left), "Only structs have fields, but this is " + self.with_article(type) + ".", "")
+        return TYPE_UNKNOWN
+    end
+    var fields = self.fields_of(type)
+    var number = field_number(fields, e.name)
+    if number < 0
+        self.report_unknown_field(type, e.name, e.line, e.column, e.length, e.file)
+        return TYPE_UNKNOWN
+    end
+    e.slot = number
+    return fields[number].type
+end
+
+func field_number(fields: [StructField], name: string): int
+    for i in 0..len(fields)
+        if fields[i].name == name
+            return i
+        end
+    end
+    return -1
+end
+
+func Checker.report_unknown_field(type: int, name: string, line: int, column: int, length: int, file: int)
+    var options: [string] = []
+    for field in self.fields_of(type)
+        options.add(field.name)
+    end
+    var close = closest(name, options)
+    self.add(line, column, length, file, self.type_name(type) + " has no field called " + name + ".", did_you_mean(close, ""))
+end
+
+func Checker.check_struct_method(place: int, type: int): int
+    var e = self.ex(place)
+    var prefix = self.type_name(type) + "."
+    if not self.has_function(prefix + e.name) and self.program.types.is_generic(type)
+        # A generic struct's method gets its copy for these types the first time it's called
+        var base = self.program.types.entry(type).base
+        if self.generic_methods.has(base + "." + e.name)
+            var made = self.make_generic_copy(self.generic_methods.get(base + "." + e.name), self.program.types.entry(type).args, prefix + e.name, e.line, e.column, e.length, e.file)
+            if made.name == ""
+                for input in e.inputs
+                    self.check_expression(input)
+                end
+                return TYPE_UNKNOWN
+            end
+        end
+    end
+    if not self.has_function(prefix + e.name)
+        for input in e.inputs
+            self.check_expression(input)
+        end
+        var options: [string] = []
+        for name in sorted_keys(self.function_places)
+            if starts_with(name, prefix)
+                options.add(slice(name, len(prefix), len(name)))
+            end
+        end
+        if self.program.types.is_generic(type)
+            var generic_prefix = self.program.types.entry(type).base + "."
+            for name in sorted_keys(self.generic_methods)
+                if starts_with(name, generic_prefix)
+                    options.add(slice(name, len(generic_prefix), len(name)))
+                end
+            end
+            sort_strings(options)
+        end
+        var close = closest(e.name, options)
+        self.add_at(e, self.type_name(type) + " has no function called " + e.name + ".", did_you_mean(close, ""))
+        return TYPE_UNKNOWN
+    end
+    var function = self.function_named(prefix + e.name)
+    self.note_call(function.name)
+    var wanted = len(function.inputs) - 1
+    if len(e.inputs) != wanted
+        for input in e.inputs
+            self.check_expression(input)
+        end
+        self.add_at(e, e.name + " takes " + count_words(wanted) + ", but this gives it " + string(len(e.inputs)) + ".", "")
+        return function.return_type
+    end
+    for i in 0..wanted
+        var input = function.inputs[i + 1]
+        var given = self.check_wanting(e.inputs[i], input.type)
+        if given == TYPE_NOTHING
+            self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't be an input.", "")
+        elif given != TYPE_UNKNOWN and given != input.type
+            self.add_at(self.ex(e.inputs[i]), "The input " + input.name + " must be " + self.with_article(input.type) + ", but this is " + self.with_article(given) + ".", "")
+        end
+    end
+    return function.return_type
+end
+
+func Checker.check_struct_literal(place: int): int
+    var e = self.ex(place)
+    if self.generic_structs.has(e.name)
+        if len(e.type_args) == 0
+            for value in e.inputs
+                self.check_expression(value)
+            end
+            self.add_at(e, e.name + " needs its types, like " + e.name + "<int>{...}.", "")
+            return TYPE_UNKNOWN
+        end
+        var type = self.program.types.generic(e.name, e.type_args)
+        self.check_type_exists(type, e.line, e.column, e.length, e.file)
+        if not self.is_struct(type)
+            for value in e.inputs
+                self.check_expression(value)
+            end
+            return TYPE_UNKNOWN
+        end
+        return self.check_struct_fields(place, type)
+    end
+    if self.structs.has(e.name) and len(e.type_args) > 0
+        for value in e.inputs
+            self.check_expression(value)
+        end
+        self.add_at(e, e.name + " has no types, so it can't be given any.", "")
+        return TYPE_UNKNOWN
+    end
+    if not self.structs.has(e.name)
+        for value in e.inputs
+            self.check_expression(value)
+        end
+        var options = sorted_keys(self.structs)
+        for name in sorted_keys(self.generic_structs)
+            options.add(name)
+        end
+        sort_strings(options)
+        var close = closest(e.name, options)
+        self.add_at(e, "There's no struct called " + e.name + ".", did_you_mean(close, ""))
+        return TYPE_UNKNOWN
+    end
+    return self.check_struct_fields(place, self.program.structs[self.structs.get(e.name)].type)
+end
+
+func Checker.check_struct_fields(place: int, type: int): int
+    var e = self.ex(place)
+    var fields = self.fields_of(type)
+    var given: [bool] = []
+    for i in 0..len(fields)
+        given.add(false)
+    end
+    for i in 0..len(e.inputs)
+        var number = field_number(fields, e.field_names[i])
+        e.field_numbers.add(number)
+        if number < 0
+            self.check_expression(e.inputs[i])
+            self.report_unknown_field(type, e.field_names[i], e.field_lines[i], e.field_columns[i], e.field_lengths[i], e.file)
+            continue
+        end
+        var field = fields[number]
+        if given[number]
+            self.add(e.field_lines[i], e.field_columns[i], e.field_lengths[i], e.file, "This sets " + field.name + " twice.", "")
+        end
+        given[number] = true
+        var value = self.check_wanting(e.inputs[i], field.type)
+        if value == TYPE_NOTHING
+            self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't go in a field.", "")
+        elif value != TYPE_UNKNOWN and value != field.type
+            self.add_at(self.ex(e.inputs[i]), "The field " + field.name + " must be " + self.with_article(field.type) + ", but this is " + self.with_article(value) + ".", "")
+        end
+    end
+    for i in 0..len(fields)
+        if not given[i]
+            self.add_at(e, e.name + " needs every field, but this leaves out " + fields[i].name + ".", "")
+        end
+    end
+    return type
+end
+
+func Checker.check_index(place: int): int
+    var e = self.ex(place)
+    var type = self.check_expression(e.left)
+    var index = self.check_expression(e.right)
+    if index != TYPE_INT and index != TYPE_UNKNOWN
+        self.add_at(self.ex(e.right), "An index must be an int, but this is " + self.with_article(index) + ".", "")
+    end
+    if self.is_array(type)
+        return self.element_of(type)
+    end
+    if type != TYPE_STRING and type != TYPE_UNKNOWN
+        self.add_at(self.ex(e.left), "Only strings and arrays can use [ ], but this is " + self.with_article(type) + ".", "")
+        return TYPE_UNKNOWN
+    end
+    return type
+end
+
+func Checker.check_method_call(place: int): int
+    var e = self.ex(place)
+    var type = self.check_expression(e.left)
+    if type == TYPE_UNKNOWN
+        for input in e.inputs
+            self.check_expression(input)
+        end
+        return TYPE_UNKNOWN
+    end
+    if self.is_struct(type)
+        return self.check_struct_method(place, type)
+    end
+    if not self.is_array(type)
+        self.add_at(e, self.type_name(type) + " has no function called " + e.name + ".", "")
+        for input in e.inputs
+            self.check_expression(input)
+        end
+        return TYPE_UNKNOWN
+    end
+    var item = self.element_of(type)
+    if e.name == "pop"
+        if len(e.inputs) > 0
+            self.add_at(e, "pop takes no inputs.", "")
+        end
+        return item
+    end
+    if e.name != "add"
+        self.add_at(e, "Arrays have no function called " + e.name + ".", "They have add and pop.")
+        return TYPE_UNKNOWN
+    end
+    if len(e.inputs) != 1
+        self.add_at(e, "add takes 1 input, but this gives it " + string(len(e.inputs)) + ".", "")
+        return TYPE_NOTHING
+    end
+    var given = self.check_wanting(e.inputs[0], item)
+    if given == TYPE_NOTHING
+        self.add_at(self.ex(e.inputs[0]), "This doesn't give back a value, so it can't be an input.", "")
+    elif given != TYPE_UNKNOWN and given != item
+        self.add_at(self.ex(e.inputs[0]), "This array holds " + self.with_article(item) + ", but this is " + self.with_article(given) + ".", "")
+    end
+    return TYPE_NOTHING
+end
+
+func Checker.check_length(place: int): int
+    var e = self.ex(place)
+    var type = self.check_expression(e.left)
+    if type == TYPE_NOTHING
+        self.add_at(self.ex(e.left), "This doesn't give back a value, so it can't be used here.", "")
+    elif type != TYPE_STRING and type != TYPE_UNKNOWN and not self.is_array(type)
+        self.add_at(self.ex(e.left), "len needs a string or an array, but this is " + self.with_article(type) + ".", "")
+    end
+    return TYPE_INT
+end
+
+func Checker.check_convert(place: int): int
+    var e = self.ex(place)
+    var type = self.check_expression(e.left)
+    var target = e.convert_to
+    var word = self.type_name(target)
+    var left = self.ex(e.left)
+    if type == TYPE_NOTHING
+        self.add_at(left, "This doesn't give back a value, so it can't be converted.", "")
+    elif type == target
+        self.add_at(left, "This is already " + self.with_article(target) + ", so it doesn't need " + word + "( ).", "")
+    elif type != TYPE_UNKNOWN and target != TYPE_STRING and not is_number(type) and type != TYPE_STRING
+        self.add_at(left, word + "( ) can't convert " + self.with_article(type) + ".", "")
+    end
+    return target
+end
+
+func Checker.check_needs_bool(place: int, word: string)
+    var type = self.check_expression(place)
+    var value = self.ex(place)
+    if type == TYPE_NOTHING
+        self.add_at(value, "This doesn't give back a value, so it can't be used here.", "")
+    elif type != TYPE_BOOL and type != TYPE_UNKNOWN
+        var hint = ""
+        if type == TYPE_INT
+            hint = "Try comparing it, like x != 0."
+        end
+        self.add_at(value, word + " needs a bool, but this is " + self.with_article(type) + ".", hint)
+    end
+end
+
+func Checker.check_binary(place: int): int
+    var e = self.ex(place)
+    if e.op == OP_AND or e.op == OP_OR
+        var word = "or"
+        if e.op == OP_AND
+            word = "and"
+        end
+        self.check_needs_bool(e.left, word)
+        self.check_needs_bool(e.right, word)
+        return TYPE_BOOL
+    end
+    var left = self.check_expression(e.left)
+    var right = self.check_expression(e.right)
+    if (e.op == OP_DIVIDE or e.op == OP_REMAINDER) and self.is_literal_zero(e.right)
+        self.add_at(self.ex(e.right), "This divides by zero, which has no answer.", "")
+    end
+    if left == TYPE_NOTHING or right == TYPE_NOTHING
+        var side = e.right
+        if left == TYPE_NOTHING
+            side = e.left
+        end
+        self.add_at(self.ex(side), "This doesn't give back a value, so it can't be used here.", "")
+        return TYPE_UNKNOWN
+    end
+    var is_equality = e.op == OP_EQUAL or e.op == OP_NOT_EQUAL
+    var is_comparison = is_equality or self.is_order_comparison(place)
+    var joins_strings = e.op == OP_ADD and (left == TYPE_STRING or right == TYPE_STRING)
+    var answer = TYPE_INT
+    if is_comparison
+        answer = TYPE_BOOL
+    elif joins_strings
+        answer = TYPE_STRING
+    elif left == TYPE_FLOAT or right == TYPE_FLOAT
+        answer = TYPE_FLOAT
+    end
+    if left == TYPE_UNKNOWN or right == TYPE_UNKNOWN
+        return answer
+    end
+    if is_equality
+        if left == right and self.is_array(left)
+            self.add_at(e, "Arrays can't be compared with == or !=.", "Compare their items in a loop.")
+        end
+        if left == right and self.is_struct(left)
+            self.add_at(e, "Structs can't be compared with == or !=.", "Compare their fields.")
+        end
+        if left != right
+            var hint = ""
+            if is_number(left) and is_number(right)
+                hint = MATCH_NUMBERS
+            end
+            self.add_at(e, "== and != need both sides to be the same type, but this compares " + self.type_name(left) + " and " + self.type_name(right) + ".", hint)
+        end
+        return TYPE_BOOL
+    end
+    if joins_strings
+        var left_is_wrong = left != TYPE_STRING
+        if left_is_wrong or right != TYPE_STRING
+            var side = e.right
+            var wrong = right
+            if left_is_wrong
+                side = e.left
+                wrong = left
+            end
+            self.add_at(self.ex(side), "+ can only join a string to another string, but this is " + self.with_article(wrong) + ".", "Use string(x) to convert it.")
+        end
+        return TYPE_STRING
+    end
+    if self.is_order_comparison(place) and self.is_order_comparison(e.left)
+        self.add_at(e, "This can't compare in a chain, because the first comparison gives a bool.", "Compare one pair at a time, in separate steps.")
+        return TYPE_BOOL
+    end
+    if is_number(left) and is_number(right) and left != right
+        self.add_at(e, "This mixes an int and a float, which Jamo doesn't do by itself.", MATCH_NUMBERS)
+    end
+    if not is_number(left)
+        self.add_at(self.ex(e.left), "This operator needs a number here, but this is " + self.with_article(left) + ".", "")
+    end
+    if not is_number(right)
+        self.add_at(self.ex(e.right), "This operator needs a number here, but this is " + self.with_article(right) + ".", "")
+    end
+    return answer
+end
+
+func Checker.check_call(place: int): int
+    var e = self.ex(place)
+    if e.name == "callback" and self.find_variable(e.name).slot == -1
+        return self.check_callback(place)
+    end
+    if self.generic_functions.has(e.name) and self.find_variable(e.name).slot == -1
+        return self.check_generic_call(place, self.generic_functions.get(e.name))
+    end
+    if len(e.type_args) > 0 and self.find_variable(e.name).slot == -1
+        for input in e.inputs
+            self.check_expression(input)
+        end
+        if self.has_function(e.name) or is_builtin(e.name)
+            self.add_at(e, e.name + " has no types, so it can't be given any.", "")
+        else
+            self.report_unknown_function(e)
+        end
+        return TYPE_UNKNOWN
+    end
+    var given: [int] = []
+    var has_named = self.has_function(e.name)
+    for i in 0..len(e.inputs)
+        var wanted = TYPE_NOTHING
+        if has_named
+            var named = self.function_named(e.name)
+            if i < len(named.inputs)
+                wanted = named.inputs[i].type
+            end
+        end
+        given.add(self.check_wanting(e.inputs[i], wanted))
+    end
+    if self.find_variable(e.name).slot != -1
+        var hint = ""
+        if len(e.type_args) > 0
+            hint = "A < with a > and ( after it reads as types, like first<int>(...). To compare, take away the ( ) after the >."
+        end
+        self.add_at(e, e.name + " is a variable, so it can't be called like a function.", hint)
+        return TYPE_UNKNOWN
+    end
+    if e.name == "hash_of"
+        return self.check_hash_of(place, given)
+    end
+    if is_builtin(e.name)
+        return self.check_builtin(place, given)
+    end
+    if not self.has_function(e.name)
+        self.report_unknown_function(e)
+        return TYPE_UNKNOWN
+    end
+    var function = self.function_named(e.name)
+    self.note_call(function.name)
+    if len(given) != len(function.inputs)
+        self.add_at(e, function.name + " takes " + count_words(len(function.inputs)) + ", but this gives it " + string(len(given)) + ".", "")
+        return function.return_type
+    end
+    for i in 0..len(given)
+        if given[i] == TYPE_NOTHING
+            self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't be an input.", "")
+        elif given[i] != TYPE_UNKNOWN and given[i] != function.inputs[i].type
+            self.add_at(self.ex(e.inputs[i]), "The input " + function.inputs[i].name + " must be " + self.with_article(function.inputs[i].type) + ", but this is " + self.with_article(given[i]) + ".", "")
+        end
+    end
+    return function.return_type
+end
+
+# callback(f) gives Windows the address of a Jamo function to call back
+func Checker.check_callback(place: int): int
+    var e = self.ex(place)
+    e.kind = EX_BUILTIN_CALL
+    if len(e.inputs) != 1 or self.ex(e.inputs[0]).kind != EX_NAME
+        self.add_at(e, "callback takes the name of one function.", "Like this: callback(on_message)")
+        return TYPE_INT
+    end
+    var input = self.ex(e.inputs[0])
+    var name = input.name
+    if not self.has_function(name) or self.function_named(name).dll != ""
+        self.add_at(input, "There's no Jamo function called " + name + ".", "")
+        return TYPE_INT
+    end
+    var function = self.function_named(name)
+    if len(function.inputs) > MOST_CALLBACK_INPUTS
+        self.add_at(input, name + " takes " + count_words(len(function.inputs)) + ", but a callback can take up to 4.", "")
+    end
+    for argument in function.inputs
+        if argument.type != TYPE_INT and argument.type != TYPE_BOOL
+            self.add_at(input, "A callback's inputs must be ints or bools, but " + argument.name + " is " + self.with_article(argument.type) + ".", "")
+        end
+    end
+    if function.return_type != TYPE_NOTHING and function.return_type != TYPE_INT and function.return_type != TYPE_BOOL
+        self.add_at(input, "A callback can answer with int or bool, but " + name + " answers with " + self.with_article(function.return_type) + ".", "")
+    end
+    e.text = name
+    e.inputs = []
+    return TYPE_INT
+end
+
+# hash_of(key) gives a number made from a key, for hash tables like Map. It's never below 0
+func Checker.check_hash_of(place: int, given: [int]): int
+    var e = self.ex(place)
+    e.kind = EX_BUILTIN_CALL
+    if len(given) != 1
+        self.add_at(e, "hash_of takes 1 input, but this gives it " + string(len(given)) + ".", "")
+    elif given[0] != TYPE_INT and given[0] != TYPE_STRING and given[0] != TYPE_BOOL and given[0] != TYPE_UNKNOWN and not self.is_enum(given[0])
+        self.add_at(self.ex(e.inputs[0]), "hash_of takes an int, string, bool or enum, but this is " + self.with_article(given[0]) + ".", "")
+    end
+    return TYPE_INT
+end
+
+func Checker.check_builtin(place: int, given: [int]): int
+    var e = self.ex(place)
+    e.kind = EX_BUILTIN_CALL
+    var wanted: [string] = []
+    var answer = TYPE_STRING
+    var types: [int] = []
+    var name = e.name
+    if name == "args"
+        answer = self.program.types.array_of(TYPE_STRING)
+    end
+    if name == "read_file" or name == "exists"
+        wanted = ["path"]
+    end
+    if name == "write_file"
+        wanted = ["path", "text"]
+        answer = TYPE_NOTHING
+    end
+    if name == "exists"
+        answer = TYPE_BOOL
+    end
+    if name == "byte"
+        wanted = ["text", "index"]
+        types = [TYPE_STRING, TYPE_INT]
+        answer = TYPE_INT
+    end
+    if name == "fail"
+        wanted = ["message"]
+        answer = TYPE_NOTHING
+    end
+    if name == "wide"
+        wanted = ["text"]
+        answer = TYPE_INT
+    end
+    if name == "memory_text"
+        wanted = ["address", "bytes"]
+        types = [TYPE_INT, TYPE_INT]
+        answer = TYPE_STRING
+    end
+    if name == "memory"
+        wanted = ["bytes"]
+        types = [TYPE_INT]
+        answer = TYPE_INT
+    end
+    var is_float = len(name) > 7 and slice(name, len(name) - 3, len(name) - 2) == "f"
+    if starts_with(name, "peek_")
+        wanted = ["address", "offset"]
+        types = [TYPE_INT, TYPE_INT]
+        answer = TYPE_INT
+        if is_float
+            answer = TYPE_FLOAT
+        end
+    end
+    if starts_with(name, "poke_")
+        wanted = ["address", "offset", "value"]
+        var value_type = TYPE_INT
+        if is_float
+            value_type = TYPE_FLOAT
+        end
+        types = [TYPE_INT, TYPE_INT, value_type]
+        answer = TYPE_NOTHING
+    end
+    if len(given) != len(wanted)
+        self.add_at(e, name + " takes " + count_words(len(wanted)) + ", but this gives it " + string(len(given)) + ".", "")
+        return answer
+    end
+    for i in 0..len(given)
+        var type = TYPE_STRING
+        if len(types) > 0
+            type = types[i]
+        end
+        if given[i] != type and given[i] != TYPE_UNKNOWN
+            self.add_at(self.ex(e.inputs[i]), "The input " + wanted[i] + " must be " + self.with_article(type) + ", but this is " + self.with_article(given[i]) + ".", "")
+        end
+    end
+    return answer
+end
+
+# --- Names ---
+
+func Checker.mark_used(name: string)
+    var i = len(self.scopes) - 1
+    while i >= 0
+        var scope = self.scopes[i]
+        if scope.places.has(name)
+            scope.variables[scope.places.get(name)].used = true
+            return
+        end
+        i -= 1
+    end
+end
+
+# The nearest variable with this name, or one with slot -1 when there's none
+func Checker.find_variable(name: string): Variable
+    var i = len(self.scopes) - 1
+    while i >= 0
+        var scope = self.scopes[i]
+        if scope.places.has(name)
+            return scope.variables[scope.places.get(name)]
+        end
+        i -= 1
+    end
+    if self.global_places.has(name)
+        return self.global_vars[self.global_places.get(name)]
+    end
+    return Variable{type: TYPE_NOTHING, slot: -1, read_only: false, used: false, warn_if_unused: false, line: 0, column: 0, length: 1, file: -1}
+end
+
+func Checker.report_unknown_name(name: string, line: int, column: int, length: int, file: int, fallback: string)
+    var options: [string] = []
+    for scope in self.scopes
+        var names: [string] = []
+        for name in scope.names
+            names.add(name)
+        end
+        sort_strings(names)
+        for item in names
+            options.add(item)
+        end
+    end
+    for item in sorted_keys(self.global_places)
+        options.add(item)
+    end
+    var close = closest(name, options)
+    self.add(line, column, length, file, "nothing has this name: " + name, did_you_mean(close, fallback))
+end
+
+func Checker.report_unknown_function(e: Expr)
+    var options: [string] = []
+    for name in self.function_places.key_list()
+        if not contains(name, "<")
+            options.add(name)
+        end
+    end
+    for name in self.generic_functions.key_list()
+        options.add(name)
+    end
+    sort_strings(options)
+    var close = closest(e.name, options)
+    self.add_at(e, "There's no function called " + e.name + ".", did_you_mean(close, ""))
+end

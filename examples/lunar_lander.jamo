@@ -1,0 +1,70 @@
+# Lunar Lander: burn your engine each turn to land softly before the fuel runs out.
+
+func digit_value(letter: string): int
+    var digits = "0123456789"
+    for i in 0..10
+        if digits[i] == letter
+            return i
+        end
+    end
+    return -1
+end
+
+# Anything that isn't a single digit counts as 0, so a typo can't crash the game
+func read_burn(fuel: int): int
+    var text = input()
+    if len(text) != 1
+        return 0
+    end
+    var burn = digit_value(text)
+    if burn < 0
+        return 0
+    end
+    if burn > fuel
+        return fuel
+    end
+    return burn
+end
+
+func picture(height: float): string
+    var spaces = int(height / 100.0 * 40.0)
+    if spaces < 0
+        spaces = 0
+    end
+    var line = "  |"
+    for i in 0..spaces
+        line = line + " "
+    end
+    return line + "A"
+end
+
+func main()
+    var height = 100.0
+    var speed = 0.0
+    var fuel = 60
+    var turn = 0
+    print("LUNAR LANDER")
+    print("Each turn, type how hard to burn the engine, from 0 to 9.")
+    print("Land at a speed of 3 or less. Fuel left gives you points.")
+    print("")
+    while height > 0.0
+        turn += 1
+        print(f"Turn {turn}  height {int(height)}  speed {int(speed)}  fuel {fuel}")
+        print(picture(height))
+        var burn = read_burn(fuel)
+        fuel -= burn
+        speed = speed + 1.0 - float(burn) * 0.5
+        height = height - speed
+    end
+    print("")
+    print(f"Touchdown at speed {speed}!")
+    if speed <= 1.0
+        print(f"Perfect landing! Score: {fuel * 10 + 500}")
+    elif speed <= 3.0
+        print(f"Safe landing. Score: {fuel * 10 + 100}")
+    elif speed <= 6.0
+        print("Rough landing. The rocket is dented, but you're alive.")
+    else
+        print("CRASH! There's a new crater on the Moon.")
+    end
+end

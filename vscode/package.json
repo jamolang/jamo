@@ -1,0 +1,34 @@
+{
+    "name": "jamo",
+    "displayName": "Jamo",
+    "description": "Colors and red underlines for the Jamo language.",
+    "version": "0.1.0",
+    "publisher": "jamolang",
+    "engines": { "vscode": "^1.75.0" },
+    "categories": ["Programming Languages"],
+    "main": "./extension.js",
+    "activationEvents": ["onLanguage:jamo"],
+    "contributes": {
+        "languages": [{
+            "id": "jamo",
+            "aliases": ["Jamo"],
+            "extensions": [".jamo"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "jamo",
+            "scopeName": "source.jamo",
+            "path": "./jamo.tmLanguage.json"
+        }],
+        "configuration": {
+            "title": "Jamo",
+            "properties": {
+                "jamo.path": {
+                    "type": "string",
+                    "default": "jamo",
+                    "description": "Where jamo.exe is. Just jamo works if it's on your PATH."
+                }
+            }
+        }
+    }
+}

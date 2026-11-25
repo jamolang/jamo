@@ -1,0 +1,65 @@
+struct Item
+    id: int
+    tags: [string]
+end
+
+struct Box
+    items: [Item]
+    children: [Box]
+end
+
+func heal_all(items: [Item])
+    for item in items
+        item.id += 1000
+    end
+end
+
+func first_of(items: [Item]): Item
+    return items[0]
+end
+
+func main()
+    var items: [Item] = []
+    items.add(Item{id: 0, tags: []})
+    var held = items[0]
+    for i in 1..4000
+        items.add(Item{id: i, tags: []})
+    end
+    held.id = 55
+    print(items[0].id)
+    items[0].id = 66
+    print(held.id)
+    print(len(items))
+
+    items[3999].tags.add("last")
+    var last = items.pop()
+    print(last)
+    print(len(items))
+    last.id = -1
+    print(items[3998].id)
+
+    var shared = items
+    shared[1].id = 123
+    print(items[1].id)
+    heal_all(items)
+    print(items[1].id)
+    print(first_of(items).id)
+    first_of(items).id = 5
+    print(items[0].id)
+
+    var sum = 0
+    for item in items
+        sum += item.id % 3
+    end
+    print(sum)
+
+    var box = Box{items: [Item{id: 1, tags: ["a", "b"]}], children: []}
+    box.children.add(Box{items: [], children: []})
+    box.children[0].items.add(Item{id: 2, tags: []})
+    box.children[0].items[0].tags.add("deep")
+    print(box)
+
+    box.children.add(box)
+    print(box)
+    print(len(box.children[1].children[1].children))
+end

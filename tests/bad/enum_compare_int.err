@@ -1,0 +1,3 @@
+enum_compare_int.jamo line 7: == and != need both sides to be the same type, but this compares Mood and int.
+        print(Mood.CALM == 0)
+              ^^^^^^^^^^^^^^

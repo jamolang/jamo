@@ -1,0 +1,3 @@
+struct_wrong_field_type.jamo line 6: The field health must be an int, but this is a float.
+        print(Enemy{health: 1.5})
+                            ^^^

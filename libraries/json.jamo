@@ -1,0 +1,626 @@
+# json: reads and writes JSON, the text format most save files and web services use. use "json.jamo"
+#
+# A Json value is null, a bool, a number, text, a list or an object. Objects keep their keys in the order they
+# were added. parse_json never stops the program: when the text isn't JSON, the value it gives back has an error
+# that says what's wrong and on which line.
+
+use "text.jamo"
+use "builder.jamo"
+
+const JSON_MOST_DEPTH = 500
+
+enum JsonKind
+    NULL
+    BOOL
+    NUMBER
+    TEXT
+    LIST
+    OBJECT
+end
+
+struct Json
+    kind: JsonKind
+    truth: bool
+    number: float
+    text: string
+    items: [Json]
+    keys: [string]
+    values: [Json]
+    error: string
+end
+
+# --- Making values ---
+
+func json_null(): Json
+    return Json{kind: JsonKind.NULL, truth: false, number: 0.0, text: "", items: [], keys: [], values: [], error: ""}
+end
+
+func json_bool(value: bool): Json
+    var made = json_null()
+    made.kind = JsonKind.BOOL
+    made.truth = value
+    return made
+end
+
+func json_number(value: float): Json
+    var made = json_null()
+    made.kind = JsonKind.NUMBER
+    made.number = value
+    return made
+end
+
+func json_int(value: int): Json
+    return json_number(float(value))
+end
+
+func json_text(value: string): Json
+    var made = json_null()
+    made.kind = JsonKind.TEXT
+    made.text = value
+    return made
+end
+
+func json_list(): Json
+    var made = json_null()
+    made.kind = JsonKind.LIST
+    return made
+end
+
+func json_object(): Json
+    var made = json_null()
+    made.kind = JsonKind.OBJECT
+    return made
+end
+
+# --- Using values ---
+
+# Adds an item to the end of a list
+func Json.add(item: Json)
+    if self.kind != JsonKind.LIST
+        fail("add only works on a JSON list. Make one with json_list().")
+    end
+    self.items.add(item)
+end
+
+# Sets a key in an object, replacing what it had
+func Json.set(key: string, value: Json)
+    if self.kind != JsonKind.OBJECT
+        fail("set only works on a JSON object. Make one with json_object().")
+    end
+    for i in 0..len(self.keys)
+        if self.keys[i] == key
+            self.values[i] = value
+            return
+        end
+    end
+    self.keys.add(key)
+    self.values.add(value)
+end
+
+func Json.has(key: string): bool
+    return self.kind == JsonKind.OBJECT and index_of_key(self.keys, key) >= 0
+end
+
+func index_of_key(keys: [string], key: string): int
+    for i in 0..len(keys)
+        if keys[i] == key
+            return i
+        end
+    end
+    return -1
+end
+
+# An object's value for a key, or null when it has no such key
+func Json.get(key: string): Json
+    if self.kind != JsonKind.OBJECT
+        return json_null()
+    end
+    var at = index_of_key(self.keys, key)
+    if at < 0
+        return json_null()
+    end
+    return self.values[at]
+end
+
+# A list's item at a place, counting from 0, or null when there's nothing there
+func Json.at(place: int): Json
+    if self.kind != JsonKind.LIST or place < 0 or place >= len(self.items)
+        return json_null()
+    end
+    return self.items[place]
+end
+
+# How many items a list has, or keys an object has
+func Json.size(): int
+    if self.kind == JsonKind.LIST
+        return len(self.items)
+    end
+    return len(self.keys)
+end
+
+func Json.is_null(): bool
+    return self.kind == JsonKind.NULL
+end
+
+# The number as an int, dropping any decimals. Anything that isn't a number gives 0
+func Json.as_int(): int
+    if self.kind != JsonKind.NUMBER or not (self.number > -9223372036854775808.0 and self.number < 9223372036854775807.0)
+        return 0
+    end
+    return int(self.number)
+end
+
+# --- Writing ---
+
+func json_escape(text: string, out: TextBuilder)
+    out.add("\"")
+    for i in 0..len(text)
+        var code = byte(text, i)
+        if code == 34
+            out.add("\\\"")
+        elif code == 92
+            out.add("\\\\")
+        elif code == 10
+            out.add("\\n")
+        elif code == 13
+            out.add("\\r")
+        elif code == 9
+            out.add("\\t")
+        elif code < 32
+            var digits = "0123456789abcdef"
+            out.add("\\u00")
+            out.add(digits[code / 16])
+            out.add(digits[code % 16])
+        else
+            out.add(text[i])
+        end
+    end
+    out.add("\"")
+end
+
+# Whole numbers are written without decimals. Others show up to 6 decimals, the way Jamo shows floats.
+# JSON has no NaN or infinity, so they're written as null
+func json_number_text(value: float): string
+    # value - value is NaN exactly when value is NaN or infinite
+    if value != value or value - value != 0.0
+        return "null"
+    end
+    if value > -1000000000000000.0 and value < 1000000000000000.0 and float(int(value)) == value
+        return string(int(value))
+    end
+    return string(value)
+end
+
+func json_write(value: Json, out: TextBuilder, pretty: bool, depth: int)
+    match value.kind
+        case JsonKind.NULL
+            out.add("null")
+        case JsonKind.BOOL
+            out.add(string(value.truth))
+        case JsonKind.NUMBER
+            out.add(json_number_text(value.number))
+        case JsonKind.TEXT
+            json_escape(value.text, out)
+        case JsonKind.LIST
+            if len(value.items) == 0
+                out.add("[]")
+                return
+            end
+            out.add("[")
+            for i in 0..len(value.items)
+                if i > 0
+                    out.add(",")
+                end
+                json_new_line(out, pretty, depth + 1)
+                json_write(value.items[i], out, pretty, depth + 1)
+            end
+            json_new_line(out, pretty, depth)
+            out.add("]")
+        case JsonKind.OBJECT
+            if len(value.keys) == 0
+                out.add("{}")
+                return
+            end
+            out.add("{")
+            for i in 0..len(value.keys)
+                if i > 0
+                    out.add(",")
+                end
+                json_new_line(out, pretty, depth + 1)
+                json_escape(value.keys[i], out)
+                out.add(":")
+                if pretty
+                    out.add(" ")
+                end
+                json_write(value.values[i], out, pretty, depth + 1)
+            end
+            json_new_line(out, pretty, depth)
+            out.add("}")
+    end
+end
+
+func json_new_line(out: TextBuilder, pretty: bool, depth: int)
+    if pretty
+        out.add("\n")
+        out.add(repeat("  ", depth))
+    end
+end
+
+# The value as JSON on one line
+func to_json(value: Json): string
+    var out = new_builder()
+    json_write(value, out, false, 0)
+    return out.text()
+end
+
+# The value as JSON, one item a line and indented, for files people may read
+func to_json_pretty(value: Json): string
+    var out = new_builder()
+    json_write(value, out, true, 0)
+    return out.text()
+end
+
+# --- Reading ---
+
+struct JsonReader
+    text: string
+    at: int
+    line: int
+    error: string
+end
+
+func JsonReader.fail_here(words: string)
+    if self.error == ""
+        self.error = f"line {self.line}: {words}"
+    end
+end
+
+func JsonReader.next_byte(): int
+    if self.at >= len(self.text)
+        return -1
+    end
+    return byte(self.text, self.at)
+end
+
+func JsonReader.skip_space()
+    while self.at < len(self.text)
+        var code = byte(self.text, self.at)
+        if code == 10
+            self.line += 1
+        elif code != 32 and code != 9 and code != 13
+            return
+        end
+        self.at += 1
+    end
+end
+
+func JsonReader.word(text: string): bool
+    if slice_or_empty(self.text, self.at, self.at + len(text)) == text
+        self.at += len(text)
+        return true
+    end
+    return false
+end
+
+func slice_or_empty(text: string, from: int, to: int): string
+    if to > len(text)
+        return ""
+    end
+    return slice(text, from, to)
+end
+
+func JsonReader.read_value(depth: int): Json
+    if depth > JSON_MOST_DEPTH
+        self.fail_here("lists and objects go too deep, past 500 inside each other.")
+        return json_null()
+    end
+    self.skip_space()
+    var code = self.next_byte()
+    if code == -1
+        self.fail_here("the text ended where a value was expected.")
+        return json_null()
+    end
+    if code == 123
+        return self.read_object(depth)
+    end
+    if code == 91
+        return self.read_list(depth)
+    end
+    if code == 34
+        return json_text(self.read_text())
+    end
+    if code == 45 or (code >= 48 and code <= 57)
+        return self.read_number()
+    end
+    if self.word("true")
+        return json_bool(true)
+    end
+    if self.word("false")
+        return json_bool(false)
+    end
+    if self.word("null")
+        return json_null()
+    end
+    self.fail_here(f"I didn't expect {self.text[self.at]} here.")
+    return json_null()
+end
+
+func JsonReader.read_list(depth: int): Json
+    var list = json_list()
+    self.at += 1
+    self.skip_space()
+    if self.next_byte() == 93
+        self.at += 1
+        return list
+    end
+    while self.error == ""
+        list.items.add(self.read_value(depth + 1))
+        self.skip_space()
+        var code = self.next_byte()
+        self.at += 1
+        if code == 93
+            return list
+        end
+        if code != 44
+            self.at -= 1
+            self.fail_here("a list needs a comma between items, or ] at its end.")
+        end
+    end
+    return list
+end
+
+func JsonReader.read_object(depth: int): Json
+    var object = json_object()
+    self.at += 1
+    self.skip_space()
+    if self.next_byte() == 125
+        self.at += 1
+        return object
+    end
+    while self.error == ""
+        self.skip_space()
+        if self.next_byte() != 34
+            self.fail_here("an object's keys must be text in double quotes.")
+            return object
+        end
+        var key = self.read_text()
+        self.skip_space()
+        if self.next_byte() != 58
+            self.fail_here("a key needs a : before its value.")
+            return object
+        end
+        self.at += 1
+        object.set(key, self.read_value(depth + 1))
+        self.skip_space()
+        var code = self.next_byte()
+        self.at += 1
+        if code == 125
+            return object
+        end
+        if code != 44
+            self.at -= 1
+            self.fail_here("an object needs a comma between keys, or } at its end.")
+        end
+    end
+    return object
+end
+
+func json_hex(code: int): int
+    if code >= 48 and code <= 57
+        return code - 48
+    end
+    if code >= 97 and code <= 102
+        return code - 87
+    end
+    if code >= 65 and code <= 70
+        return code - 55
+    end
+    return -1
+end
+
+func JsonReader.read_hex4(): int
+    if self.at + 4 > len(self.text)
+        self.fail_here("\\u needs 4 hex digits after it.")
+        return 0
+    end
+    var value = 0
+    for i in 0..4
+        var digit = json_hex(byte(self.text, self.at + i))
+        if digit < 0
+            self.fail_here("\\u needs 4 hex digits after it.")
+            return 0
+        end
+        value = value * 16 + digit
+    end
+    self.at += 4
+    return value
+end
+
+func json_add_utf8(out: TextBuilder, code: int)
+    var place = memory(4)
+    var size = 0
+    if code < 128
+        poke_u8(place, 0, code)
+        size = 1
+    elif code < 2048
+        poke_u8(place, 0, 192 + code / 64)
+        poke_u8(place, 1, 128 + code % 64)
+        size = 2
+    elif code < 65536
+        poke_u8(place, 0, 224 + code / 4096)
+        poke_u8(place, 1, 128 + code / 64 % 64)
+        poke_u8(place, 2, 128 + code % 64)
+        size = 3
+    else
+        poke_u8(place, 0, 240 + code / 262144)
+        poke_u8(place, 1, 128 + code / 4096 % 64)
+        poke_u8(place, 2, 128 + code / 64 % 64)
+        poke_u8(place, 3, 128 + code % 64)
+        size = 4
+    end
+    out.add(memory_text(place, size))
+end
+
+# Reads text in double quotes, starting at the opening quote
+func JsonReader.read_text(): string
+    var out = new_builder()
+    self.at += 1
+    while self.at < len(self.text)
+        var code = byte(self.text, self.at)
+        if code == 34
+            self.at += 1
+            return out.text()
+        end
+        if code < 32
+            self.fail_here("text can't have a line break or tab in it. Write them as \\n and \\t.")
+            return out.text()
+        end
+        if code != 92
+            out.add(self.text[self.at])
+            self.at += 1
+            continue
+        end
+        self.at += 1
+        var escape = self.next_byte()
+        self.at += 1
+        if escape == 34
+            out.add("\"")
+        elif escape == 92
+            out.add("\\")
+        elif escape == 47
+            out.add("/")
+        elif escape == 98
+            out.add(memory_text(json_byte(8), 1))
+        elif escape == 102
+            out.add(memory_text(json_byte(12), 1))
+        elif escape == 110
+            out.add("\n")
+        elif escape == 114
+            out.add("\r")
+        elif escape == 116
+            out.add("\t")
+        elif escape == 117
+            var unit = self.read_hex4()
+            # Two \\u escapes in a row can make one letter past the first 65,536, like an emoji
+            if unit >= 55296 and unit < 56320 and slice_or_empty(self.text, self.at, self.at + 2) == "\\u"
+                self.at += 2
+                var low = self.read_hex4()
+                if low >= 56320 and low < 57344
+                    unit = 65536 + (unit - 55296) * 1024 + (low - 56320)
+                else
+                    json_add_utf8(out, unit)
+                    unit = low
+                end
+            end
+            json_add_utf8(out, unit)
+        else
+            self.at -= 1
+            self.fail_here("that isn't one of JSON's escapes: \\\" \\\\ \\/ \\b \\f \\n \\r \\t or \\u.")
+            return out.text()
+        end
+    end
+    self.fail_here("text was never closed with a double quote.")
+    return out.text()
+end
+
+func json_byte(value: int): int
+    var place = memory(1)
+    poke_u8(place, 0, value)
+    return place
+end
+
+func is_digit_code(code: int): bool
+    return code >= 48 and code <= 57
+end
+
+# Reads a number. The exponent moves the decimal point in the digits themselves, so the answer rounds exactly
+func JsonReader.read_number(): Json
+    var start = self.at
+    var negative = false
+    if self.next_byte() == 45
+        negative = true
+        self.at += 1
+    end
+    var whole_start = self.at
+    while is_digit_code(self.next_byte())
+        self.at += 1
+    end
+    var whole = slice(self.text, whole_start, self.at)
+    if whole == "" or (len(whole) > 1 and byte(whole, 0) == 48)
+        self.fail_here("a number needs digits, and can't start with 0 unless it's 0 itself.")
+        return json_null()
+    end
+    var parts = ""
+    if self.next_byte() == 46
+        self.at += 1
+        var parts_start = self.at
+        while is_digit_code(self.next_byte())
+            self.at += 1
+        end
+        parts = slice(self.text, parts_start, self.at)
+        if parts == ""
+            self.fail_here("a number's dot needs digits after it.")
+            return json_null()
+        end
+    end
+    var exponent = 0
+    var code = self.next_byte()
+    if code == 101 or code == 69
+        self.at += 1
+        var exponent_negative = false
+        if self.next_byte() == 43 or self.next_byte() == 45
+            exponent_negative = self.next_byte() == 45
+            self.at += 1
+        end
+        var exponent_start = self.at
+        while is_digit_code(self.next_byte())
+            self.at += 1
+        end
+        var exponent_text = slice(self.text, exponent_start, self.at)
+        if exponent_text == "" or len(exponent_text) > 5
+            self.fail_here("a number's e needs up to 5 digits after it.")
+            return json_null()
+        end
+        exponent = int(exponent_text)
+        if exponent_negative
+            exponent = 0 - exponent
+        end
+    end
+    # Moves the dot: 1.5e3 is the digits 15 with the dot 3 places further right, so 1500
+    var digits = whole + parts
+    var point = len(whole) + exponent
+    var text = ""
+    if point <= 0
+        text = "0." + repeat("0", 0 - point) + digits
+    elif point >= len(digits)
+        text = digits + repeat("0", point - len(digits))
+    else
+        text = slice(digits, 0, point) + "." + slice(digits, point, len(digits))
+    end
+    if not is_float(text)
+        self.at = start
+        self.fail_here("this number is too large or too small for a float.")
+        return json_null()
+    end
+    var value = float(text)
+    if negative
+        value = 0.0 - value
+    end
+    return json_number(value)
+end
+
+# Reads JSON text. When it isn't JSON, the answer is null with an error saying why, and the line
+func parse_json(text: string): Json
+    var reader = JsonReader{text: text, at: 0, line: 1, error: ""}
+    var value = reader.read_value(0)
+    reader.skip_space()
+    if reader.error == "" and reader.at < len(text)
+        reader.fail_here("there's more after the end of the JSON value.")
+    end
+    if reader.error != ""
+        var failed = json_null()
+        failed.error = reader.error
+        return failed
+    end
+    return value
+end

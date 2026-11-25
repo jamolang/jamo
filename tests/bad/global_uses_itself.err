@@ -1,0 +1,3 @@
+global_uses_itself.jamo line 1: a can't use itself while it's being set up.
+    var a = a + 1
+            ^

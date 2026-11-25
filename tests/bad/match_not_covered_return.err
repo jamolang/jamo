@@ -1,0 +1,4 @@
+match_not_covered_return.jamo line 6: f must return an int on every path, but it can reach its end without one.
+    func f(m: Mood): int
+         ^
+Add a return before its end. A while doesn't count, and an if needs an else that returns too.

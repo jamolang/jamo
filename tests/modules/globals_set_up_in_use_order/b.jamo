@@ -1,0 +1,8 @@
+# b uses a, so a is set up before b
+use "a.jamo"
+
+var from_b = from_a * 10
+
+func b_total(): int
+    return from_b + len(a_names)
+end

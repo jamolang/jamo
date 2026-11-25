@@ -1,0 +1,4 @@
+global_used_before_set_up.jamo line 1: b isn't set up yet here.
+    var a = b + 1
+            ^
+Variables outside functions are set up in order, top to bottom, so move b above this one.

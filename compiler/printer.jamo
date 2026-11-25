@@ -1,0 +1,201 @@
+# Prints a program's tree, one item a line, the same way as 'jamo ast' and 'jamo checked' do, so the
+# compiler written in Jamo can be compared with the C++ one.
+
+use "ast.jamo"
+use "builder.jamo"
+use "text.jamo"
+
+struct TreePrinter
+    program: Program
+    out: TextBuilder
+    checked: bool
+end
+
+# \, new lines, tabs and carriage returns as escapes, so each item fits on one line
+func escaped(text: string): string
+    var plain = true
+    for i in 0..len(text)
+        var letter = byte(text, i)
+        if letter == 92 or letter == 10 or letter == 9 or letter == 13
+            plain = false
+            break
+        end
+    end
+    if plain
+        return text
+    end
+    var out = new_builder()
+    for i in 0..len(text)
+        var letter = byte(text, i)
+        if letter == 92
+            out.add("\\\\")
+        elif letter == 10
+            out.add("\\n")
+        elif letter == 9
+            out.add("\\t")
+        elif letter == 13
+            out.add("\\r")
+        else
+            out.add(text[i])
+        end
+    end
+    return out.text()
+end
+
+func float_bits(value: float): int
+    var place = memory(8)
+    poke_f64(place, 0, value)
+    return peek_i64(place, 0)
+end
+
+func flag(value: bool): string
+    if value
+        return "1"
+    end
+    return "0"
+end
+
+func spot(line: int, column: int, length: int): string
+    return f"{line} {column} {length}"
+end
+
+func TreePrinter.line(depth: int, words: string)
+    self.out.add(repeat("  ", depth))
+    self.out.line(words)
+end
+
+func TreePrinter.type_name(type: int): string
+    return self.program.types.name(type)
+end
+
+func TreePrinter.expr(depth: int, role: string, place: int)
+    if place < 0
+        return
+    end
+    var e = self.program.exprs[place]
+    var fields = ""
+    for i in 0..len(e.field_names)
+        fields += " " + e.field_names[i] + "@" + spot(e.field_lines[i], e.field_columns[i], e.field_lengths[i])
+    end
+    self.line(depth, f"{role} expr {e.kind} {spot(e.line, e.column, e.length)} depth {e.depth} number {e.number} real {float_bits(e.real)} truth {flag(e.truth)} text [{escaped(e.text)}] name [{e.name}] op {e.op} to {self.type_name(e.convert_to)} fields{fields}{self.expr_checked(e)}{self.type_list(e.type_args)}")
+    self.expr(depth + 1, "left", e.left)
+    self.expr(depth + 1, "right", e.right)
+    for input in e.inputs
+        self.expr(depth + 1, "input", input)
+    end
+end
+
+func TreePrinter.block(depth: int, role: string, statements: [int])
+    self.line(depth, f"{role} block {len(statements)}")
+    for s in statements
+        self.stmt(depth + 1, s)
+    end
+end
+
+func TreePrinter.stmt(depth: int, place: int)
+    var s = self.program.stmts[place]
+    self.line(depth, f"stmt {s.kind} {spot(s.line, s.column, s.length)} name [{s.name}] {spot(s.name_line, s.name_column, s.name_length)} operation {flag(s.has_operation)} {s.operation} type {flag(s.has_type)} {self.type_name(s.declared_type)} else {flag(s.has_else)}{self.stmt_checked(s)}")
+    self.expr(depth + 1, "target", s.target)
+    self.expr(depth + 1, "value", s.value)
+    self.expr(depth + 1, "end", s.range_end)
+    self.block(depth + 1, "body", s.body)
+    for part in s.elifs
+        self.expr(depth + 1, "elif", part.condition)
+        self.block(depth + 1, "elif-body", part.body)
+    end
+    for part in s.cases
+        self.expr(depth + 1, "case", part.value)
+        self.block(depth + 1, "case-body", part.body)
+    end
+    self.block(depth + 1, "other", s.other_body)
+end
+
+func TreePrinter.print_all()
+    var p = self.program
+    for i in 0..len(p.types.entries)
+        self.line(0, f"type {i} {self.type_name(TYPE_FIRST_CUSTOM + i)}")
+    end
+    for use_line in p.uses
+        self.line(0, f"use [{escaped(use_line.path)}] {spot(use_line.line, use_line.column, use_line.length)}")
+    end
+    for decl in p.structs
+        self.line(0, f"struct {decl.name} {spot(decl.line, decl.column, decl.length)} {self.type_name(decl.type)}{self.params(decl.type_params, decl.type_param_lines, decl.type_param_columns, decl.type_param_lengths)}")
+        for field in decl.fields
+            self.line(1, f"field {field.name} {spot(field.line, field.column, field.length)} {self.type_name(field.type)}")
+        end
+    end
+    for decl in p.enums
+        self.line(0, f"enum {decl.name} {spot(decl.line, decl.column, decl.length)} {self.type_name(decl.type)}")
+        for i in 0..len(decl.members)
+            self.line(1, f"member {decl.members[i]} {spot(decl.member_lines[i], decl.member_columns[i], decl.member_lengths[i])}")
+        end
+    end
+    for decl in p.consts
+        self.line(0, f"const {decl.name} {spot(decl.line, decl.column, decl.length)}")
+        self.expr(1, "value", decl.value)
+    end
+    for global in p.globals
+        self.line(0, "global")
+        self.stmt(1, global)
+    end
+    for function in p.functions
+        self.line(0, f"func {function.name} {spot(function.line, function.column, function.length)} owner {self.type_name(function.owner)} {spot(function.owner_line, function.owner_column, function.owner_length)} returns {self.type_name(function.return_type)} dll [{escaped(function.dll)}] {flag(function.returns_i32)}{flag(function.returns_f32)}{self.function_checked(function)}{self.params(function.type_params, function.type_param_lines, function.type_param_columns, function.type_param_lengths)}")
+        for i in 0..len(function.inputs)
+            var input = function.inputs[i]
+            var is_i32 = i < len(function.input_is_i32) and function.input_is_i32[i]
+            var is_f32 = i < len(function.input_is_f32) and function.input_is_f32[i]
+            self.line(1, f"input {input.name} {spot(input.line, input.column, input.length)} {self.type_name(input.type)} {flag(is_i32)}{flag(is_f32)}")
+        end
+        self.block(1, "body", function.body)
+    end
+end
+
+# A generic's types, only when it has some, so other trees print as before
+func TreePrinter.params(types: [int], lines: [int], columns: [int], lengths: [int]): string
+    if len(types) == 0
+        return ""
+    end
+    var out = " generic"
+    for i in 0..len(types)
+        out = out + " " + self.type_name(types[i]) + "@" + spot(lines[i], columns[i], lengths[i])
+    end
+    return out
+end
+
+func TreePrinter.type_list(types: [int]): string
+    if len(types) == 0
+        return ""
+    end
+    var out = " types"
+    for type in types
+        out = out + " " + self.type_name(type)
+    end
+    return out
+end
+
+# What the checker filled in, shown only for 'jamo checked'
+func TreePrinter.expr_checked(e: Expr): string
+    if not self.checked
+        return ""
+    end
+    var numbers = ""
+    for value in e.field_numbers
+        numbers += f" {value}"
+    end
+    return f" type {self.type_name(e.type)} slot {e.slot} numbers{numbers}"
+end
+
+func TreePrinter.stmt_checked(s: Stmt): string
+    if not self.checked
+        return ""
+    end
+    return f" slots {s.slot} {s.end_slot} {s.array_slot} covers {flag(s.covers_all)}"
+end
+
+func TreePrinter.function_checked(function: Function): string
+    if not self.checked
+        return ""
+    end
+    return f" slots {function.slot_count}"
+end
+

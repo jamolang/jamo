@@ -1,0 +1,4 @@
+struct_compare.jamo line 7: Structs can't be compared with == or !=.
+        print(e == e)
+              ^^^^^^
+Compare their fields.

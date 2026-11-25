@@ -1,0 +1,6 @@
+func nothing()
+end
+
+func main()
+    print(f"a{nothing()}")
+end

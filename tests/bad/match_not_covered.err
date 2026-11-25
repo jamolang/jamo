@@ -1,0 +1,4 @@
+match_not_covered.jamo line 8: This match doesn't cover Mood.ANGRY.
+        match m
+        ^^^^^
+Add a case for it, or an else.

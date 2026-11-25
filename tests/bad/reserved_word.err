@@ -1,0 +1,4 @@
+reserved_word.jamo line 2: print is a reserved word, so it can't be used as a name.
+        var print = 1
+            ^^^^^
+Try a different name.

@@ -1,0 +1,273 @@
+# dict: look things up by name. use "dict.jamo"
+#
+# Dict maps text to ints, and TextDict maps text to text. Both are hash tables: a key's hash picks a
+# place, and if that place is taken, the next ones are tried. A removed key leaves a marker, so keys
+# placed after it can still be found. The table doubles when it's two thirds full.
+
+struct Dict
+    keys: [string]
+    values: [int]
+    states: [int]
+    count: int
+    taken: int
+end
+
+struct TextDict
+    keys: [string]
+    values: [string]
+    states: [int]
+    count: int
+    taken: int
+end
+
+# --- Hashing, shared by both ---
+
+# FNV-1a over the key's bytes, kept between 0 and 2^62 so it's never below 0
+func dict_hash(key: string): int
+    var hash = 1469598103934665603
+    for i in 0..len(key)
+        hash = (hash + byte(key, i)) * 1099511628211
+    end
+    hash = hash % 4611686018427387904
+    if hash < 0
+        hash += 4611686018427387904
+    end
+    return hash
+end
+
+# Where a key is, or -1 - where it can go when it's missing. states: 0 empty, 1 in use, 2 removed
+func dict_find(keys: [string], states: [int], key: string): int
+    var size = len(states)
+    var place = dict_hash(key) % size
+    var free = -1
+    while true
+        var state = states[place]
+        if state == 0
+            if free >= 0
+                return -1 - free
+            end
+            return -1 - place
+        end
+        if state == 1 and keys[place] == key
+            return place
+        end
+        if state == 2 and free < 0
+            free = place
+        end
+        place = (place + 1) % size
+    end
+    return -1
+end
+
+func dict_empty_states(size: int): [int]
+    var states: [int] = []
+    for i in 0..size
+        states.add(0)
+    end
+    return states
+end
+
+# --- Dict: text to ints ---
+
+func new_dict(): Dict
+    var keys: [string] = []
+    var values: [int] = []
+    for i in 0..8
+        keys.add("")
+        values.add(0)
+    end
+    return Dict{keys: keys, values: values, states: dict_empty_states(8), count: 0, taken: 0}
+end
+
+func Dict.set(key: string, value: int)
+    var place = dict_find(self.keys, self.states, key)
+    if place >= 0
+        self.values[place] = value
+        return
+    end
+    place = -1 - place
+    if self.states[place] == 0
+        self.taken += 1
+    end
+    self.keys[place] = key
+    self.values[place] = value
+    self.states[place] = 1
+    self.count += 1
+    if self.taken * 3 >= len(self.states) * 2
+        self.grow()
+    end
+end
+
+func Dict.grow()
+    var old_keys = self.keys
+    var old_values = self.values
+    var old_states = self.states
+    var size = len(old_states) * 2
+    if self.count * 3 < len(old_states)
+        size = len(old_states)
+    end
+    self.keys = []
+    self.values = []
+    for i in 0..size
+        self.keys.add("")
+        self.values.add(0)
+    end
+    self.states = dict_empty_states(size)
+    self.count = 0
+    self.taken = 0
+    for i in 0..len(old_states)
+        if old_states[i] == 1
+            self.set(old_keys[i], old_values[i])
+        end
+    end
+end
+
+# The value for a key. A missing key stops with an error, so check has() first when it may be missing
+func Dict.get(key: string): int
+    var place = dict_find(self.keys, self.states, key)
+    if place < 0
+        fail(f"This dict has no key {key}.")
+    end
+    return self.values[place]
+end
+
+# The value for a key, or the fallback when it's missing
+func Dict.get_or(key: string, fallback: int): int
+    var place = dict_find(self.keys, self.states, key)
+    if place < 0
+        return fallback
+    end
+    return self.values[place]
+end
+
+func Dict.has(key: string): bool
+    return dict_find(self.keys, self.states, key) >= 0
+end
+
+# Takes a key out. Answers whether it was there
+func Dict.remove(key: string): bool
+    var place = dict_find(self.keys, self.states, key)
+    if place < 0
+        return false
+    end
+    self.states[place] = 2
+    self.keys[place] = ""
+    self.count -= 1
+    return true
+end
+
+func Dict.size(): int
+    return self.count
+end
+
+# Every key, in no particular order
+func Dict.key_list(): [string]
+    var found: [string] = []
+    for i in 0..len(self.states)
+        if self.states[i] == 1
+            found.add(self.keys[i])
+        end
+    end
+    return found
+end
+
+# --- TextDict: text to text ---
+
+func new_text_dict(): TextDict
+    var keys: [string] = []
+    var values: [string] = []
+    for i in 0..8
+        keys.add("")
+        values.add("")
+    end
+    return TextDict{keys: keys, values: values, states: dict_empty_states(8), count: 0, taken: 0}
+end
+
+func TextDict.set(key: string, value: string)
+    var place = dict_find(self.keys, self.states, key)
+    if place >= 0
+        self.values[place] = value
+        return
+    end
+    place = -1 - place
+    if self.states[place] == 0
+        self.taken += 1
+    end
+    self.keys[place] = key
+    self.values[place] = value
+    self.states[place] = 1
+    self.count += 1
+    if self.taken * 3 >= len(self.states) * 2
+        self.grow()
+    end
+end
+
+func TextDict.grow()
+    var old_keys = self.keys
+    var old_values = self.values
+    var old_states = self.states
+    var size = len(old_states) * 2
+    if self.count * 3 < len(old_states)
+        size = len(old_states)
+    end
+    self.keys = []
+    self.values = []
+    for i in 0..size
+        self.keys.add("")
+        self.values.add("")
+    end
+    self.states = dict_empty_states(size)
+    self.count = 0
+    self.taken = 0
+    for i in 0..len(old_states)
+        if old_states[i] == 1
+            self.set(old_keys[i], old_values[i])
+        end
+    end
+end
+
+func TextDict.get(key: string): string
+    var place = dict_find(self.keys, self.states, key)
+    if place < 0
+        fail(f"This dict has no key {key}.")
+    end
+    return self.values[place]
+end
+
+func TextDict.get_or(key: string, fallback: string): string
+    var place = dict_find(self.keys, self.states, key)
+    if place < 0
+        return fallback
+    end
+    return self.values[place]
+end
+
+func TextDict.has(key: string): bool
+    return dict_find(self.keys, self.states, key) >= 0
+end
+
+func TextDict.remove(key: string): bool
+    var place = dict_find(self.keys, self.states, key)
+    if place < 0
+        return false
+    end
+    self.states[place] = 2
+    self.keys[place] = ""
+    self.values[place] = ""
+    self.count -= 1
+    return true
+end
+
+func TextDict.size(): int
+    return self.count
+end
+
+func TextDict.key_list(): [string]
+    var found: [string] = []
+    for i in 0..len(self.states)
+        if self.states[i] == 1
+            found.add(self.keys[i])
+        end
+    end
+    return found
+end

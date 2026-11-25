@@ -1,0 +1,5 @@
+use "my enemy file.jamo"
+
+func main()
+    print(spaced())
+end

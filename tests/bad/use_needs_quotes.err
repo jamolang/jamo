@@ -1,0 +1,4 @@
+use_needs_quotes.jamo line 1: use needs a file name in quotes.
+    use enemy
+        ^^^^^
+Like this: use "enemy.jamo"

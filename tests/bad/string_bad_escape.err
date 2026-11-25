@@ -1,0 +1,4 @@
+string_bad_escape.jamo line 2: Jamo doesn't have this escape.
+        print("a\qb")
+                ^^
+The escapes are \n \t \r \" and \\.

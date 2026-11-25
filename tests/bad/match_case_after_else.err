@@ -1,0 +1,3 @@
+match_case_after_else.jamo line 5: A case must go before the else.
+            case 2
+            ^^^^

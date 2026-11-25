@@ -1,0 +1,358 @@
+# PE writer: packs machine code into a real Windows .exe, with no linker. The same as src/pe.cpp.
+
+use "codegen.jamo"
+use "bytes.jamo"
+use "text.jamo"
+
+const SECTION_ALIGN = 4096
+const FILE_ALIGN = 512
+const IMAGE_BASE = 5368709120
+const TEXT_RVA = 4096
+const HEADERS_SIZE = 512
+const DOS_HEADER_SIZE = 64
+const OPTIONAL_HEADER_SIZE = 240
+const STACK_RESERVE = 8388608
+const STACK_COMMIT = 4096
+const HEAP_RESERVE = 1048576
+const HEAP_COMMIT = 4096
+const IMPORT_DESCRIPTOR_SIZE = 20
+const THUNK_SIZE = 8
+const VALUE_SIZE = 8
+const BUILDER_SIZE = 24
+const CLEANER_SIZE = 432
+const LETTER_SIZE = 16
+# A window program's run error, kept for its message box: the length, then the text
+const ERROR_TEXT_SIZE = 4104
+const DATA_PLACES = 26
+
+func round_up(value: int, step: int): int
+    return (value + step - 1) / step * step
+end
+
+# Zero bytes until there are size of them, like the C++ Writer's pad_to
+func fill_to(out: Bytes, size: int)
+    while out.length() < size
+        out.add_u8(0)
+    end
+end
+
+# The text's bytes, then zeros, room bytes in all
+func add_text_in(out: Bytes, words: string, room: int)
+    for i in 0..room
+        if i < len(words)
+            out.add_u8(byte(words, i))
+        else
+            out.add_u8(0)
+        end
+    end
+end
+
+# A DLL the program imports from: each function's name, and where its address goes: a DATA_ number, or
+# -1 - an index into the extern imports
+struct Library
+    name: string
+    functions: [string]
+    places: [int]
+end
+
+# The second section: what the program imports from Windows, the values it keeps while running, then its strings
+struct DataSection
+    bytes: Bytes
+    import_table_rva: int
+    import_table_size: int
+    address_table_rva: int
+    address_table_size: int
+    places: [int]
+    string_places: [int]
+    import_places: [int]
+end
+
+func build_data_section(rva: int, g: Generator): DataSection
+    var names = ["GetStdHandle", "WriteFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "CreateFileW", "ReadFile", "CloseHandle", "GetFileAttributesW", "GetCommandLineW", "MultiByteToWideChar", "HeapFree"]
+    var refs = [DATA_GET_STD_HANDLE, DATA_WRITE_FILE, DATA_EXIT_PROCESS, DATA_GET_PROCESS_HEAP, DATA_HEAP_ALLOC, DATA_CREATE_FILE_W, DATA_READ_FILE, DATA_CLOSE_HANDLE, DATA_GET_FILE_ATTRIBUTES_W, DATA_GET_COMMAND_LINE_W, DATA_MULTI_BYTE_TO_WIDE_CHAR, DATA_HEAP_FREE]
+    # Only a window program loads MessageBoxA, so only it imports these
+    var window = g.cleaner_mode / WINDOW_PROGRAM % 2 == 1
+    if window
+        names.add("LoadLibraryA")
+        names.add("GetProcAddress")
+        refs.add(DATA_LOAD_LIBRARY_A)
+        refs.add(DATA_GET_PROC_ADDRESS)
+    end
+    # Each library gets a descriptor, a lookup table and an address table. The address tables sit together, for the import directory
+    var libraries = [Library{name: "kernel32.dll", functions: [], places: []}]
+    for i in 0..len(names)
+        libraries[0].functions.add(names[i])
+        libraries[0].places.add(refs[i])
+    end
+    for i in 0..len(g.import_names)
+        var found = -1
+        for l in 0..len(libraries)
+            if found < 0 and lower(libraries[l].name) == lower(g.import_dlls[i])
+                found = l
+            end
+        end
+        if found < 0
+            libraries.add(Library{name: g.import_dlls[i], functions: [], places: []})
+            found = len(libraries) - 1
+        end
+        libraries[found].functions.add(g.import_names[i])
+        libraries[found].places.add(-1 - i)
+    end
+
+    var places: [int] = []
+    for i in 0..DATA_PLACES
+        places.add(0)
+    end
+    var section = DataSection{bytes: new_bytes(), import_table_rva: 0, import_table_size: 0, address_table_rva: 0, address_table_size: 0, places: places, string_places: [], import_places: []}
+    var descriptors_bytes = (len(libraries) + 1) * IMPORT_DESCRIPTOR_SIZE
+    var next = descriptors_bytes
+    var lookup_at: [int] = []
+    var addresses_at: [int] = []
+    for library in libraries
+        lookup_at.add(next)
+        next += (len(library.functions) + 1) * THUNK_SIZE
+    end
+    var all_addresses_at = next
+    for library in libraries
+        addresses_at.add(next)
+        next += (len(library.functions) + 1) * THUNK_SIZE
+    end
+    var all_addresses_bytes = next - all_addresses_at
+    var name_places: [[int]] = []
+    var library_places: [int] = []
+    for library in libraries
+        var here: [int] = []
+        for function in library.functions
+            here.add(next)
+            # A hint, the name and its end
+            next += 2 + len(function) + 1
+            next += next % 2
+        end
+        name_places.add(here)
+        library_places.add(next)
+        next += len(library.name) + 1
+    end
+    next = round_up(next, VALUE_SIZE)
+    var heap_handle_at = next
+    var current_line_at = next + VALUE_SIZE
+    var builder_at = current_line_at + VALUE_SIZE
+    var visit_head_at = builder_at + BUILDER_SIZE
+    var stdin_at = visit_head_at + VALUE_SIZE
+    var cleaner_at = stdin_at + BUILDER_SIZE
+    var letters_at = cleaner_at + CLEANER_SIZE
+    var error_text_at = letters_at + 256 * LETTER_SIZE
+    next = error_text_at + ERROR_TEXT_SIZE
+    var text_places: [int] = []
+    for words in g.strings
+        text_places.add(next)
+        next = round_up(next + VALUE_SIZE + len(words) + 1, VALUE_SIZE)
+    end
+    var call_table_at = next
+    var call_count = len(g.out.call_offsets)
+    next += VALUE_SIZE + call_count * VALUE_SIZE
+    var globals_at = next
+    next += VALUE_SIZE
+
+    var out = section.bytes
+    for l in 0..len(libraries)
+        out.add_u32(rva + lookup_at[l])
+        out.add_u32(0)
+        out.add_u32(0)
+        out.add_u32(rva + library_places[l])
+        out.add_u32(rva + addresses_at[l])
+    end
+    fill_to(out, descriptors_bytes)
+    # The lookup tables and address tables start out the same. Windows fills in the second when it loads the program
+    for tables in [lookup_at, addresses_at]
+        for l in 0..len(libraries)
+            fill_to(out, tables[l])
+            for i in 0..len(libraries[l].functions)
+                out.add_u64(rva + name_places[l][i])
+            end
+            out.add_u64(0)
+        end
+    end
+    for i in 0..len(g.import_names)
+        section.import_places.add(0)
+    end
+    for l in 0..len(libraries)
+        var library = libraries[l]
+        for i in 0..len(library.functions)
+            fill_to(out, name_places[l][i])
+            out.add_u16(0)
+            add_text_in(out, library.functions[i], len(library.functions[i]) + 1)
+            var place = rva + addresses_at[l] + i * THUNK_SIZE
+            var which = library.places[i]
+            if which >= 0
+                section.places[which] = place
+            else
+                section.import_places[-1 - which] = place
+            end
+        end
+        fill_to(out, library_places[l])
+        add_text_in(out, library.name, len(library.name) + 1)
+    end
+    # Other programs never reach the code that calls these, so it points at ExitProcess instead
+    if not window
+        section.places[DATA_LOAD_LIBRARY_A] = section.places[DATA_EXIT_PROCESS]
+        section.places[DATA_GET_PROC_ADDRESS] = section.places[DATA_EXIT_PROCESS]
+    end
+    section.places[DATA_HEAP_HANDLE] = rva + heap_handle_at
+    section.places[DATA_CURRENT_LINE] = rva + current_line_at
+    section.places[DATA_BUILDER] = rva + builder_at
+    section.places[DATA_VISIT_HEAD] = rva + visit_head_at
+    section.places[DATA_STDIN] = rva + stdin_at
+    section.places[DATA_CLEANER] = rva + cleaner_at
+    # Every one-letter string, made once, so text[i] can share them since text never changes
+    section.places[DATA_LETTERS] = rva + letters_at
+    section.places[DATA_ERROR_TEXT] = rva + error_text_at
+    for letter in 0..256
+        fill_to(out, letters_at + letter * LETTER_SIZE)
+        out.add_u64(1)
+        out.add_u8(letter)
+        out.add_u8(10)
+    end
+    for i in 0..len(g.strings)
+        fill_to(out, text_places[i])
+        out.add_u64(len(g.strings[i]))
+        out.add_text(g.strings[i])
+        out.add_u8(10)
+        section.string_places.add(rva + text_places[i])
+    end
+    fill_to(out, call_table_at)
+    section.places[DATA_CALL_TABLE] = rva + call_table_at
+    section.places[DATA_GLOBALS] = rva + globals_at
+    out.add_u64(call_count)
+    for i in 0..call_count
+        out.add_u32(TEXT_RVA + g.out.call_offsets[i])
+        out.add_u32(rva + text_places[g.out.call_strings[i]])
+    end
+    fill_to(out, next)
+    section.import_table_rva = rva
+    section.import_table_size = descriptors_bytes
+    section.address_table_rva = rva + all_addresses_at
+    section.address_table_size = all_addresses_bytes
+    return section
+end
+
+func write_section_header(out: Bytes, name: string, real_size: int, rva: int, file_size: int, file_at: int, flags: int)
+    add_text_in(out, name, 8)
+    out.add_u32(real_size)
+    out.add_u32(rva)
+    out.add_u32(file_size)
+    out.add_u32(file_at)
+    out.add_u32(0)
+    out.add_u32(0)
+    out.add_u16(0)
+    out.add_u16(0)
+    out.add_u32(flags)
+end
+
+# The whole .exe, from what the code generator made
+func build_exe(g: Generator): Bytes
+    var code = g.out
+    var text_size = code.code.length()
+    var data_rva = TEXT_RVA + round_up(text_size, SECTION_ALIGN)
+    var data = build_data_section(data_rva, g)
+    var data_size = data.bytes.length()
+    var text_file_size = round_up(text_size, FILE_ALIGN)
+    var data_file_size = round_up(data_size, FILE_ALIGN)
+    var data_file_at = HEADERS_SIZE + text_file_size
+    var image_size = data_rva + round_up(data_size, SECTION_ALIGN)
+
+    # Fill in the machine code's distances to the imports and text
+    var text = new_bytes()
+    text.add_text(code.code.text())
+    for i in 0..len(code.fixup_offsets)
+        var offset = code.fixup_offsets[i]
+        var target = code.fixup_targets[i]
+        var place = 0
+        if target == DATA_STRING
+            place = data.string_places[code.fixup_strings[i]]
+        elif target == DATA_IMPORT
+            place = data.import_places[code.fixup_strings[i]]
+        else
+            place = data.places[target]
+        end
+        text.set_u32(offset, place + code.fixup_extras[i] - (TEXT_RVA + offset + 4))
+    end
+
+    var out = new_bytes()
+    # DOS header, which only needs its signature and where the real header is.
+    # math.jamo and time.jamo keep values in bytes 8 to 47 while the program runs, so those must stay zero here
+    add_text_in(out, "MZ", 2)
+    fill_to(out, DOS_HEADER_SIZE - 4)
+    out.add_u32(DOS_HEADER_SIZE)
+
+    add_text_in(out, "PE", 4)
+    # COFF header: x86-64, two sections, no timestamp so the same source always gives the same file
+    out.add_u16(34404)
+    out.add_u16(2)
+    out.add_u32(0)
+    out.add_u32(0)
+    out.add_u32(0)
+    out.add_u16(OPTIONAL_HEADER_SIZE)
+    # An executable with no relocations, able to use large addresses
+    out.add_u16(35)
+
+    # Optional header, for 64 bits
+    out.add_u16(523)
+    out.add_u8(1)
+    out.add_u8(0)
+    out.add_u32(text_file_size)
+    out.add_u32(data_file_size)
+    out.add_u32(0)
+    # Starts at the first byte of code
+    out.add_u32(TEXT_RVA)
+    out.add_u32(TEXT_RVA)
+    out.add_u64(IMAGE_BASE)
+    out.add_u32(SECTION_ALIGN)
+    out.add_u32(FILE_ALIGN)
+    # Windows Vista or newer
+    out.add_u16(6)
+    out.add_u16(0)
+    out.add_u16(0)
+    out.add_u16(0)
+    out.add_u16(6)
+    out.add_u16(0)
+    out.add_u32(0)
+    out.add_u32(image_size)
+    out.add_u32(HEADERS_SIZE)
+    out.add_u32(0)
+    # A window program or one for the console, whose data can't run as code, and that's aware of Terminal Server
+    if g.cleaner_mode / WINDOW_PROGRAM % 2 == 1
+        out.add_u16(2)
+    else
+        out.add_u16(3)
+    end
+    out.add_u16(33024)
+    out.add_u64(STACK_RESERVE)
+    out.add_u64(STACK_COMMIT)
+    out.add_u64(HEAP_RESERVE)
+    out.add_u64(HEAP_COMMIT)
+    out.add_u32(0)
+    out.add_u32(16)
+    for directory in 0..16
+        if directory == 1
+            out.add_u32(data.import_table_rva)
+            out.add_u32(data.import_table_size)
+        elif directory == 12
+            out.add_u32(data.address_table_rva)
+            out.add_u32(data.address_table_size)
+        else
+            out.add_u32(0)
+            out.add_u32(0)
+        end
+    end
+
+    # Code that runs and reads, then data that reads and writes
+    write_section_header(out, ".text", text_size, TEXT_RVA, text_file_size, HEADERS_SIZE, 1610612768)
+    write_section_header(out, ".idata", data_size, data_rva, data_file_size, data_file_at, 3221225536)
+    fill_to(out, HEADERS_SIZE)
+
+    out.add_text(text.text())
+    fill_to(out, data_file_at)
+    out.add_text(data.bytes.text())
+    fill_to(out, data_file_at + data_file_size)
+    return out
+end

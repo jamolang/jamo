@@ -1,0 +1,3 @@
+no_value_used.jamo line 5: This doesn't give back a value, so it can't go in a variable.
+        var x = f()
+                ^^^

@@ -1,0 +1,4 @@
+use "../secret.jamo"
+
+func main()
+end

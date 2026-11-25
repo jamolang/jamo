@@ -1,0 +1,3 @@
+struct Enemy
+    health
+end

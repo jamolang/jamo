@@ -1,0 +1,592 @@
+# gfx: 2D drawing in a window, with OpenGL 3.3. use "gfx.jamo"
+#
+# Shapes, text and pictures collect in a batch and go to the graphics card together. Everything draws into
+# a picture the size of the window first, which show() copies onto the window. Rectangles, circles, lines
+# and text all come from one texture, the atlas, so they can share a batch: letters from the Segoe UI font
+# fill the top in cells 40 wide and 48 tall, with a soft circle and a white square below them. Each letter
+# starts 4 pixels down its cell, so its lowest parts stay clear of the letter below when text is drawn small.
+
+use "window.jamo"
+use "png.jamo"
+
+extern "user32.dll" func GetDC(window: int): int
+extern "user32.dll" func ReleaseDC(window: int, dc: int): i32
+extern "gdi32.dll" func ChoosePixelFormat(dc: int, format: int): i32
+extern "gdi32.dll" func SetPixelFormat(dc: int, number: i32, format: int): bool
+extern "gdi32.dll" func SwapBuffers(dc: int): bool
+extern "gdi32.dll" func CreateCompatibleDC(dc: int): int
+extern "gdi32.dll" func CreateDIBSection(dc: int, info: int, usage: i32, bits: int, section: int, offset: i32): int
+extern "gdi32.dll" func SelectObject(dc: int, thing: int): int
+extern "gdi32.dll" func CreateFontW(height: i32, width: i32, escapement: i32, orientation: i32, weight: i32, italic: i32, underline: i32, strike_out: i32, char_set: i32, precision: i32, clip: i32, quality: i32, pitch: i32, face: int): int
+extern "gdi32.dll" func SetTextColor(dc: int, color: i32): i32
+extern "gdi32.dll" func SetBkColor(dc: int, color: i32): i32
+extern "gdi32.dll" func TextOutW(dc: int, x: i32, y: i32, text: int, count: i32): bool
+extern "gdi32.dll" func GetCharWidth32W(dc: int, first: i32, last: i32, widths: int): bool
+extern "gdi32.dll" func GdiFlush(): bool
+extern "gdi32.dll" func DeleteObject(thing: int): bool
+extern "gdi32.dll" func DeleteDC(dc: int): bool
+extern "kernel32.dll" func CreateFileW(path: int, access: i32, share: i32, security: int, how: i32, flags: i32, template: int): int
+extern "kernel32.dll" func WriteFile(file: int, data: int, size: i32, written: int, overlapped: int): bool
+extern "kernel32.dll" func CloseHandle(thing: int): bool
+extern "msvcrt.dll" func sqrt(value: float): float
+extern "opengl32.dll" func wglCreateContext(dc: int): int
+extern "opengl32.dll" func wglMakeCurrent(dc: int, context: int): bool
+extern "opengl32.dll" func wglDeleteContext(context: int): bool
+extern "OpenGL" func wglCreateContextAttribsARB(dc: int, share: int, attributes: int): int
+extern "OpenGL" func glViewport(x: i32, y: i32, width: i32, height: i32)
+extern "OpenGL" func glClearColor(red: f32, green: f32, blue: f32, alpha: f32)
+extern "OpenGL" func glClear(mask: i32)
+extern "OpenGL" func glEnable(what: i32)
+extern "OpenGL" func glDisable(what: i32)
+extern "OpenGL" func glBlendFunc(source: i32, target: i32)
+extern "OpenGL" func glGenVertexArrays(count: i32, place: int)
+extern "OpenGL" func glBindVertexArray(array: i32)
+extern "OpenGL" func glDeleteVertexArrays(count: i32, place: int)
+extern "OpenGL" func glGenBuffers(count: i32, place: int)
+extern "OpenGL" func glBindBuffer(target: i32, buffer: i32)
+extern "OpenGL" func glBufferData(target: i32, size: int, data: int, usage: i32)
+extern "OpenGL" func glBufferSubData(target: i32, offset: int, size: int, data: int)
+extern "OpenGL" func glDeleteBuffers(count: i32, place: int)
+extern "OpenGL" func glVertexAttribPointer(index: i32, size: i32, kind: i32, normalized: bool, stride: i32, offset: int)
+extern "OpenGL" func glEnableVertexAttribArray(index: i32)
+extern "OpenGL" func glCreateShader(kind: i32): i32
+extern "OpenGL" func glShaderSource(shader: i32, count: i32, texts: int, lengths: int)
+extern "OpenGL" func glCompileShader(shader: i32)
+extern "OpenGL" func glGetShaderiv(shader: i32, what: i32, place: int)
+extern "OpenGL" func glGetShaderInfoLog(shader: i32, size: i32, length: int, log: int)
+extern "OpenGL" func glDeleteShader(shader: i32)
+extern "OpenGL" func glCreateProgram(): i32
+extern "OpenGL" func glAttachShader(program: i32, shader: i32)
+extern "OpenGL" func glLinkProgram(program: i32)
+extern "OpenGL" func glGetProgramiv(program: i32, what: i32, place: int)
+extern "OpenGL" func glUseProgram(program: i32)
+extern "OpenGL" func glDeleteProgram(program: i32)
+extern "OpenGL" func glGetUniformLocation(program: i32, name: int): i32
+extern "OpenGL" func glUniform2f(place: i32, x: f32, y: f32)
+extern "OpenGL" func glGenTextures(count: i32, place: int)
+extern "OpenGL" func glBindTexture(target: i32, texture: i32)
+extern "OpenGL" func glTexImage2D(target: i32, level: i32, inside: i32, width: i32, height: i32, border: i32, format: i32, kind: i32, data: int)
+extern "OpenGL" func glTexParameteri(target: i32, what: i32, value: i32)
+extern "OpenGL" func glDeleteTextures(count: i32, place: int)
+extern "OpenGL" func glPixelStorei(what: i32, value: i32)
+extern "OpenGL" func glDrawArrays(mode: i32, first: i32, count: i32)
+extern "OpenGL" func glReadPixels(x: i32, y: i32, width: i32, height: i32, format: i32, kind: i32, place: int)
+extern "OpenGL" func glGenFramebuffers(count: i32, place: int)
+extern "OpenGL" func glBindFramebuffer(target: i32, buffer: i32)
+extern "OpenGL" func glDeleteFramebuffers(count: i32, place: int)
+extern "OpenGL" func glGenRenderbuffers(count: i32, place: int)
+extern "OpenGL" func glBindRenderbuffer(target: i32, buffer: i32)
+extern "OpenGL" func glRenderbufferStorage(target: i32, format: i32, width: i32, height: i32)
+extern "OpenGL" func glFramebufferRenderbuffer(target: i32, attachment: i32, kind: i32, buffer: i32)
+extern "OpenGL" func glDeleteRenderbuffers(count: i32, place: int)
+extern "OpenGL" func glCheckFramebufferStatus(target: i32): i32
+extern "OpenGL" func glBlitFramebuffer(from_x: i32, from_y: i32, from_x2: i32, from_y2: i32, to_x: i32, to_y: i32, to_x2: i32, to_y2: i32, mask: i32, filter: i32)
+
+struct Color
+    red: float
+    green: float
+    blue: float
+    alpha: float
+end
+
+# Colors take numbers from 0 to 255, like most paint programs
+func rgb(red: int, green: int, blue: int): Color
+    return rgba(red, green, blue, 255)
+end
+
+func rgba(red: int, green: int, blue: int, alpha: int): Color
+    return Color{red: float(red) / 255.0, green: float(green) / 255.0, blue: float(blue) / 255.0, alpha: float(alpha) / 255.0}
+end
+
+struct Image
+    texture: int
+    width: int
+    height: int
+    open: bool
+end
+
+struct Gfx
+    window: Window
+    dc: int
+    context: int
+    shader: int
+    screen_place: int
+    vertex_array: int
+    vertex_buffer: int
+    atlas: int
+    glyph_widths: int
+    batch: int
+    vertices: int
+    texture: int
+    framebuffer: int
+    color_buffer: int
+    depth_buffer: int
+    in_3d: bool
+    width: int
+    height: int
+    images: [Image]
+    open: bool
+    closed_by_program: bool
+end
+
+func start_gfx(window: Window): Gfx
+    window.must_be_open()
+    var dc = GetDC(window.handle)
+    var format = memory(40)
+    poke_u16(format, 0, 40)
+    poke_u16(format, 2, 1)
+    poke_i32(format, 4, 37)
+    poke_u8(format, 9, 32)
+    poke_u8(format, 22, 24)
+    SetPixelFormat(dc, ChoosePixelFormat(dc, format), format)
+    var starter = wglCreateContext(dc)
+    if starter == 0 or not wglMakeCurrent(dc, starter)
+        fail("This PC can't draw with OpenGL in a window.")
+    end
+    var settings = memory(32)
+    poke_i32(settings, 0, 8337)
+    poke_i32(settings, 4, 3)
+    poke_i32(settings, 8, 8338)
+    poke_i32(settings, 12, 3)
+    poke_i32(settings, 16, 37158)
+    poke_i32(settings, 20, 1)
+    var context = wglCreateContextAttribsARB(dc, 0, settings)
+    if context == 0
+        fail("OpenGL 3.3 isn't available on this PC, so it can't draw.")
+    end
+    wglMakeCurrent(dc, context)
+    wglDeleteContext(starter)
+    var g = Gfx{window: window, dc: dc, context: context, shader: 0, screen_place: 0, vertex_array: 0, vertex_buffer: 0, atlas: 0, glyph_widths: memory(400), batch: memory(6144 * 32), vertices: 0, texture: 0, framebuffer: 0, color_buffer: 0, depth_buffer: 0, in_3d: false, width: 0, height: 0, images: [], open: true, closed_by_program: false}
+    g.make_shader()
+    g.make_buffers()
+    g.make_atlas()
+    g.fit_window()
+    glEnable(3042)
+    glBlendFunc(770, 771)
+    return g
+end
+
+# --- Setting up ---
+func gfx_c_text(text: string): int
+    var place = memory(len(text) + 1)
+    for i in 0..len(text)
+        poke_u8(place, i, byte(text, i))
+    end
+    return place
+end
+
+func gfx_compile(kind: int, source: string): int
+    var shader = glCreateShader(kind)
+    var texts = memory(8)
+    poke_i64(texts, 0, gfx_c_text(source))
+    glShaderSource(shader, 1, texts, 0)
+    glCompileShader(shader)
+    var result = memory(8)
+    glGetShaderiv(shader, 35713, result)
+    if peek_i32(result, 0) == 0
+        fail("The graphics card couldn't compile gfx's drawing code.")
+    end
+    return shader
+end
+
+func Gfx.make_shader()
+    var vertex = "#version 330 core\nlayout(location = 0) in vec2 place;\nlayout(location = 1) in vec2 spot;\nlayout(location = 2) in vec4 color;\nuniform vec2 screen;\nout vec2 texture_spot;\nout vec4 tint;\nvoid main() {\n    gl_Position = vec4(place.x / screen.x * 2.0 - 1.0, 1.0 - place.y / screen.y * 2.0, 0.0, 1.0);\n    texture_spot = spot;\n    tint = color;\n}\n"
+    var fragment = "#version 330 core\nin vec2 texture_spot;\nin vec4 tint;\nuniform sampler2D picture;\nout vec4 result;\nvoid main() {\n    result = tint * texture(picture, texture_spot);\n}\n"
+    var program = glCreateProgram()
+    var first = gfx_compile(35633, vertex)
+    var second = gfx_compile(35632, fragment)
+    glAttachShader(program, first)
+    glAttachShader(program, second)
+    glLinkProgram(program)
+    var result = memory(8)
+    glGetProgramiv(program, 35714, result)
+    if peek_i32(result, 0) == 0
+        fail("The graphics card couldn't link gfx's drawing code.")
+    end
+    glDeleteShader(first)
+    glDeleteShader(second)
+    glUseProgram(program)
+    self.shader = program
+    self.screen_place = glGetUniformLocation(program, gfx_c_text("screen"))
+end
+
+func Gfx.make_buffers()
+    var ids = memory(8)
+    glGenVertexArrays(1, ids)
+    self.vertex_array = peek_i32(ids, 0)
+    glBindVertexArray(self.vertex_array)
+    glGenBuffers(1, ids)
+    self.vertex_buffer = peek_i32(ids, 0)
+    glBindBuffer(34962, self.vertex_buffer)
+    glBufferData(34962, 6144 * 32, 0, 35048)
+    glVertexAttribPointer(0, 2, 5126, false, 32, 0)
+    glVertexAttribPointer(1, 2, 5126, false, 32, 8)
+    glVertexAttribPointer(2, 4, 5126, false, 32, 16)
+    glEnableVertexAttribArray(0)
+    glEnableVertexAttribArray(1)
+    glEnableVertexAttribArray(2)
+end
+
+func gfx_texture(pixels: int, width: int, height: int, smooth: bool): int
+    var ids = memory(8)
+    glGenTextures(1, ids)
+    var texture = peek_i32(ids, 0)
+    glBindTexture(3553, texture)
+    glPixelStorei(3317, 1)
+    glTexImage2D(3553, 0, 32856, width, height, 0, 6408, 5121, pixels)
+    var filter = 9728
+    if smooth
+        filter = 9729
+    end
+    glTexParameteri(3553, 10241, filter)
+    glTexParameteri(3553, 10240, filter)
+    glTexParameteri(3553, 10242, 33071)
+    glTexParameteri(3553, 10243, 33071)
+    return texture
+end
+
+# Windows draws each letter once, white on black, and the red of each pixel becomes how solid it is
+func Gfx.make_atlas()
+    var width = 640
+    var height = 384
+    var screen = CreateCompatibleDC(0)
+    var info = memory(44)
+    poke_i32(info, 0, 40)
+    poke_i32(info, 4, width)
+    poke_i32(info, 8, -height)
+    poke_u16(info, 12, 1)
+    poke_u16(info, 14, 32)
+    var bits = memory(8)
+    var picture = CreateDIBSection(screen, info, 0, bits, 0, 0)
+    var old_picture = SelectObject(screen, picture)
+    var font = CreateFontW(-32, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 4, 0, wide("Segoe UI"))
+    var old_font = SelectObject(screen, font)
+    SetTextColor(screen, 16777215)
+    SetBkColor(screen, 0)
+    var letters = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    for i in 0..95
+        TextOutW(screen, (i % 16) * 40 + 4, (i / 16) * 48 + 4, wide(letters[i]), 1)
+    end
+    GetCharWidth32W(screen, 32, 126, self.glyph_widths)
+    GdiFlush()
+    var source = peek_i64(bits, 0)
+    var pixels = memory(width * height * 4)
+    for i in 0..width * 288
+        poke_u8(pixels, i * 4, 255)
+        poke_u8(pixels, i * 4 + 1, 255)
+        poke_u8(pixels, i * 4 + 2, 255)
+        poke_u8(pixels, i * 4 + 3, peek_u8(source, i * 4 + 2))
+    end
+    for y in 0..64
+        for x in 0..64
+            var dx = float(x) - 31.5
+            var dy = float(y) - 31.5
+            var edge = 31.5 - sqrt(dx * dx + dy * dy)
+            var solid = 0
+            if edge >= 1.0
+                solid = 255
+            elif edge > 0.0
+                solid = int(edge * 255.0)
+            end
+            var place = pixels + ((296 + y) * width + x) * 4
+            poke_u8(place, 0, 255)
+            poke_u8(place, 1, 255)
+            poke_u8(place, 2, 255)
+            poke_u8(place, 3, solid)
+        end
+    end
+    for y in 300..308
+        for x in 80..88
+            poke_i32(pixels, (y * width + x) * 4, -1)
+        end
+    end
+    self.atlas = gfx_texture(pixels, width, height, true)
+    SelectObject(screen, old_font)
+    SelectObject(screen, old_picture)
+    DeleteObject(font)
+    DeleteObject(picture)
+    DeleteDC(screen)
+end
+
+# Makes the drawing picture match the window's size
+func Gfx.fit_window()
+    var width = self.window.width()
+    var height = self.window.height()
+    if width < 1 or height < 1 or (width == self.width and height == self.height)
+        return
+    end
+    var ids = memory(8)
+    if self.framebuffer == 0
+        glGenFramebuffers(1, ids)
+        self.framebuffer = peek_i32(ids, 0)
+        glGenRenderbuffers(1, ids)
+        self.color_buffer = peek_i32(ids, 0)
+        glGenRenderbuffers(1, ids)
+        self.depth_buffer = peek_i32(ids, 0)
+    end
+    self.back_to_2d()
+    glBindFramebuffer(36160, self.framebuffer)
+    glBindRenderbuffer(36161, self.color_buffer)
+    glRenderbufferStorage(36161, 32856, width, height)
+    glFramebufferRenderbuffer(36160, 36064, 36161, self.color_buffer)
+    glBindRenderbuffer(36161, self.depth_buffer)
+    glRenderbufferStorage(36161, 33190, width, height)
+    glFramebufferRenderbuffer(36160, 36096, 36161, self.depth_buffer)
+    if glCheckFramebufferStatus(36160) != 36053
+        fail("The graphics card couldn't make a picture to draw in.")
+    end
+    self.width = width
+    self.height = height
+    glViewport(0, 0, width, height)
+    glUniform2f(self.screen_place, float(width), float(height))
+end
+
+# --- The batch ---
+func Gfx.must_be_open()
+    if not self.open
+        fail("This drawing is closed, so it can't be used.")
+    end
+end
+
+func Gfx.flush()
+    if self.vertices == 0
+        return
+    end
+    glBindTexture(3553, self.texture)
+    glBufferSubData(34962, 0, self.vertices * 32, self.batch)
+    glDrawArrays(4, 0, self.vertices)
+    self.vertices = 0
+end
+
+func Gfx.vertex(x: float, y: float, u: float, v: float, color: Color)
+    var place = self.batch + self.vertices * 32
+    poke_f32(place, 0, x)
+    poke_f32(place, 4, y)
+    poke_f32(place, 8, u)
+    poke_f32(place, 12, v)
+    poke_f32(place, 16, color.red)
+    poke_f32(place, 20, color.green)
+    poke_f32(place, 24, color.blue)
+    poke_f32(place, 28, color.alpha)
+    self.vertices += 1
+end
+
+# 3D drawing (g3d.jamo) changes OpenGL's settings, so 2D drawing puts its own back first
+func Gfx.back_to_2d()
+    self.in_3d = false
+    glUseProgram(self.shader)
+    glBindVertexArray(self.vertex_array)
+    glBindBuffer(34962, self.vertex_buffer)
+    glDisable(2929)
+    glEnable(3042)
+end
+
+func Gfx.use_texture(texture: int)
+    self.must_be_open()
+    if self.in_3d
+        self.back_to_2d()
+    end
+    if texture != self.texture or self.vertices + 6 > 6144
+        self.flush()
+        self.texture = texture
+    end
+end
+
+# Four corners, going around, with the texture's corners matching
+func Gfx.quad(x1: float, y1: float, x2: float, y2: float, x3: float, y3: float, x4: float, y4: float, u1: float, v1: float, u2: float, v2: float, color: Color)
+    self.vertex(x1, y1, u1, v1, color)
+    self.vertex(x2, y2, u2, v1, color)
+    self.vertex(x3, y3, u2, v2, color)
+    self.vertex(x1, y1, u1, v1, color)
+    self.vertex(x3, y3, u2, v2, color)
+    self.vertex(x4, y4, u1, v2, color)
+end
+
+# --- Drawing ---
+func Gfx.clear(color: Color)
+    self.must_be_open()
+    self.flush()
+    glClearColor(color.red, color.green, color.blue, color.alpha)
+    glClear(16640)
+end
+
+func Gfx.rect(x: float, y: float, width: float, height: float, color: Color)
+    self.use_texture(self.atlas)
+    var u = 84.0 / 640.0
+    var v = 304.0 / 384.0
+    self.quad(x, y, x + width, y, x + width, y + height, x, y + height, u, v, u, v, color)
+end
+
+func Gfx.circle(x: float, y: float, radius: float, color: Color)
+    self.use_texture(self.atlas)
+    self.quad(x - radius, y - radius, x + radius, y - radius, x + radius, y + radius, x - radius, y + radius, 0.0, 296.0 / 384.0, 64.0 / 640.0, 360.0 / 384.0, color)
+end
+
+func Gfx.line(x1: float, y1: float, x2: float, y2: float, thickness: float, color: Color)
+    self.use_texture(self.atlas)
+    var dx = x2 - x1
+    var dy = y2 - y1
+    var length = sqrt(dx * dx + dy * dy)
+    if length == 0.0
+        return
+    end
+    var across_x = -dy / length * thickness / 2.0
+    var across_y = dx / length * thickness / 2.0
+    var u = 84.0 / 640.0
+    var v = 304.0 / 384.0
+    self.quad(x1 + across_x, y1 + across_y, x2 + across_x, y2 + across_y, x2 - across_x, y2 - across_y, x1 - across_x, y1 - across_y, u, v, u, v, color)
+end
+
+func Gfx.text_width(words: string, size: float): float
+    var width = 0.0
+    var widest = 0.0
+    for i in 0..len(words)
+        var code = byte(words, i)
+        if code == 10
+            width = 0.0
+        elif code >= 32 and code <= 126
+            width += float(peek_i32(self.glyph_widths, (code - 32) * 4)) * size / 32.0
+        end
+        if width > widest
+            widest = width
+        end
+    end
+    return widest
+end
+
+# size is the letters' height in pixels. Only English letters and symbols show
+func Gfx.text(words: string, x: float, y: float, size: float, color: Color)
+    self.use_texture(self.atlas)
+    var scale = size / 32.0
+    var left = x
+    for i in 0..len(words)
+        var code = byte(words, i)
+        if code == 10
+            left = x
+            y += 44.0 * scale
+        elif code >= 32 and code <= 126
+            var index = code - 32
+            var glyph_width = float(peek_i32(self.glyph_widths, index * 4))
+            var u = float((index % 16) * 40) / 640.0
+            var v = float((index / 16) * 48) / 384.0
+            var u2 = u + (glyph_width + 8.0) / 640.0
+            var v2 = v + 48.0 / 384.0
+            var top = y - 4.0 * scale
+            self.use_texture(self.atlas)
+            self.quad(left - 4.0 * scale, top, left + (glyph_width + 4.0) * scale, top, left + (glyph_width + 4.0) * scale, top + 48.0 * scale, left - 4.0 * scale, top + 48.0 * scale, u, v, u2, v2, color)
+            left += glyph_width * scale
+        end
+    end
+end
+
+func Gfx.load_image(path: string): Image
+    self.must_be_open()
+    var picture = decode_png(read_file(path))
+    var image = Image{texture: gfx_texture(picture.pixels, picture.width, picture.height, true), width: picture.width, height: picture.height, open: true}
+    self.images.add(image)
+    return image
+end
+
+func Gfx.image(image: Image, x: float, y: float)
+    self.image_sized(image, x, y, float(image.width), float(image.height))
+end
+
+func Gfx.image_sized(image: Image, x: float, y: float, width: float, height: float)
+    if not image.open
+        fail("This image is closed, so it can't be drawn.")
+    end
+    self.use_texture(image.texture)
+    self.quad(x, y, x + width, y, x + width, y + height, x, y + height, 0.0, 0.0, 1.0, 1.0, rgb(255, 255, 255))
+end
+
+func Image.close()
+    if not self.open
+        fail("This image is already closed.")
+    end
+    var ids = memory(8)
+    poke_i32(ids, 0, self.texture)
+    glDeleteTextures(1, ids)
+    self.open = false
+end
+
+# Puts this frame on the window
+func Gfx.show()
+    self.must_be_open()
+    self.flush()
+    glBindFramebuffer(36008, self.framebuffer)
+    glBindFramebuffer(36009, 0)
+    glBlitFramebuffer(0, 0, self.width, self.height, 0, 0, self.width, self.height, 16384, 9728)
+    SwapBuffers(self.dc)
+    glBindFramebuffer(36160, self.framebuffer)
+    self.fit_window()
+end
+
+func Gfx.read_pixel(x: int, y: int): Color
+    self.must_be_open()
+    self.flush()
+    var place = memory(8)
+    glReadPixels(x, self.height - 1 - y, 1, 1, 6408, 5121, place)
+    return rgba(peek_u8(place, 0), peek_u8(place, 1), peek_u8(place, 2), peek_u8(place, 3))
+end
+
+# Saves what's drawn so far as a BMP picture
+func Gfx.save_bmp(path: string)
+    self.must_be_open()
+    self.flush()
+    var size = self.width * self.height * 4
+    var picture = memory(54 + size)
+    poke_u8(picture, 0, 66)
+    poke_u8(picture, 1, 77)
+    poke_i32(picture, 2, 54 + size)
+    poke_i32(picture, 10, 54)
+    poke_i32(picture, 14, 40)
+    poke_i32(picture, 18, self.width)
+    poke_i32(picture, 22, self.height)
+    poke_u16(picture, 26, 1)
+    poke_u16(picture, 28, 32)
+    poke_i32(picture, 34, size)
+    glReadPixels(0, 0, self.width, self.height, 32993, 5121, picture + 54)
+    var file = CreateFileW(wide(path), 1073741824, 0, 0, 2, 128, 0)
+    if file == -1
+        fail(f"can't write the file {path}.")
+    end
+    var written = memory(8)
+    var fine = WriteFile(file, picture, 54 + size, written, 0)
+    CloseHandle(file)
+    if not fine
+        fail(f"can't write the file {path}.")
+    end
+end
+
+func Gfx.close()
+    if self.closed_by_program
+        fail("This drawing is already closed.")
+    end
+    self.closed_by_program = true
+    if not self.open
+        return
+    end
+    self.open = false
+    for image in self.images
+        if image.open
+            image.close()
+        end
+    end
+    var ids = memory(8)
+    poke_i32(ids, 0, self.atlas)
+    glDeleteTextures(1, ids)
+    poke_i32(ids, 0, self.vertex_buffer)
+    glDeleteBuffers(1, ids)
+    poke_i32(ids, 0, self.vertex_array)
+    glDeleteVertexArrays(1, ids)
+    poke_i32(ids, 0, self.framebuffer)
+    glDeleteFramebuffers(1, ids)
+    poke_i32(ids, 0, self.color_buffer)
+    glDeleteRenderbuffers(1, ids)
+    poke_i32(ids, 0, self.depth_buffer)
+    glDeleteRenderbuffers(1, ids)
+    glDeleteProgram(self.shader)
+    wglMakeCurrent(0, 0)
+    wglDeleteContext(self.context)
+    ReleaseDC(self.window.handle, self.dc)
+end

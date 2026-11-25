@@ -1,0 +1,172 @@
+# Math, compares and loops on variables held in registers: each function's busiest variables live in r12 to r15
+
+func count_down(n: int): int
+    var steps = 0
+    var left = n
+    while left > 0
+        left -= 1
+        steps += 1
+    end
+    return steps
+end
+
+func mixed(n: int): int
+    var total = 0
+    var other = 3
+    for i in 0..n
+        total += i
+        total -= other
+        other = 7
+        if i == other
+            total += 1000
+        end
+        if other < i
+            total -= 2
+        end
+    end
+    return total
+end
+
+func skips(n: int): int
+    var total = 0
+    for i in 0..n
+        if i % 4 == 0
+            continue
+        end
+        if i == 37
+            break
+        end
+        total += i * 2
+    end
+    return total
+end
+
+func while_skips(n: int): int
+    var i = 0
+    var total = 0
+    while i < n
+        i += 1
+        if i % 3 == 0
+            continue
+        end
+        if i > 50
+            break
+        end
+        total += i
+    end
+    return total * 100 + i
+end
+
+# continue on the last round must still check the condition
+func while_continue_last(n: int): int
+    var i = 0
+    var total = 0
+    while i < n
+        i += 1
+        if i > n + 5
+            return -1
+        end
+        if i == n
+            continue
+        end
+        total += i
+    end
+    return total
+end
+
+func never(n: int): int
+    var total = 5
+    for i in 0..n
+        total += 1
+    end
+    while false
+        total += 100
+    end
+    var j = 10
+    while j < n
+        j += 1
+        total += 1
+    end
+    return total
+end
+
+func wraps(): int
+    var x = 9223372036854775807
+    var y = 0
+    var z = 0
+    for i in 0..3
+        y += 1
+        z -= 1
+    end
+    x += 1
+    y -= 2147483647
+    y -= 2147483647
+    z += -2147483648
+    z -= -2147483648
+    z = -7
+    z -= y
+    print(x)
+    print(y)
+    return z
+end
+
+func flags(n: int): int
+    var seen = false
+    var want = true
+    var hits = 0
+    for i in 0..n
+        if i % 5 == 0
+            seen = true
+        else
+            seen = false
+        end
+        if seen == want
+            hits += 1
+        end
+        if seen != want
+            hits += 1000
+        end
+    end
+    return hits
+end
+
+func nested(n: int): int
+    var total = 0
+    var a = 0
+    while a < n
+        var b = a
+        while b >= 0
+            total += b
+            b -= 1
+        end
+        a += 1
+    end
+    return total
+end
+
+func inner_end(n: int): int
+    var total = 0
+    var limit = n
+    for i in 0..limit
+        limit = 3
+        total += i
+    end
+    return total * 10 + limit
+end
+
+func main()
+    print(count_down(10))
+    print(count_down(0))
+    print(count_down(-5))
+    print(mixed(20))
+    print(skips(100))
+    print(while_skips(100))
+    print(while_continue_last(10))
+    print(never(0))
+    print(never(-3))
+    print(never(13))
+    print(wraps())
+    print(flags(23))
+    print(nested(12))
+    print(inner_end(8))
+end

@@ -1,0 +1,3 @@
+func main<T>()
+    print(1)
+end

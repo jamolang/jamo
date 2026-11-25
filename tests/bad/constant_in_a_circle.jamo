@@ -1,0 +1,6 @@
+const A = B + 1
+const B = A + 1
+
+func main()
+    print(A)
+end

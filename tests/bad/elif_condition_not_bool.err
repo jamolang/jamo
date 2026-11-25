@@ -1,0 +1,4 @@
+elif_condition_not_bool.jamo line 4: An elif condition must be a bool, but this is an int.
+        elif 5
+             ^
+Try comparing it, like x != 0.

@@ -1,0 +1,4 @@
+# A comment
+func half(a: int, b: int): int
+    return a / b
+end

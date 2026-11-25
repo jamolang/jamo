@@ -1,0 +1,3 @@
+while_with_elif.jamo line 3: A while can't have an elif.
+        elif false
+        ^^^^

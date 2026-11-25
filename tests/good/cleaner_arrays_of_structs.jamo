@@ -1,0 +1,42 @@
+struct Item
+    name: string
+    tags: [string]
+    children: [Item]
+end
+
+func make(i: int): Item
+    return Item{name: f"item{i}", tags: [string(i), string(i + 1)], children: []}
+end
+
+func main()
+    var items: [Item] = []
+    for i in 0..500
+        items.add(make(i))
+        make(i + 1000)
+    end
+    var held = items[3]
+    while len(items) > 10
+        items.pop()
+    end
+    for i in 0..500
+        make(i)
+    end
+    print(held)
+    print(items[9].name)
+    held.tags.add("more")
+    held.children.add(make(77))
+    held.children[0].children.add(make(88))
+    for i in 0..300
+        make(i)
+    end
+    print(items[3])
+    var total = 0
+    for item in items
+        for tag in item.tags
+            if tag != "more"
+                total += int(tag)
+            end
+        end
+    end
+    print(total)
+end

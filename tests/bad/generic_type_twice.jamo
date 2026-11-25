@@ -1,0 +1,7 @@
+func two<A, A>(a: A): A
+    return a
+end
+
+func main()
+    print(two(1))
+end

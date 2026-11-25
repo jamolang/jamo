@@ -1,0 +1,4 @@
+func main()
+    var items = [1]
+    items.push(1)
+end

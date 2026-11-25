@@ -1,0 +1,4 @@
+string_never_closes.jamo line 2: This text never closes.
+        print("oops)
+              ^^^^^^
+Put a " at its end. For a new line inside text, write \n.

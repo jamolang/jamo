@@ -1,0 +1,3 @@
+read_file_of_int.jamo line 2: The input path must be a string, but this is an int.
+        print(read_file(5))
+                        ^

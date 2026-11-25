@@ -1,0 +1,6 @@
+const LIMIT = 10
+
+func main()
+    var LIMIT = 20
+    print(LIMIT)
+end

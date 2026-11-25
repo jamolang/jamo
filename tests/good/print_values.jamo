@@ -1,0 +1,7 @@
+# The first test: numbers and booleans
+func main()
+    print(42)
+    print(0)
+    print(true)
+    print(false)
+end

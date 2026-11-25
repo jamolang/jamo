@@ -1,0 +1,6 @@
+use "gfx.jamo"
+
+extern "msvcrt.dll" func sqrt(value: float): f32
+
+func main()
+end

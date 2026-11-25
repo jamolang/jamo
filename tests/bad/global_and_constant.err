@@ -1,0 +1,4 @@
+global_and_constant.jamo line 2: There's already a constant called A, on line 1.
+    var A = 2
+        ^
+Give this one a different name.

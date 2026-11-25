@@ -1,0 +1,4 @@
+enum_same_name_as_struct.jamo line 5: There's already a struct called Mood, on line 1.
+    enum Mood
+         ^^^^
+Give this one a different name.

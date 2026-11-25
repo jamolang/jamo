@@ -1,0 +1,3 @@
+generic_method_not_generic.jamo line 5: Plain has no types, so its methods don't either.
+    func Plain<T>.get(): int
+         ^^^^^

@@ -1,0 +1,29 @@
+enum Mood
+    CALM
+    ANGRY
+end
+
+
+struct Enemy
+    name: string
+    health: int
+    mood: Mood
+end
+
+
+func Enemy.hit(damage: int)
+    self.health -= damage
+    self.mood = Mood.ANGRY
+end
+
+
+func main()
+    var enemies: [Enemy] = []
+    enemies.add(Enemy{name: "imp", health: 3, mood: Mood.CALM})
+    enemies[0].hit(1)
+    for enemy in enemies
+        print(f"{enemy.name}: {enemy.health}")
+    end
+    write_file("score.txt", "2")
+    print(read_file("score.txt"))
+end

@@ -1,0 +1,6 @@
+use "a.jamo"
+
+func main()
+    print(one())
+    print(1 / zero())
+end

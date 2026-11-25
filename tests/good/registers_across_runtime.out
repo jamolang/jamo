@@ -1,0 +1,4 @@
+after float: 11 22 33 44 111.25
+after write_file: 11 22 33 44
+after read_file: 11 22 33 44 11223344
+after wide and args: 11 22 33 44 0 true

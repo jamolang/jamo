@@ -1,0 +1,348 @@
+# AST: the structure of a Jamo program, as a tree. The same as src/ast.hpp.
+#
+# Jamo structs can't hold themselves, so every expression and statement lives in one of two lists in
+# the Program, and they point at each other by their place in the list. -1 means none. Spots are kept
+# as plain ints, never shared, since a struct is passed by reference.
+
+# Types, numbered like Type in src/ast.hpp. Ones from FIRST_CUSTOM on are found in the TypeTable
+const TYPE_NOTHING = 0
+const TYPE_INT = 1
+const TYPE_FLOAT = 2
+const TYPE_BOOL = 3
+const TYPE_STRING = 4
+const TYPE_UNKNOWN = 5
+const TYPE_FIRST_CUSTOM = 6
+
+# Kinds of expression, numbered like ExprKind
+const EX_NUMBER = 0
+const EX_FLOAT = 1
+const EX_BOOL = 2
+const EX_STRING = 3
+const EX_NAME = 4
+const EX_NEGATE = 5
+const EX_BINARY = 6
+const EX_CALL = 7
+const EX_LENGTH = 8
+const EX_CONVERT = 9
+const EX_FSTRING = 10
+const EX_NOT = 11
+const EX_INDEX = 12
+const EX_ARRAY_LITERAL = 13
+const EX_METHOD_CALL = 14
+const EX_FIELD = 15
+const EX_STRUCT_LITERAL = 16
+const EX_ENUM_VALUE = 17
+const EX_BUILTIN_CALL = 18
+
+# Operators, numbered like BinaryOp
+const OP_ADD = 0
+const OP_SUBTRACT = 1
+const OP_MULTIPLY = 2
+const OP_DIVIDE = 3
+const OP_REMAINDER = 4
+const OP_EQUAL = 5
+const OP_NOT_EQUAL = 6
+const OP_LESS = 7
+const OP_GREATER = 8
+const OP_LESS_EQUAL = 9
+const OP_GREATER_EQUAL = 10
+const OP_AND = 11
+const OP_OR = 12
+
+# Kinds of statement, numbered like StmtKind
+const ST_VAR = 0
+const ST_ASSIGN = 1
+const ST_IF = 2
+const ST_WHILE = 3
+const ST_FOR = 4
+const ST_MATCH = 5
+const ST_BREAK = 6
+const ST_CONTINUE = 7
+const ST_RETURN = 8
+const ST_CALL = 9
+const ST_PRINT = 10
+
+struct StructField
+    name: string
+    line: int
+    column: int
+    length: int
+    type: int
+end
+
+struct TypeEntry
+    is_array: bool
+    is_struct: bool
+    is_enum: bool
+    is_generic: bool
+    element: int
+    name: string
+    base: string
+    args: [int]
+    fields: [StructField]
+    members: [string]
+end
+
+struct TypeTable
+    entries: [TypeEntry]
+end
+
+struct Expr
+    kind: int
+    line: int
+    column: int
+    length: int
+    file: int
+    number: int
+    real: float
+    truth: bool
+    text: string
+    name: string
+    field_names: [string]
+    field_lines: [int]
+    field_columns: [int]
+    field_lengths: [int]
+    field_numbers: [int]
+    op: int
+    convert_to: int
+    left: int
+    right: int
+    inputs: [int]
+    type_args: [int]
+    depth: int
+    type: int
+    slot: int
+end
+
+struct ElifPart
+    condition: int
+    body: [int]
+end
+
+struct CasePart
+    value: int
+    body: [int]
+end
+
+struct Stmt
+    kind: int
+    line: int
+    column: int
+    length: int
+    file: int
+    name: string
+    name_line: int
+    name_column: int
+    name_length: int
+    has_operation: bool
+    operation: int
+    has_type: bool
+    declared_type: int
+    target: int
+    value: int
+    range_end: int
+    body: [int]
+    elifs: [ElifPart]
+    cases: [CasePart]
+    other_body: [int]
+    has_else: bool
+    slot: int
+    end_slot: int
+    array_slot: int
+    covers_all: bool
+end
+
+struct Input
+    name: string
+    line: int
+    column: int
+    length: int
+    type: int
+end
+
+struct Function
+    name: string
+    line: int
+    column: int
+    length: int
+    file: int
+    owner: int
+    owner_line: int
+    owner_column: int
+    owner_length: int
+    inputs: [Input]
+    return_type: int
+    dll: string
+    input_is_i32: [bool]
+    input_is_f32: [bool]
+    returns_i32: bool
+    returns_f32: bool
+    body: [int]
+    type_params: [int]
+    type_param_lines: [int]
+    type_param_columns: [int]
+    type_param_lengths: [int]
+    slot_count: int
+end
+
+struct StructDecl
+    name: string
+    line: int
+    column: int
+    length: int
+    file: int
+    type: int
+    fields: [StructField]
+    type_params: [int]
+    type_param_lines: [int]
+    type_param_columns: [int]
+    type_param_lengths: [int]
+end
+
+struct EnumDecl
+    name: string
+    line: int
+    column: int
+    length: int
+    file: int
+    type: int
+    members: [string]
+    member_lines: [int]
+    member_columns: [int]
+    member_lengths: [int]
+end
+
+struct ConstDecl
+    name: string
+    line: int
+    column: int
+    length: int
+    file: int
+    value: int
+end
+
+struct UseLine
+    path: string
+    line: int
+    column: int
+    length: int
+    file: int
+end
+
+struct Program
+    types: TypeTable
+    file_names: [string]
+    current_file: int
+    uses: [UseLine]
+    structs: [StructDecl]
+    enums: [EnumDecl]
+    consts: [ConstDecl]
+    functions: [Function]
+    exprs: [Expr]
+    stmts: [Stmt]
+    globals: [int]
+    setup_order: [int]
+end
+
+func new_program(): Program
+    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: []}
+end
+
+# Variables outside functions get slots from -2 down (-1 means no slot), and their values are set up by a
+# function the checker makes with this name, which no Jamo name can match
+const FIRST_GLOBAL_SLOT = -2
+const SETUP_NAME = "(setup)"
+
+# --- Types ---
+
+func type_is_custom(type: int): bool
+    return type >= TYPE_FIRST_CUSTOM
+end
+
+func TypeTable.array_of(element: int): int
+    for i in 0..len(self.entries)
+        if self.entries[i].is_array and self.entries[i].element == element
+            return TYPE_FIRST_CUSTOM + i
+        end
+    end
+    self.entries.add(TypeEntry{is_array: true, is_struct: false, is_enum: false, is_generic: false, element: element, name: "", base: "", args: [], fields: [], members: []})
+    return TYPE_FIRST_CUSTOM + len(self.entries) - 1
+end
+
+# A type written by name. The checker finds out later what it is, if it's anything
+func TypeTable.named(name: string): int
+    for i in 0..len(self.entries)
+        if not self.entries[i].is_array and self.entries[i].name == name
+            return TYPE_FIRST_CUSTOM + i
+        end
+    end
+    self.entries.add(TypeEntry{is_array: false, is_struct: false, is_enum: false, is_generic: false, element: TYPE_NOTHING, name: name, base: "", args: [], fields: [], members: []})
+    return TYPE_FIRST_CUSTOM + len(self.entries) - 1
+end
+
+# A generic struct given its types, like Pair<string, int>. Its name is written out in full, so the same
+# types always give the same entry. The checker fills in its fields once every type is known
+func TypeTable.generic(base: string, args: [int]): int
+    var full = base + "<"
+    for i in 0..len(args)
+        if i > 0
+            full = full + ", "
+        end
+        full = full + self.name(args[i])
+    end
+    full = full + ">"
+    for i in 0..len(self.entries)
+        if not self.entries[i].is_array and self.entries[i].name == full
+            return TYPE_FIRST_CUSTOM + i
+        end
+    end
+    var kept: [int] = []
+    for arg in args
+        kept.add(arg)
+    end
+    self.entries.add(TypeEntry{is_array: false, is_struct: false, is_enum: false, is_generic: true, element: TYPE_NOTHING, name: full, base: base, args: kept, fields: [], members: []})
+    return TYPE_FIRST_CUSTOM + len(self.entries) - 1
+end
+
+func TypeTable.is_generic(type: int): bool
+    return type_is_custom(type) and self.entry(type).is_generic
+end
+
+func TypeTable.entry(type: int): TypeEntry
+    return self.entries[type - TYPE_FIRST_CUSTOM]
+end
+
+func TypeTable.name(type: int): string
+    if type == TYPE_INT
+        return "int"
+    elif type == TYPE_FLOAT
+        return "float"
+    elif type == TYPE_BOOL
+        return "bool"
+    elif type == TYPE_STRING
+        return "string"
+    elif type == TYPE_NOTHING or type == TYPE_UNKNOWN
+        return "nothing"
+    end
+    var found = self.entry(type)
+    if found.is_array
+        return "[" + self.name(found.element) + "]"
+    end
+    return found.name
+end
+
+# --- Making nodes ---
+
+func Program.new_expr(kind: int, line: int, column: int, length: int): int
+    self.exprs.add(Expr{kind: kind, line: line, column: column, length: length, file: self.current_file, number: 0, real: 0.0, truth: false, text: "", name: "", field_names: [], field_lines: [], field_columns: [], field_lengths: [], field_numbers: [], op: OP_ADD, convert_to: TYPE_NOTHING, left: -1, right: -1, inputs: [], type_args: [], depth: 1, type: TYPE_NOTHING, slot: -1})
+    return len(self.exprs) - 1
+end
+
+func Program.new_stmt(kind: int, line: int, column: int, length: int): int
+    self.stmts.add(Stmt{kind: kind, line: line, column: column, length: length, file: self.current_file, name: "", name_line: 0, name_column: 0, name_length: 1, has_operation: false, operation: OP_ADD, has_type: false, declared_type: TYPE_NOTHING, target: -1, value: -1, range_end: -1, body: [], elifs: [], cases: [], other_body: [], has_else: false, slot: -1, end_slot: -1, array_slot: -1, covers_all: false})
+    return len(self.stmts) - 1
+end
+
+func new_function(): Function
+    return Function{name: "", line: 0, column: 0, length: 1, file: -1, owner: TYPE_NOTHING, owner_line: 0, owner_column: 0, owner_length: 1, inputs: [], return_type: TYPE_NOTHING, dll: "", input_is_i32: [], input_is_f32: [], returns_i32: false, returns_f32: false, body: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: [], slot_count: 0}
+end

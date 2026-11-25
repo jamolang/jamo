@@ -1,0 +1,3 @@
+main.jamo line 1: This file is outside the program's folder, so it can't be used.
+    use "C:/Windows/win.jamo"
+        ^^^^^^^^^^^^^^^^^^^^^

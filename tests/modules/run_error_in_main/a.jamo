@@ -1,0 +1,7 @@
+func one(): int
+    return 1
+end
+
+func zero(): int
+    return 0
+end

@@ -1,0 +1,98 @@
+# A to-do list that's saved to a file, so it's still there next time.
+
+func rest_of(text: string, start: int): string
+    var rest = ""
+    for i in start..len(text)
+        rest = rest + text[i]
+    end
+    return rest
+end
+
+func starts_with(text: string, opening: string): bool
+    if len(text) < len(opening)
+        return false
+    end
+    for i in 0..len(opening)
+        if text[i] != opening[i]
+            return false
+        end
+    end
+    return true
+end
+
+func load(path: string): [string]
+    var items: [string] = []
+    if not exists(path)
+        return items
+    end
+    var text = read_file(path)
+    var item = ""
+    for i in 0..len(text)
+        if text[i] == "\n"
+            items.add(item)
+            item = ""
+        else
+            item = item + text[i]
+        end
+    end
+    return items
+end
+
+func save(path: string, items: [string])
+    var text = ""
+    for item in items
+        text = text + item + "\n"
+    end
+    write_file(path, text)
+end
+
+func show(items: [string])
+    if len(items) == 0
+        print("Nothing to do.")
+    end
+    var number = 1
+    for item in items
+        print(f"{number}. {item}")
+        number += 1
+    end
+end
+
+func without(items: [string], skip: int): [string]
+    var kept: [string] = []
+    for i in 0..len(items)
+        if i != skip
+            kept.add(items[i])
+        end
+    end
+    return kept
+end
+
+func main()
+    var path = "todo.txt"
+    var items = load(path)
+    print("Commands: add <thing>, done <number>, list, quit")
+    var line = input()
+    while line != "quit" and line != ""
+        if line == "list"
+            show(items)
+        elif starts_with(line, "add ")
+            var item = rest_of(line, 4)
+            items.add(item)
+            save(path, items)
+            print(f"Added: {item}")
+        elif starts_with(line, "done ")
+            var number = int(rest_of(line, 5))
+            if number < 1 or number > len(items)
+                print("There's no item with that number.")
+            else
+                print(f"Done: {items[number - 1]}")
+                items = without(items, number - 1)
+                save(path, items)
+            end
+        else
+            print("I don't know that command.")
+        end
+        line = input()
+    end
+    print("Bye!")
+end

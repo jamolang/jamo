@@ -1,0 +1,3 @@
+array_add_needs_one.jamo line 3: add takes 1 input, but this gives it 0.
+        items.add()
+        ^^^^^^^^^^^

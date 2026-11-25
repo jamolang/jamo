@@ -1,0 +1,77 @@
+# A number show, using only what Phase 1 of Jamo has.
+# There's no % yet, so remainder works it out with division.
+
+func remainder(a: int, b: int): int
+    return a - a / b * b
+end
+
+func is_prime(n: int): bool
+    if n < 2
+        return false
+    end
+    var divisor = 2
+    while divisor * divisor <= n
+        if remainder(n, divisor) == 0
+            return false
+        end
+        divisor = divisor + 1
+    end
+    return true
+end
+
+func fibonacci(n: int): int
+    if n < 2
+        return n
+    end
+    return fibonacci(n - 1) + fibonacci(n - 2)
+end
+
+func collatz_steps(start: int): int
+    var n = start
+    var steps = 0
+    while n != 1
+        if remainder(n, 2) == 0
+            n = n / 2
+        else
+            n = n * 3 + 1
+        end
+        steps = steps + 1
+    end
+    return steps
+end
+
+func main()
+    # The first 10 primes
+    var found = 0
+    var candidate = 2
+    while found < 10
+        if is_prime(candidate)
+            print(candidate)
+            found = found + 1
+        end
+        candidate = candidate + 1
+    end
+
+    # A Fibonacci number, using recursion
+    print(fibonacci(20))
+
+    # The start under 1000 with the longest Collatz chain
+    var best_start = 1
+    var best_steps = 0
+    var start = 1
+    while start < 1000
+        var steps = collatz_steps(start)
+        if steps > best_steps
+            best_start = start
+            best_steps = steps
+        end
+        start = start + 1
+    end
+    print(best_start)
+    print(best_steps)
+
+    # Booleans and negative numbers
+    print(is_prime(97))
+    print(best_steps > 1000)
+    print(-7 / 2)
+end

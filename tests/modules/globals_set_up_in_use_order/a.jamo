@@ -1,0 +1,3 @@
+# a uses nothing, so its variables are set up first
+var from_a = 3
+var a_names = ["a"]

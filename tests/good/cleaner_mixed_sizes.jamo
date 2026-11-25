@@ -1,0 +1,98 @@
+# Many block sizes, always replacing random boxes, so freed blocks get reused while others stay in use around them.
+# Each box can rebuild what it should hold from its numbers, so damage to a reused or shared block shows up.
+# run_tests.py works out the same answers in Python, and also runs this with far more boxes and steps.
+struct Box
+    text: string
+    numbers: [int]
+    kept: string
+    seed: int
+    size: int
+    count: int
+    kept_seed: int
+    kept_size: int
+end
+
+func next_number(seed: int): int
+    return (seed * 1103515245 + 12345) % 2147483648
+end
+
+func make_text(seed: int, size: int): string
+    var text = string(seed) + "|"
+    var piece = string(seed % 10)
+    var left = size
+    while left > 0
+        if left % 2 == 1
+            text = text + piece
+        end
+        left = left / 2
+        if left > 0
+            piece = piece + piece
+        end
+    end
+    return text
+end
+
+func make_numbers(seed: int, count: int): [int]
+    var items: [int] = []
+    for j in 0..count
+        items.add(seed + j * 3)
+    end
+    return items
+end
+
+func make_box(seed: int, size: int, count: int, kept: string, kept_seed: int, kept_size: int): Box
+    return Box{text: make_text(seed, size), numbers: make_numbers(seed, count), kept: kept, seed: seed, size: size, count: count, kept_seed: kept_seed, kept_size: kept_size}
+end
+
+func box_is_right(box: Box): bool
+    if box.text != make_text(box.seed, box.size)
+        return false
+    end
+    if box.kept != make_text(box.kept_seed, box.kept_size)
+        return false
+    end
+    if len(box.numbers) != box.count
+        return false
+    end
+    for j in 0..box.count
+        if box.numbers[j] != box.seed + j * 3
+            return false
+        end
+    end
+    return true
+end
+
+func main()
+    var slots = 30
+    var steps = 300
+    var sizes = [0, 1, 7, 8, 9, 15, 16, 17, 23, 24, 40, 100, 200, 400, 480, 495, 496, 497, 503, 504, 512, 513, 600, 1500]
+    var counts = [0, 1, 4, 5, 8, 9, 16, 17, 32, 33, 60, 64, 65, 70]
+    var seed = 12345
+    var boxes: [Box] = []
+    for i in 0..slots
+        boxes.add(make_box(i, i % 600, i % 70, "0|", 0, 0))
+    end
+    var wrong = 0
+    var total = 0
+    for step in 0..steps
+        seed = next_number(seed)
+        var place = seed / 65536 % slots
+        var old = boxes[place]
+        if not box_is_right(old)
+            wrong += 1
+        end
+        seed = next_number(seed)
+        var size = sizes[seed / 65536 % len(sizes)]
+        seed = next_number(seed)
+        var count = counts[seed / 65536 % len(counts)]
+        boxes[place] = make_box(seed, size, count, old.text, old.seed, old.size)
+        total += len(boxes[place].text) + len(boxes[place].numbers)
+    end
+    for box in boxes
+        if not box_is_right(box)
+            wrong += 1
+        end
+    end
+    print(wrong)
+    print(total)
+end

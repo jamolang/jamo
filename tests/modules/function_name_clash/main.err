@@ -1,0 +1,4 @@
+other.jamo line 1: shared is used in both main.jamo and other.jamo.
+    func shared()
+         ^^^^^^
+Each name can only be used once in a program, so rename one of them.

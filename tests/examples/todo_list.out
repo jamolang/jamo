@@ -1,0 +1,11 @@
+Commands: add <thing>, done <number>, list, quit
+Nothing to do.
+Added: buy milk
+Added: walk dog
+1. buy milk
+2. walk dog
+Done: buy milk
+There's no item with that number.
+I don't know that command.
+1. walk dog
+Bye!

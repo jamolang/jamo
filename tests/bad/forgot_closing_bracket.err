@@ -1,0 +1,6 @@
+forgot_closing_bracket.jamo line 3: print needs a closing ).
+        print(2)
+        ^
+forgot_closing_bracket.jamo line 5: This array needs a closing ].
+        print(x)
+        ^

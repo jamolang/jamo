@@ -1,0 +1,4 @@
+condition_not_bool.jamo line 2: An if condition must be a bool, but this is an int.
+        if 1
+           ^
+Try comparing it, like x != 0.

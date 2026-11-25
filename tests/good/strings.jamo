@@ -1,0 +1,29 @@
+func greet(name: string): string
+    return "Hello, " + name + "!"
+end
+
+func main()
+    print("plain text")
+    print("")
+    print(greet("Jamo"))
+    print("tab\there")
+    print("two\nlines")
+    print("a \"quote\" and a \\ slash")
+    print("# not a comment")
+    var word: string = "abc"
+    word = word + "def"
+    print(word)
+    print(len(word))
+    print(len(""))
+    print(word == "abcdef")
+    print(word != "abcdef")
+    print("abc" == "abd")
+    print("abc" == "abcd")
+    print("" == "")
+    print(string(42))
+    print(string(-7))
+    print(string(true))
+    print(string(false))
+    print("score: " + string(1 + 2))
+    print(string(-9223372036854775808))
+end

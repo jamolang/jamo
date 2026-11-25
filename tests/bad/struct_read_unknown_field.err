@@ -1,0 +1,4 @@
+struct_read_unknown_field.jamo line 7: Enemy has no field called healt.
+        print(e.healt)
+              ^^^^^^^
+Did you mean health?

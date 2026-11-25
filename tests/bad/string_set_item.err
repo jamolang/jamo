@@ -1,0 +1,4 @@
+string_set_item.jamo line 3: Strings can't be changed in place.
+        word[0] = "b"
+        ^^^^^^^
+Build a new string with + instead.

@@ -1,0 +1,7 @@
+func first<T>(items: [T]): T
+    return items[0]
+end
+
+func main()
+    print(first(5))
+end

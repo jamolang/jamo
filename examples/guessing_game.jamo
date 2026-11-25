@@ -1,0 +1,21 @@
+# Guess the number. Jamo has no random numbers yet, so it picks one from your name.
+
+func main()
+    print("What's your name?")
+    var name = input()
+    var secret = len(name) * 7 % 20 + 1
+    print("I picked a number from 1 to 20. Guess it!")
+    var tries = 0
+    while true
+        var guess = int(input())
+        tries += 1
+        if guess > secret
+            print("Too high.")
+        elif guess < secret
+            print("Too low.")
+        else
+            print(f"You got it, {name}, in {tries} tries!")
+            break
+        end
+    end
+end

@@ -1,0 +1,6 @@
+struct Enemy
+    boss: Enemy
+end
+
+func main()
+end

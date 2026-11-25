@@ -1,0 +1,3 @@
+divide_assign_literal_zero.jamo line 3: This divides by zero, which has no answer.
+        x /= 0
+             ^

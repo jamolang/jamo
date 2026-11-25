@@ -1,0 +1,7 @@
+struct Node<T>
+    kids: [Node<[T]>]
+end
+
+func main()
+    var n = Node<int>{kids: []}
+end

@@ -1,0 +1,6 @@
+main.jamo line 4: nothing has this name: nope1
+        print(nope1)
+              ^^^^^
+other.jamo line 2: nothing has this name: nope2
+        print(nope2)
+              ^^^^^

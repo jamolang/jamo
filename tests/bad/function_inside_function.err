@@ -1,0 +1,4 @@
+function_inside_function.jamo line 2: Functions can't go inside functions.
+        func inner()
+        ^^^^
+Move this one outside, and finish the function above with end.

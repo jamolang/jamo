@@ -1,0 +1,7 @@
+struct_unknown_field.jamo line 6: Enemy has no field called helth.
+        print(Enemy{helth: 1})
+                    ^^^^^
+Did you mean health?
+struct_unknown_field.jamo line 6: Enemy needs every field, but this leaves out health.
+        print(Enemy{helth: 1})
+              ^^^^^^^^^^^^^^^

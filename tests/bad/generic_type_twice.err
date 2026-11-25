@@ -1,0 +1,7 @@
+generic_type_twice.jamo line 1: There's already a type called A here.
+    func two<A, A>(a: A): A
+                ^
+generic_type_twice.jamo line 6: Jamo can't work out A for two from its inputs.
+        print(two(1))
+              ^^^^^^
+Give the types in < >, like two<int>(...)

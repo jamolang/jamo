@@ -1,0 +1,6 @@
+use "b.jamo"
+use "../c.jamo"
+
+func a(): int
+    return 1
+end

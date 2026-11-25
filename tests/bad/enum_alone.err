@@ -1,0 +1,4 @@
+enum_alone.jamo line 7: Mood is an enum, so it needs one of its members.
+        print(Mood)
+              ^^^^
+Like this: Mood.CALM

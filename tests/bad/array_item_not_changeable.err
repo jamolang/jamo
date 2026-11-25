@@ -1,0 +1,4 @@
+array_item_not_changeable.jamo line 3: item is a for loop's variable, so it can't be changed.
+            item = 3
+            ^^^^
+Copy it into a new variable first.

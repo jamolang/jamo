@@ -1,0 +1,4 @@
+use "notes.txt"
+
+func main()
+end

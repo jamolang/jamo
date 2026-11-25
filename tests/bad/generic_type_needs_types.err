@@ -1,0 +1,3 @@
+generic_type_needs_types.jamo line 5: Box needs its types, like Box<int>.
+    func show(b: Box)
+              ^

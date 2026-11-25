@@ -1,0 +1,10 @@
+var total = count()
+var step = 2
+
+func count(): int
+    return step * 3
+end
+
+func main()
+    print(1)
+end

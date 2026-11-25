@@ -1,0 +1,4 @@
+fstring_empty_braces.jamo line 2: This { } is empty.
+        print(f"a{}b")
+                  ^
+Put a value inside, like {score}.

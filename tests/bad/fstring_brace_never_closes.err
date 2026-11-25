@@ -1,0 +1,7 @@
+fstring_brace_never_closes.jamo line 2: This text never closes.
+        print(f"oops {1")
+                       ^^
+Put a " at its end. For a new line inside text, write \n.
+fstring_brace_never_closes.jamo line 2: This f-string has a { that never gets its }.
+        print(f"oops {1")
+                         ^

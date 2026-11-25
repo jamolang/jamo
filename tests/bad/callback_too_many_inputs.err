@@ -1,0 +1,3 @@
+callback_too_many_inputs.jamo line 6: five takes 5 inputs, but a callback can take up to 4.
+        print(callback(five))
+                       ^^^^

@@ -1,0 +1,13 @@
+func f(a: bool): int
+    if a
+        return 1
+    elif true
+        print(2)
+    else
+        return 3
+    end
+end
+
+func main()
+    print(f(true))
+end

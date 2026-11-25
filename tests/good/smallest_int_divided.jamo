@@ -1,0 +1,9 @@
+# The processor's own divide instruction crashes on this one, so it needs care
+func main()
+    var smallest = -9223372036854775808
+    var minus_one = -1
+    print(smallest / minus_one)
+    print(smallest / 1)
+    print(9 / minus_one)
+    print(smallest / 2)
+end

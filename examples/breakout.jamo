@@ -1,0 +1,182 @@
+# Breakout: knock out every brick with the ball. Move the paddle with the mouse or the arrow keys, and
+# launch the ball with Space or a click. You have 3 balls.
+
+use "gfx.jamo"
+use "sound.jamo"
+use "math.jamo"
+
+struct Game
+    paddle_x: float
+    ball_x: float
+    ball_y: float
+    dx: float
+    dy: float
+    waiting: bool
+    bricks: [bool]
+    left: int
+    score: int
+    lives: int
+    over: bool
+    won: bool
+end
+
+func new_game(): Game
+    var bricks: [bool] = []
+    for i in 0..60
+        bricks.add(true)
+    end
+    return Game{paddle_x: 400.0, ball_x: 400.0, ball_y: 540.0, dx: 0.0, dy: 0.0, waiting: true, bricks: bricks, left: 60, score: 0, lives: 3, over: false, won: false}
+end
+
+func row_color(row: int): Color
+    var colors = [rgb(239, 83, 80), rgb(255, 152, 0), rgb(255, 213, 79), rgb(102, 187, 106), rgb(66, 165, 245), rgb(171, 71, 188)]
+    return colors[row]
+end
+
+# The bricks are 10 across and 6 down, each 80 wide and 28 tall, starting 70 from the top
+func brick_at(x: float, y: float): int
+    if y < 70.0 or y >= 70.0 + 6.0 * 28.0 or x < 0.0 or x >= 800.0
+        return -1
+    end
+    return int((y - 70.0) / 28.0) * 10 + int(x / 80.0)
+end
+
+func launch(game: Game)
+    game.waiting = false
+    var angle = (random_float() - 0.5) * 0.8
+    game.dx = sin(angle) * 380.0
+    game.dy = 0.0 - cos(angle) * 380.0
+end
+
+# Moves the ball in small steps, so it can't pass through a brick
+func move_ball(game: Game, step: float, sounds: [Clip], speakers: Sound)
+    var parts = 4
+    for part in 0..parts
+        var t = step / float(parts)
+        var old_x = game.ball_x
+        var old_y = game.ball_y
+        game.ball_x += game.dx * t
+        game.ball_y += game.dy * t
+        if game.ball_x < 8.0 or game.ball_x > 792.0
+            game.ball_x = clamp(game.ball_x, 8.0, 792.0)
+            game.dx = 0.0 - game.dx
+            speakers.play(sounds[0]).set_volume(0.25)
+        end
+        if game.ball_y < 8.0
+            game.ball_y = 8.0
+            game.dy = abs(game.dy)
+            speakers.play(sounds[0]).set_volume(0.25)
+        end
+        var hit = brick_at(game.ball_x, game.ball_y)
+        if hit >= 0 and game.bricks[hit]
+            game.bricks[hit] = false
+            game.left -= 1
+            game.score += (6 - hit / 10) * 10
+            if brick_at(old_x, game.ball_y) == hit
+                game.dy = 0.0 - game.dy
+            else
+                game.dx = 0.0 - game.dx
+            end
+            game.ball_x = old_x
+            game.ball_y = old_y
+            var faster = 1.012
+            game.dx = game.dx * faster
+            game.dy = game.dy * faster
+            speakers.play(sounds[2 + hit / 10]).set_volume(0.35)
+        end
+        # The paddle: where the ball lands on it sets the new angle
+        if game.dy > 0.0 and game.ball_y > 552.0 and game.ball_y < 572.0 and abs(game.ball_x - game.paddle_x) < 60.0
+            var speed = sqrt(game.dx * game.dx + game.dy * game.dy)
+            var angle = (game.ball_x - game.paddle_x) / 60.0 * 1.1
+            game.dx = sin(angle) * speed
+            game.dy = 0.0 - cos(angle) * speed
+            game.ball_y = 552.0
+            speakers.play(sounds[1]).set_volume(0.3)
+        end
+    end
+end
+
+func main()
+    var window = open_window("Breakout", 800, 600)
+    var screen = start_gfx(window)
+    var speakers = start_sound()
+    var sounds = [tone(520.0, 0.04, "square"), tone(330.0, 0.06, "square")]
+    for row in 0..6
+        sounds.add(tone(880.0 - float(row) * 80.0, 0.07, "triangle"))
+    end
+    var lost_ball = tone(140.0, 0.4, "saw")
+    var game = new_game()
+    var last_mouse = window.mouse_x()
+    while window.is_open()
+        var step = min(window.frame_time(), 0.05)
+        if window.mouse_x() != last_mouse
+            last_mouse = window.mouse_x()
+            game.paddle_x = float(last_mouse)
+        end
+        if window.key_down("left")
+            game.paddle_x -= 600.0 * step
+        end
+        if window.key_down("right")
+            game.paddle_x += 600.0 * step
+        end
+        game.paddle_x = clamp(game.paddle_x, 60.0, 740.0)
+        var start = window.key_pressed("space") or window.mouse_pressed("left")
+        if game.over
+            if start
+                game = new_game()
+            end
+        elif game.waiting
+            game.ball_x = game.paddle_x
+            game.ball_y = 540.0
+            if start
+                launch(game)
+            end
+        else
+            move_ball(game, step, sounds, speakers)
+            if game.left == 0
+                game.over = true
+                game.won = true
+            elif game.ball_y > 620.0
+                game.lives -= 1
+                speakers.play(lost_ball).set_volume(0.4)
+                if game.lives == 0
+                    game.over = true
+                else
+                    game.waiting = true
+                end
+            end
+        end
+        speakers.update()
+
+        screen.clear(rgb(16, 18, 28))
+        for i in 0..60
+            if game.bricks[i]
+                var x = float(i % 10) * 80.0
+                var y = 70.0 + float(i / 10) * 28.0
+                screen.rect(x + 2.0, y + 2.0, 76.0, 24.0, row_color(i / 10))
+                screen.rect(x + 2.0, y + 2.0, 76.0, 5.0, rgba(255, 255, 255, 60))
+            end
+        end
+        screen.rect(game.paddle_x - 60.0, 560.0, 120.0, 14.0, rgb(230, 234, 245))
+        if not game.over
+            screen.circle(game.ball_x, game.ball_y, 8.0, rgb(255, 255, 255))
+        end
+        screen.text(f"Score {game.score}", 16.0, 18.0, 22.0, rgb(235, 238, 245))
+        screen.text(f"Balls {game.lives}", 690.0, 18.0, 22.0, rgb(235, 238, 245))
+        var message = ""
+        if game.over and game.won
+            message = "You cleared every brick! Space to play again"
+        elif game.over
+            message = "Out of balls. Space to play again"
+        elif game.waiting
+            message = "Space or click to launch"
+        end
+        if message != ""
+            var width = screen.text_width(message, 24.0)
+            screen.text(message, 400.0 - width / 2.0, 340.0, 24.0, rgb(255, 230, 140))
+        end
+        screen.show()
+        window.wait_frame(60)
+    end
+    speakers.close()
+end

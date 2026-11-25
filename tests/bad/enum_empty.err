@@ -1,0 +1,3 @@
+enum_empty.jamo line 1: An enum needs at least one member.
+    enum Mood
+         ^^^^

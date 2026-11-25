@@ -1,0 +1,9 @@
+struct Mood
+    a: int
+end
+
+func Mood()
+end
+
+func main()
+end

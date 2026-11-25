@@ -1,0 +1,20 @@
+Mood.ANGRY
+true
+false
+false
+angry
+sleepy
+now Mood.CALM
+Mood.CALM!
+Color.CALM
+none
+negative one
+some
+2
+3
+0
+Pet{name: "Rex", mood: Mood.SLEEPY}
+[Mood.CALM, Mood.ANGRY, Mood.SLEEPY]
+else ran
+0
+after

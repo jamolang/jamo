@@ -1,0 +1,3 @@
+for_float_range.jamo line 2: A for loop's start and end must be ints, but this is a float.
+        for i in 0.5..3
+                 ^^^

@@ -1,0 +1,7 @@
+struct Enemy
+    health: int
+    health: int
+end
+
+func main()
+end

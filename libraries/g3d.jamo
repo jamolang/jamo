@@ -1,0 +1,838 @@
+# g3d: 3D drawing with a camera, lights, fog, textures and meshes, on top of gfx. use "g3d.jamo"
+#
+# g3d draws into gfx's picture, which has a depth buffer, so 2D drawing like text can go on top
+# afterward. It switches OpenGL to its own settings when it draws, and gfx switches them back.
+# A mesh is a list of triangles, each corner 8 floats: place x, y and z, the normal's x, y and z, and
+# the texture spot's u and v. Matrices are 16 32-bit floats, a column at a time, as OpenGL takes them.
+
+use "gfx.jamo"
+
+extern "msvcrt.dll" func sin(value: float): float
+extern "msvcrt.dll" func cos(value: float): float
+extern "msvcrt.dll" func tan(value: float): float
+extern "OpenGL" func glUniformMatrix4fv(place: i32, count: i32, transpose: bool, values: int)
+extern "OpenGL" func glUniform3f(place: i32, x: f32, y: f32, z: f32)
+extern "OpenGL" func glUniform4f(place: i32, x: f32, y: f32, z: f32, w: f32)
+extern "OpenGL" func glUniform1i(place: i32, value: i32)
+extern "OpenGL" func glUniform1f(place: i32, value: f32)
+extern "OpenGL" func glGenerateMipmap(target: i32)
+
+struct Vec3
+    x: float
+    y: float
+    z: float
+end
+
+struct Mesh
+    vertex_array: int
+    buffer: int
+    count: int
+    open: bool
+end
+
+struct Texture
+    id: int
+    width: int
+    height: int
+    open: bool
+end
+
+struct G3d
+    gfx: Gfx
+    shader: int
+    places: [int]
+    eye: Vec3
+    target: Vec3
+    field: float
+    near: float
+    far: float
+    sun_direction: Vec3
+    sun_color: Color
+    ambient_color: Color
+    fog_color: Color
+    fog_start: float
+    fog_end: float
+    fog_on: bool
+    lamp_places: [Vec3]
+    lamp_colors: [Color]
+    lamp_reaches: [float]
+    changed: bool
+    seen_width: int
+    seen_height: int
+    matrices: int
+    white: Texture
+    meshes: [Mesh]
+    textures: [Texture]
+    open: bool
+    closed_by_program: bool
+end
+
+func vec3(x: float, y: float, z: float): Vec3
+    return Vec3{x: x, y: y, z: z}
+end
+
+# --- Starting ---
+
+func start_3d(g: Gfx): G3d
+    g.must_be_open()
+    var vertex = "#version 330 core\nlayout(location = 0) in vec3 place;\nlayout(location = 1) in vec3 normal;\nlayout(location = 2) in vec2 spot;\nuniform mat4 model;\nuniform mat4 view_projection;\nuniform mat4 normal_matrix;\nout vec3 world;\nout vec3 bent;\nout vec2 uv;\nvoid main() {\n    vec4 w = model * vec4(place, 1.0);\n    world = w.xyz;\n    bent = mat3(normal_matrix) * normal;\n    uv = spot;\n    gl_Position = view_projection * w;\n}\n"
+    var fragment = "#version 330 core\nin vec3 world;\nin vec3 bent;\nin vec2 uv;\nuniform sampler2D picture;\nuniform vec4 color;\nuniform vec3 sun_direction;\nuniform vec3 sun_color;\nuniform vec3 ambient;\nuniform vec3 eye;\nuniform vec3 fog;\nuniform vec3 fog_color;\nuniform vec3 lamp_place[4];\nuniform vec3 lamp_color[4];\nuniform float lamp_reach[4];\nout vec4 result;\nvoid main() {\n    vec3 n = normalize(bent);\n    if (!gl_FrontFacing) n = -n;\n    vec4 base = color * texture(picture, uv);\n    vec3 light = ambient + sun_color * max(dot(n, -sun_direction), 0.0);\n    for (int i = 0; i < 4; i++) {\n        if (lamp_reach[i] > 0.0) {\n            vec3 d = lamp_place[i] - world;\n            float dist = max(length(d), 0.0001);\n            float fall = clamp(1.0 - dist / lamp_reach[i], 0.0, 1.0);\n            light += lamp_color[i] * max(dot(n, d / dist), 0.0) * fall * fall;\n        }\n    }\n    vec3 shade = base.rgb * light;\n    if (fog.z > 0.5) {\n        float f = clamp((distance(world, eye) - fog.x) / max(fog.y - fog.x, 0.0001), 0.0, 1.0);\n        shade = mix(shade, fog_color, f);\n    }\n    result = vec4(shade, base.a);\n}\n"
+    var program = glCreateProgram()
+    var first = gfx_compile(35633, vertex)
+    var second = gfx_compile(35632, fragment)
+    glAttachShader(program, first)
+    glAttachShader(program, second)
+    glLinkProgram(program)
+    var result = memory(8)
+    glGetProgramiv(program, 35714, result)
+    if peek_i32(result, 0) == 0
+        fail("The graphics card couldn't link g3d's drawing code.")
+    end
+    glDeleteShader(first)
+    glDeleteShader(second)
+    var names = ["model", "view_projection", "normal_matrix", "picture", "color", "sun_direction", "sun_color", "ambient", "eye", "fog", "fog_color"]
+    var places: [int] = []
+    for name in names
+        places.add(glGetUniformLocation(program, gfx_c_text(name)))
+    end
+    for i in 0..4
+        places.add(glGetUniformLocation(program, gfx_c_text(f"lamp_place[{i}]")))
+        places.add(glGetUniformLocation(program, gfx_c_text(f"lamp_color[{i}]")))
+        places.add(glGetUniformLocation(program, gfx_c_text(f"lamp_reach[{i}]")))
+    end
+    var g3 = G3d{gfx: g, shader: program, places: places, eye: vec3(0.0, 2.0, 6.0), target: vec3(0.0, 0.0, 0.0), field: 60.0, near: 0.1, far: 500.0, sun_direction: g3d_normalize(vec3(-0.4, -1.0, -0.3)), sun_color: rgb(204, 204, 204), ambient_color: rgb(77, 77, 77), fog_color: rgb(0, 0, 0), fog_start: 0.0, fog_end: 0.0, fog_on: false, lamp_places: [], lamp_colors: [], lamp_reaches: [], changed: true, seen_width: 0, seen_height: 0, matrices: memory(64 * 5), white: Texture{id: 0, width: 1, height: 1, open: true}, meshes: [], textures: [], open: true, closed_by_program: false}
+    for i in 0..4
+        g3.lamp_places.add(vec3(0.0, 0.0, 0.0))
+        g3.lamp_colors.add(rgb(0, 0, 0))
+        g3.lamp_reaches.add(0.0)
+    end
+    var white = memory(4)
+    poke_i32(white, 0, -1)
+    g3.white = g3.make_texture(white, 1, 1)
+    return g3
+end
+
+func G3d.must_be_open()
+    if not self.open
+        fail("This 3D drawing is closed, so it can't be used.")
+    end
+    self.gfx.must_be_open()
+end
+
+# Switches OpenGL to g3d's settings, after drawing what gfx has waiting
+func G3d.enter()
+    if not self.gfx.in_3d
+        self.gfx.flush()
+        self.gfx.in_3d = true
+        glUseProgram(self.shader)
+        glEnable(2929)
+        self.changed = true
+    end
+end
+
+# --- The scene ---
+
+# Puts the camera at eye, looking at target
+func G3d.camera(eye: Vec3, target: Vec3)
+    self.must_be_open()
+    self.eye = eye
+    self.target = target
+    self.changed = true
+end
+
+# How wide the camera sees, in degrees, and the nearest and farthest it draws
+func G3d.lens(field: float, near: float, far: float)
+    self.must_be_open()
+    if not (field > 0.0 and field < 180.0)
+        fail(f"A lens sees from above 0.0 to below 180.0 degrees, not {field}.")
+    end
+    if not (near > 0.0 and far > near)
+        fail(f"A lens needs 0.0 < near < far, but they're {near} and {far}.")
+    end
+    self.field = field
+    self.near = near
+    self.far = far
+    self.changed = true
+end
+
+# Sunlight shining in a direction, like vec3(0.0, -1.0, 0.0) for straight down
+func G3d.sun(direction: Vec3, color: Color)
+    self.must_be_open()
+    self.sun_direction = g3d_normalize(direction)
+    self.sun_color = color
+    self.changed = true
+end
+
+# The light that reaches everything, even in shade
+func G3d.ambient(color: Color)
+    self.must_be_open()
+    self.ambient_color = color
+    self.changed = true
+end
+
+# One of 4 lamps, 0 to 3, lighting things nearer than reach
+func G3d.lamp(number: int, place: Vec3, color: Color, reach: float)
+    self.must_be_open()
+    if number < 0 or number > 3
+        fail(f"g3d has lamps 0 to 3, not {number}.")
+    end
+    if not (reach > 0.0)
+        fail(f"A lamp's reach must be above 0.0, not {reach}.")
+    end
+    self.lamp_places[number] = place
+    self.lamp_colors[number] = color
+    self.lamp_reaches[number] = reach
+    self.changed = true
+end
+
+func G3d.lamp_off(number: int)
+    self.must_be_open()
+    if number < 0 or number > 3
+        fail(f"g3d has lamps 0 to 3, not {number}.")
+    end
+    self.lamp_reaches[number] = 0.0
+    self.changed = true
+end
+
+# Things fade into the fog color from start to end, counting from the camera
+func G3d.fog(color: Color, start: float, end_at: float)
+    self.must_be_open()
+    if not (end_at > start)
+        fail(f"Fog must end farther than it starts, but they're {start} and {end_at}.")
+    end
+    self.fog_color = color
+    self.fog_start = start
+    self.fog_end = end_at
+    self.fog_on = true
+    self.changed = true
+end
+
+func G3d.no_fog()
+    self.must_be_open()
+    self.fog_on = false
+    self.changed = true
+end
+
+# Sends the camera, lights and fog to the graphics card, when they've changed
+func G3d.send_scene()
+    var width = self.gfx.width
+    var height = self.gfx.height
+    if not self.changed and width == self.seen_width and height == self.seen_height
+        return
+    end
+    self.changed = false
+    self.seen_width = width
+    self.seen_height = height
+    var view = self.matrices
+    var projection = self.matrices + 64
+    var both = self.matrices + 128
+    g3d_look(view, self.eye, self.target)
+    var aspect = 1.0
+    if height > 0
+        aspect = float(width) / float(height)
+    end
+    g3d_perspective(projection, self.field, aspect, self.near, self.far)
+    g3d_multiply(both, projection, view)
+    var p = self.places
+    glUniformMatrix4fv(p[1], 1, false, both)
+    glUniform1i(p[3], 0)
+    glUniform3f(p[5], self.sun_direction.x, self.sun_direction.y, self.sun_direction.z)
+    glUniform3f(p[6], self.sun_color.red, self.sun_color.green, self.sun_color.blue)
+    glUniform3f(p[7], self.ambient_color.red, self.ambient_color.green, self.ambient_color.blue)
+    glUniform3f(p[8], self.eye.x, self.eye.y, self.eye.z)
+    var fog_on = 0.0
+    if self.fog_on
+        fog_on = 1.0
+    end
+    glUniform3f(p[9], self.fog_start, self.fog_end, fog_on)
+    glUniform3f(p[10], self.fog_color.red, self.fog_color.green, self.fog_color.blue)
+    for i in 0..4
+        var place = self.lamp_places[i]
+        var color = self.lamp_colors[i]
+        glUniform3f(p[11 + i * 3], place.x, place.y, place.z)
+        glUniform3f(p[12 + i * 3], color.red, color.green, color.blue)
+        glUniform1f(p[13 + i * 3], self.lamp_reaches[i])
+    end
+end
+
+# --- Drawing ---
+
+# Draws a mesh at a place, turned by degrees around x, y and z, and stretched by size
+func G3d.draw(mesh: Mesh, place: Vec3, turn: Vec3, size: Vec3, color: Color)
+    self.draw_with(mesh, self.white, place, turn, size, color)
+end
+
+func G3d.draw_textured(mesh: Mesh, texture: Texture, place: Vec3, turn: Vec3, size: Vec3)
+    if not texture.open
+        fail("This texture is closed, so it can't be drawn.")
+    end
+    self.draw_with(mesh, texture, place, turn, size, rgb(255, 255, 255))
+end
+
+func G3d.draw_with(mesh: Mesh, texture: Texture, place: Vec3, turn: Vec3, size: Vec3, color: Color)
+    self.must_be_open()
+    if not mesh.open
+        fail("This mesh is closed, so it can't be drawn.")
+    end
+    self.enter()
+    self.send_scene()
+    var model = self.matrices + 192
+    var normals = self.matrices + 256
+    g3d_model(model, normals, place, turn, size)
+    var p = self.places
+    glUniformMatrix4fv(p[0], 1, false, model)
+    glUniformMatrix4fv(p[2], 1, false, normals)
+    glUniform4f(p[4], color.red, color.green, color.blue, color.alpha)
+    glBindTexture(3553, texture.id)
+    glBindVertexArray(mesh.vertex_array)
+    glDrawArrays(4, 0, mesh.count)
+end
+
+# --- Matrices ---
+
+func g3d_set(matrix: int, row: int, column: int, value: float)
+    poke_f32(matrix, (column * 4 + row) * 4, value)
+end
+
+func g3d_get(matrix: int, row: int, column: int): float
+    return peek_f32(matrix, (column * 4 + row) * 4)
+end
+
+func g3d_clear(matrix: int)
+    for i in 0..16
+        poke_f32(matrix, i * 4, 0.0)
+    end
+end
+
+func g3d_multiply(result: int, a: int, b: int)
+    for row in 0..4
+        for column in 0..4
+            var total = 0.0
+            for k in 0..4
+                total += g3d_get(a, row, k) * g3d_get(b, k, column)
+            end
+            g3d_set(result, row, column, total)
+        end
+    end
+end
+
+func g3d_normalize(v: Vec3): Vec3
+    var length = sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+    if not (length > 0.000000001)
+        return vec3(0.0, 0.0, -1.0)
+    end
+    return vec3(v.x / length, v.y / length, v.z / length)
+end
+
+func g3d_cross(a: Vec3, b: Vec3): Vec3
+    return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+end
+
+# The camera's matrix. Looking straight up or down, the top of the screen points along -z or +z
+func g3d_look(matrix: int, eye: Vec3, target: Vec3)
+    var forward = g3d_normalize(vec3(target.x - eye.x, target.y - eye.y, target.z - eye.z))
+    var up = vec3(0.0, 1.0, 0.0)
+    if forward.y > 0.9999 or forward.y < -0.9999
+        if forward.y < 0.0
+            up = vec3(0.0, 0.0, -1.0)
+        else
+            up = vec3(0.0, 0.0, 1.0)
+        end
+    end
+    var side = g3d_normalize(g3d_cross(forward, up))
+    var top = g3d_cross(side, forward)
+    g3d_clear(matrix)
+    g3d_set(matrix, 0, 0, side.x)
+    g3d_set(matrix, 0, 1, side.y)
+    g3d_set(matrix, 0, 2, side.z)
+    g3d_set(matrix, 0, 3, -(side.x * eye.x + side.y * eye.y + side.z * eye.z))
+    g3d_set(matrix, 1, 0, top.x)
+    g3d_set(matrix, 1, 1, top.y)
+    g3d_set(matrix, 1, 2, top.z)
+    g3d_set(matrix, 1, 3, -(top.x * eye.x + top.y * eye.y + top.z * eye.z))
+    g3d_set(matrix, 2, 0, -forward.x)
+    g3d_set(matrix, 2, 1, -forward.y)
+    g3d_set(matrix, 2, 2, -forward.z)
+    g3d_set(matrix, 2, 3, forward.x * eye.x + forward.y * eye.y + forward.z * eye.z)
+    g3d_set(matrix, 3, 3, 1.0)
+end
+
+func g3d_perspective(matrix: int, field: float, aspect: float, near: float, far: float)
+    var f = 1.0 / tan(field * 3.141592653589793 / 360.0)
+    g3d_clear(matrix)
+    g3d_set(matrix, 0, 0, f / aspect)
+    g3d_set(matrix, 1, 1, f)
+    g3d_set(matrix, 2, 2, (far + near) / (near - far))
+    g3d_set(matrix, 2, 3, 2.0 * far * near / (near - far))
+    g3d_set(matrix, 3, 2, -1.0)
+end
+
+# Moves, turns (around y, then x, then z) and stretches. The normals turn the same way but stretch the
+# other way, so lighting stays right on stretched meshes
+func g3d_model(model: int, normals: int, place: Vec3, turn: Vec3, size: Vec3)
+    var degree = 3.141592653589793 / 180.0
+    var cx = cos(turn.x * degree)
+    var sx = sin(turn.x * degree)
+    var cy = cos(turn.y * degree)
+    var sy = sin(turn.y * degree)
+    var cz = cos(turn.z * degree)
+    var sz = sin(turn.z * degree)
+    var a00 = cy
+    var a01 = sy * sx
+    var a02 = sy * cx
+    var a10 = 0.0
+    var a11 = cx
+    var a12 = 0.0 - sx
+    var a20 = 0.0 - sy
+    var a21 = cy * sx
+    var a22 = cy * cx
+    g3d_clear(model)
+    g3d_clear(normals)
+    g3d_column(model, normals, 0, a00 * cz + a01 * sz, a10 * cz + a11 * sz, a20 * cz + a21 * sz, size.x)
+    g3d_column(model, normals, 1, a01 * cz - a00 * sz, a11 * cz - a10 * sz, a21 * cz - a20 * sz, size.y)
+    g3d_column(model, normals, 2, a02, a12, a22, size.z)
+    g3d_set(model, 0, 3, place.x)
+    g3d_set(model, 1, 3, place.y)
+    g3d_set(model, 2, 3, place.z)
+    g3d_set(model, 3, 3, 1.0)
+    g3d_set(normals, 3, 3, 1.0)
+end
+
+# One turned column of both matrices, stretched one way for the model and the other for normals
+func g3d_column(model: int, normals: int, column: int, x: float, y: float, z: float, stretch: float)
+    g3d_set(model, 0, column, x * stretch)
+    g3d_set(model, 1, column, y * stretch)
+    g3d_set(model, 2, column, z * stretch)
+    var away = stretch
+    if away < 0.000001 and away > -0.000001
+        away = 0.000001
+    end
+    g3d_set(normals, 0, column, x / away)
+    g3d_set(normals, 1, column, y / away)
+    g3d_set(normals, 2, column, z / away)
+end
+
+# --- Meshes ---
+
+# A mesh from triangles: every 3 corners make one, and each corner is 8 floats (see the top)
+func G3d.mesh(points: [float]): Mesh
+    if len(points) % 24 != 0
+        fail(f"A mesh needs 8 floats for each corner and 3 corners for each triangle, so a multiple of 24 floats, not {len(points)}.")
+    end
+    var data = memory(len(points) * 4 + 4)
+    for i in 0..len(points)
+        poke_f32(data, i * 4, points[i])
+    end
+    return self.make_mesh(data, len(points) / 8)
+end
+
+func G3d.make_mesh(data: int, count: int): Mesh
+    self.must_be_open()
+    self.enter()
+    var ids = memory(8)
+    glGenVertexArrays(1, ids)
+    var vertex_array = peek_i32(ids, 0)
+    glBindVertexArray(vertex_array)
+    glGenBuffers(1, ids)
+    var buffer = peek_i32(ids, 0)
+    glBindBuffer(34962, buffer)
+    glBufferData(34962, count * 32, data, 35044)
+    glVertexAttribPointer(0, 3, 5126, false, 32, 0)
+    glVertexAttribPointer(1, 3, 5126, false, 32, 12)
+    glVertexAttribPointer(2, 2, 5126, false, 32, 24)
+    glEnableVertexAttribArray(0)
+    glEnableVertexAttribArray(1)
+    glEnableVertexAttribArray(2)
+    var mesh = Mesh{vertex_array: vertex_array, buffer: buffer, count: count, open: true}
+    self.meshes.add(mesh)
+    return mesh
+end
+
+func Mesh.close()
+    if not self.open
+        fail("This mesh is already closed.")
+    end
+    self.open = false
+    var ids = memory(8)
+    poke_i32(ids, 0, self.buffer)
+    glDeleteBuffers(1, ids)
+    poke_i32(ids, 0, self.vertex_array)
+    glDeleteVertexArrays(1, ids)
+end
+
+func g3d_corner(points: [float], x: float, y: float, z: float, nx: float, ny: float, nz: float, u: float, v: float)
+    points.add(x)
+    points.add(y)
+    points.add(z)
+    points.add(nx)
+    points.add(ny)
+    points.add(nz)
+    points.add(u)
+    points.add(v)
+end
+
+# One side of a cube, as two triangles: a corner, then the two directions across the side
+func g3d_side(points: [float], c: Vec3, a: Vec3, b: Vec3, n: Vec3)
+    g3d_corner(points, c.x, c.y, c.z, n.x, n.y, n.z, 0.0, 1.0)
+    g3d_corner(points, c.x + a.x, c.y + a.y, c.z + a.z, n.x, n.y, n.z, 1.0, 1.0)
+    g3d_corner(points, c.x + a.x + b.x, c.y + a.y + b.y, c.z + a.z + b.z, n.x, n.y, n.z, 1.0, 0.0)
+    g3d_corner(points, c.x, c.y, c.z, n.x, n.y, n.z, 0.0, 1.0)
+    g3d_corner(points, c.x + a.x + b.x, c.y + a.y + b.y, c.z + a.z + b.z, n.x, n.y, n.z, 1.0, 0.0)
+    g3d_corner(points, c.x + b.x, c.y + b.y, c.z + b.z, n.x, n.y, n.z, 0.0, 0.0)
+end
+
+# A cube 1 wide, centered on its place
+func G3d.cube(): Mesh
+    var points: [float] = []
+    var h = 0.5
+    g3d_side(points, vec3(-h, -h, h), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0))
+    g3d_side(points, vec3(h, -h, -h), vec3(-1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, -1.0))
+    g3d_side(points, vec3(h, -h, h), vec3(0.0, 0.0, -1.0), vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0))
+    g3d_side(points, vec3(-h, -h, -h), vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), vec3(-1.0, 0.0, 0.0))
+    g3d_side(points, vec3(-h, h, h), vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0), vec3(0.0, 1.0, 0.0))
+    g3d_side(points, vec3(-h, -h, -h), vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, -1.0, 0.0))
+    return self.mesh(points)
+end
+
+# A flat square 1 wide on the ground, facing up, with its texture repeated tiles times each way
+func G3d.plane(tiles: float): Mesh
+    var points: [float] = []
+    g3d_corner(points, -0.5, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0, tiles)
+    g3d_corner(points, 0.5, 0.0, 0.5, 0.0, 1.0, 0.0, tiles, tiles)
+    g3d_corner(points, 0.5, 0.0, -0.5, 0.0, 1.0, 0.0, tiles, 0.0)
+    g3d_corner(points, -0.5, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0, tiles)
+    g3d_corner(points, 0.5, 0.0, -0.5, 0.0, 1.0, 0.0, tiles, 0.0)
+    g3d_corner(points, -0.5, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0)
+    return self.mesh(points)
+end
+
+# A ball 1 wide. More detail makes it rounder, from 3 to 64
+func G3d.sphere(detail: int): Mesh
+    if detail < 3 or detail > 64
+        fail(f"A sphere's detail goes from 3 to 64, not {detail}.")
+    end
+    var rings = detail
+    var around = detail * 2
+    var points: [float] = []
+    var pi = 3.141592653589793
+    for ring in 0..rings
+        for step in 0..around
+            var corners = [ring, step, ring + 1, step, ring + 1, step + 1, ring, step, ring + 1, step + 1, ring, step + 1]
+            for c in 0..6
+                var r = corners[c * 2]
+                var s = corners[c * 2 + 1]
+                var down = float(r) / float(rings) * pi
+                var turn = float(s) / float(around) * 2.0 * pi
+                var nx = sin(down) * cos(turn)
+                var ny = cos(down)
+                var nz = 0.0 - sin(down) * sin(turn)
+                g3d_corner(points, nx * 0.5, ny * 0.5, nz * 0.5, nx, ny, nz, float(s) / float(around), float(r) / float(rings))
+            end
+        end
+    end
+    return self.mesh(points)
+end
+
+# --- Textures ---
+
+# Loads a PNG picture to wrap onto meshes. It repeats past the edges
+func G3d.load_texture(path: string): Texture
+    var picture = decode_png(read_file(path))
+    return self.make_texture(picture.pixels, picture.width, picture.height)
+end
+
+func G3d.make_texture(pixels: int, width: int, height: int): Texture
+    self.must_be_open()
+    self.enter()
+    var ids = memory(8)
+    glGenTextures(1, ids)
+    var id = peek_i32(ids, 0)
+    glBindTexture(3553, id)
+    glPixelStorei(3317, 1)
+    glTexImage2D(3553, 0, 32856, width, height, 0, 6408, 5121, pixels)
+    glGenerateMipmap(3553)
+    glTexParameteri(3553, 10241, 9987)
+    glTexParameteri(3553, 10240, 9729)
+    glTexParameteri(3553, 10242, 10497)
+    glTexParameteri(3553, 10243, 10497)
+    var texture = Texture{id: id, width: width, height: height, open: true}
+    self.textures.add(texture)
+    return texture
+end
+
+func Texture.close()
+    if not self.open
+        fail("This texture is already closed.")
+    end
+    self.open = false
+    var ids = memory(8)
+    poke_i32(ids, 0, self.id)
+    glDeleteTextures(1, ids)
+end
+
+# --- OBJ model files ---
+
+func g3d_bad_obj(path: string, line: int, why: string)
+    fail(f"{path} line {line} can't be read as a model: {why}.")
+end
+
+# Reads a number written from place up to finish, like 12, -0.5 or 1.5e-3
+func g3d_number(data: string, place: int, finish: int, path: string, line: int): float
+    var at = place
+    var sign = 1.0
+    if at < finish and (byte(data, at) == 45 or byte(data, at) == 43)
+        if byte(data, at) == 45
+            sign = -1.0
+        end
+        at += 1
+    end
+    var value = 0.0
+    var digits = 0
+    while at < finish and byte(data, at) >= 48 and byte(data, at) <= 57
+        value = value * 10.0 + float(byte(data, at) - 48)
+        digits += 1
+        at += 1
+    end
+    if at < finish and byte(data, at) == 46
+        at += 1
+        var scale = 0.1
+        while at < finish and byte(data, at) >= 48 and byte(data, at) <= 57
+            value += float(byte(data, at) - 48) * scale
+            scale = scale / 10.0
+            digits += 1
+            at += 1
+        end
+    end
+    if digits == 0
+        g3d_bad_obj(path, line, f"{g3d_part(data, place, finish)} isn't a number")
+    end
+    if at < finish and (byte(data, at) == 101 or byte(data, at) == 69)
+        at += 1
+        var power_sign = 1
+        if at < finish and (byte(data, at) == 45 or byte(data, at) == 43)
+            if byte(data, at) == 45
+                power_sign = -1
+            end
+            at += 1
+        end
+        var power = 0
+        var power_digits = 0
+        while at < finish and byte(data, at) >= 48 and byte(data, at) <= 57
+            power = power * 10 + byte(data, at) - 48
+            power_digits += 1
+            at += 1
+        end
+        if power_digits == 0 or power > 300
+            g3d_bad_obj(path, line, f"{g3d_part(data, place, finish)} isn't a number")
+        end
+        for i in 0..power
+            if power_sign > 0
+                value = value * 10.0
+            else
+                value = value / 10.0
+            end
+        end
+    end
+    if at != finish
+        g3d_bad_obj(path, line, f"{g3d_part(data, place, finish)} isn't a number")
+    end
+    return sign * value
+end
+
+func g3d_part(words: string, from: int, to: int): string
+    var part = ""
+    var last = to
+    if last - from > 30
+        last = from + 30
+    end
+    for i in from..last
+        part = part + words[i]
+    end
+    return part
+end
+
+# One face corner's number for a list of this many, counting from 1, or from the end when below 0
+func g3d_index(data: string, place: int, finish: int, count: int, kind: string, path: string, line: int): int
+    var number = int(g3d_number(data, place, finish, path, line))
+    var index = number - 1
+    if number < 0
+        index = count + number
+    end
+    if number == 0 or index < 0 or index >= count
+        g3d_bad_obj(path, line, f"there's no {kind} number {number}")
+    end
+    return index
+end
+
+# Reads an OBJ model: its points (v), texture spots (vt), normals (vn) and faces (f). Faces with more
+# than 3 corners are cut into triangles, and faces without normals get flat ones
+func G3d.load_obj(path: string): Mesh
+    var data = read_file(path)
+    var spots: [float] = []
+    var uvs: [float] = []
+    var bends: [float] = []
+    var points: [float] = []
+    var line = 1
+    var place = 0
+    var size = len(data)
+    while place < size
+        var finish = place
+        while finish < size and byte(data, finish) != 10
+            finish += 1
+        end
+        var words: [int] = []
+        var at = place
+        while at < finish
+            while at < finish and (byte(data, at) == 32 or byte(data, at) == 9 or byte(data, at) == 13)
+                at += 1
+            end
+            if at < finish
+                if byte(data, at) == 35
+                    at = finish
+                else
+                    var start = at
+                    while at < finish and byte(data, at) != 32 and byte(data, at) != 9 and byte(data, at) != 13
+                        at += 1
+                    end
+                    words.add(start)
+                    words.add(at)
+                end
+            end
+        end
+        if len(words) > 0
+            var first = words[0]
+            var length = words[1] - words[0]
+            var a = byte(data, first)
+            var b = 0
+            if length > 1
+                b = byte(data, first + 1)
+            end
+            if length == 1 and a == 118
+                if len(words) < 8
+                    g3d_bad_obj(path, line, "a point needs x, y and z")
+                end
+                for k in 1..4
+                    spots.add(g3d_number(data, words[k * 2], words[k * 2 + 1], path, line))
+                end
+            elif length == 2 and a == 118 and b == 116
+                if len(words) < 4
+                    g3d_bad_obj(path, line, "a texture spot needs at least u")
+                end
+                uvs.add(g3d_number(data, words[2], words[3], path, line))
+                if len(words) >= 6
+                    uvs.add(g3d_number(data, words[4], words[5], path, line))
+                else
+                    uvs.add(0.0)
+                end
+            elif length == 2 and a == 118 and b == 110
+                if len(words) < 8
+                    g3d_bad_obj(path, line, "a normal needs x, y and z")
+                end
+                for k in 1..4
+                    bends.add(g3d_number(data, words[k * 2], words[k * 2 + 1], path, line))
+                end
+            elif length == 1 and a == 102
+                var corners = len(words) / 2 - 1
+                if corners < 3
+                    g3d_bad_obj(path, line, "a face needs at least 3 corners")
+                end
+                var face: [int] = []
+                for k in 1..corners + 1
+                    var start = words[k * 2]
+                    var stop = words[k * 2 + 1]
+                    var parts = [start, stop, -1, -1, -1, -1]
+                    var slash = start
+                    var found = 0
+                    while slash < stop
+                        if byte(data, slash) == 47
+                            if found == 0
+                                parts[1] = slash
+                                parts[2] = slash + 1
+                                parts[3] = stop
+                            else
+                                parts[3] = slash
+                                parts[4] = slash + 1
+                                parts[5] = stop
+                            end
+                            found += 1
+                        end
+                        slash += 1
+                    end
+                    if found > 2
+                        g3d_bad_obj(path, line, "a face corner has more than 3 parts")
+                    end
+                    face.add(g3d_index(data, parts[0], parts[1], len(spots) / 3, "point", path, line))
+                    if parts[2] >= 0 and parts[3] > parts[2]
+                        face.add(g3d_index(data, parts[2], parts[3], len(uvs) / 2, "texture spot", path, line))
+                    else
+                        face.add(-1)
+                    end
+                    if parts[4] >= 0 and parts[5] > parts[4]
+                        face.add(g3d_index(data, parts[4], parts[5], len(bends) / 3, "normal", path, line))
+                    else
+                        face.add(-1)
+                    end
+                end
+                for k in 1..corners - 1
+                    var three = [0, k, k + 1]
+                    var p = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                    for c in 0..3
+                        var s = face[three[c] * 3]
+                        p[c * 3] = spots[s * 3]
+                        p[c * 3 + 1] = spots[s * 3 + 1]
+                        p[c * 3 + 2] = spots[s * 3 + 2]
+                    end
+                    var flat = g3d_normalize(g3d_cross(vec3(p[3] - p[0], p[4] - p[1], p[5] - p[2]), vec3(p[6] - p[0], p[7] - p[1], p[8] - p[2])))
+                    for c in 0..3
+                        var t = face[three[c] * 3 + 1]
+                        var n = face[three[c] * 3 + 2]
+                        var u = 0.0
+                        var v = 0.0
+                        if t >= 0
+                            u = uvs[t * 2]
+                            v = 1.0 - uvs[t * 2 + 1]
+                        end
+                        var normal = flat
+                        if n >= 0
+                            normal = vec3(bends[n * 3], bends[n * 3 + 1], bends[n * 3 + 2])
+                        end
+                        g3d_corner(points, p[c * 3], p[c * 3 + 1], p[c * 3 + 2], normal.x, normal.y, normal.z, u, v)
+                    end
+                end
+            end
+        end
+        place = finish + 1
+        line += 1
+    end
+    if len(points) == 0
+        fail(f"{path} has no faces, so there's no model to draw.")
+    end
+    return self.mesh(points)
+end
+
+# --- Closing ---
+
+func G3d.close()
+    if self.closed_by_program
+        fail("This 3D drawing is already closed.")
+    end
+    self.closed_by_program = true
+    if not self.open
+        return
+    end
+    self.open = false
+    for mesh in self.meshes
+        if mesh.open
+            mesh.close()
+        end
+    end
+    for texture in self.textures
+        if texture.open
+            texture.close()
+        end
+    end
+    glDeleteProgram(self.shader)
+    if self.gfx.open
+        self.gfx.back_to_2d()
+    end
+end

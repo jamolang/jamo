@@ -1,0 +1,6 @@
+non_english_text.jamo line 2: This character isn't allowed here. Non-English text can only go in comments and quoted text.
+        var caf?? = 1
+               ^
+non_english_text.jamo line 2: This character isn't allowed here. Non-English text can only go in comments and quoted text.
+        var caf?? = 1
+                ^

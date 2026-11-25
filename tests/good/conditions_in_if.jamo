@@ -1,0 +1,52 @@
+func yes(): bool
+    print("yes ran")
+    return true
+end
+
+func no(): bool
+    print("no ran")
+    return false
+end
+
+func main()
+    if no() and yes()
+        print("a")
+    end
+    if yes() or no()
+        print("b")
+    end
+    if not (yes() and no())
+        print("c")
+    end
+    if not (no() or no())
+        print("d")
+    end
+    if (no() or yes()) and (yes() or no())
+        print("e")
+    end
+    var i = 0
+    while i < 3 and yes()
+        i += 1
+    end
+    if true
+        print("f")
+    else
+        print("never")
+    end
+    if false
+        print("never")
+    elif 1 + 1 == 2
+        print("g")
+    end
+    while false
+        print("never")
+    end
+    var text = "ab"
+    if text == "ab" and len(text) == 2
+        print("h")
+    end
+    var half = 1.5
+    if half > 1.0 and not (half > 2.0)
+        print("i")
+    end
+end

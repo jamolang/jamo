@@ -1,0 +1,6 @@
+use "enemy.jamo"
+use "ENEMY.JAMO"
+
+func main()
+    print(f())
+end

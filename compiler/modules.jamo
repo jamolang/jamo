@@ -1,0 +1,390 @@
+# Modules: loads the main file and every file it uses, once each. The same as src/modules.cpp.
+#
+# Paths are worked out by their text, the way std::filesystem's lexically_normal and lexically_relative
+# do: a path keeps the capitals it was written with, and two paths are the same file when they match
+# ignoring capitals, like Windows.
+
+use "lexer.jamo"
+use "parser.jamo"
+use "errors.jamo"
+use "libraries_data.jamo"
+
+extern "kernel32.dll" func GetFullPathNameW(name: int, size: i32, place: int, file_part: int): i32
+extern "kernel32.dll" func GetFileAttributesW(name: int): i32
+
+const BUILT_IN = "built in:"
+
+struct Loader
+    root: string
+    errors: Errors
+    program: Program
+    files: [string]
+    from_lines: [int]
+    from_columns: [int]
+    from_lengths: [int]
+    from_files: [int]
+    seen: [string]
+    use_from: [int]
+    use_to: [int]
+    using_file: int
+end
+
+# --- Paths ---
+
+func is_separator(letter: int): bool
+    return letter == 47 or letter == 92
+end
+
+# A path's root, like C:\ or \, and the names after it
+func path_root(path: string): string
+    if len(path) >= 2 and byte(path, 1) == 58
+        if len(path) >= 3 and is_separator(byte(path, 2))
+            return slice(path, 0, 2) + "\\"
+        end
+        return slice(path, 0, 2)
+    end
+    if len(path) >= 1 and is_separator(byte(path, 0))
+        return "\\"
+    end
+    return ""
+end
+
+func path_parts(path: string): [string]
+    var parts: [string] = []
+    var start = len(path_root(path))
+    if len(path) >= 2 and byte(path, 1) == 58 and len(path_root(path)) == 2
+        start = 2
+    end
+    var piece = ""
+    for i in start..len(path)
+        if is_separator(byte(path, i))
+            if piece != ""
+                parts.add(piece)
+            end
+            piece = ""
+        else
+            piece += path[i]
+        end
+    end
+    if piece != ""
+        parts.add(piece)
+    end
+    return parts
+end
+
+# Takes out . and folder/.. parts, like lexically_normal
+func normal_path(path: string): string
+    var root = path_root(path)
+    var kept: [string] = []
+    for part in path_parts(path)
+        if part == "."
+            continue
+        end
+        if part == ".." and len(kept) > 0 and kept[len(kept) - 1] != ".."
+            kept.pop()
+            continue
+        end
+        if part == ".." and root != ""
+            continue
+        end
+        kept.add(part)
+    end
+    return root + join(kept, "\\")
+end
+
+func parent_path(path: string): string
+    var root = path_root(path)
+    var parts = path_parts(path)
+    if len(parts) == 0
+        return root
+    end
+    parts.pop()
+    return root + join(parts, "\\")
+end
+
+func join_path(folder: string, name: string): string
+    if path_root(name) != ""
+        return name
+    end
+    if folder == "" or is_separator(byte(folder, len(folder) - 1))
+        return folder + name
+    end
+    return folder + "\\" + name
+end
+
+# The parts that lead from base to path, joined by /, or "" when they have different roots
+func relative_path(path: string, base: string): string
+    if lower(path_root(path)) != lower(path_root(base))
+        return ""
+    end
+    var a = path_parts(path)
+    var b = path_parts(base)
+    var same = 0
+    while same < len(a) and same < len(b) and a[same] == b[same]
+        same += 1
+    end
+    var parts: [string] = []
+    for i in same..len(b)
+        parts.add("..")
+    end
+    for i in same..len(a)
+        parts.add(a[i])
+    end
+    if len(parts) == 0
+        return "."
+    end
+    return join(parts, "/")
+end
+
+func is_inside(path: string, folder: string): bool
+    var relative = relative_path(path, folder)
+    if relative == ""
+        return false
+    end
+    return split(relative, "/")[0] != ".."
+end
+
+# The ending after a name's last dot, like .jamo. A name that only starts with a dot has none
+func path_extension(path: string): string
+    var parts = path_parts(path)
+    if len(parts) == 0
+        return ""
+    end
+    var name = parts[len(parts) - 1]
+    if name == "." or name == ".."
+        return ""
+    end
+    var dot = -1
+    for i in 0..len(name)
+        if byte(name, i) == 46
+            dot = i
+        end
+    end
+    if dot <= 0
+        return ""
+    end
+    return slice(name, dot, len(name))
+end
+
+# A full path, from the folder the program runs in
+func full_path(path: string): string
+    var place = memory(65536)
+    var size = GetFullPathNameW(wide(path), 32768, place, 0)
+    if size <= 0 or size >= 32768
+        return ""
+    end
+    var out = new_bytes()
+    for i in 0..size
+        var unit = peek_u16(place, i * 2)
+        if unit < 128
+            out.add_u8(unit)
+        elif unit < 2048
+            out.add_u8(192 + unit / 64)
+            out.add_u8(128 + unit % 64)
+        else
+            out.add_u8(224 + unit / 4096)
+            out.add_u8(128 + unit / 64 % 64)
+            out.add_u8(128 + unit % 64)
+        end
+    end
+    return out.text()
+end
+
+# 16 is a folder, and -1 means nothing's there
+func file_kind(path: string): int
+    var attributes = GetFileAttributesW(wide(path))
+    if attributes == -1
+        return -1
+    end
+    if attributes / 16 % 2 == 1
+        return 16
+    end
+    return 0
+end
+
+# Like std::filesystem::canonical: the full, tidied path of something that's there, or "" when it isn't
+func canonical_path(path: string): string
+    var full = full_path(path)
+    if full == "" or file_kind(full) < 0
+        return ""
+    end
+    return normal_path(full)
+end
+
+# --- Loading ---
+
+func new_loader(root: string, errors: Errors, program: Program): Loader
+    return Loader{root: root, errors: errors, program: program, files: [], from_lines: [], from_columns: [], from_lengths: [], from_files: [], seen: [], use_from: [], use_to: [], using_file: 0}
+end
+
+func Loader.add_file(path: string, line: int, column: int, length: int, file: int)
+    self.files.add(path)
+    self.from_lines.add(line)
+    self.from_columns.add(column)
+    self.from_lengths.add(length)
+    self.from_files.add(file)
+    self.seen.add(lower(path))
+end
+
+# A use line's file, by its place in files
+func Loader.note_use(path: string)
+    var key = lower(path)
+    for i in 0..len(self.seen)
+        if self.seen[i] == key
+            self.use_from.add(self.using_file)
+            self.use_to.add(i)
+            return
+        end
+    end
+end
+
+# Each file after the files it uses, from the main file, so a library's variables are ready before its users'
+func Loader.visit(file: int, done: [bool], order: [int])
+    if done[file]
+        return
+    end
+    done[file] = true
+    for i in 0..len(self.use_from)
+        if self.use_from[i] == file
+            self.visit(self.use_to[i], done, order)
+        end
+    end
+    order.add(file)
+end
+
+func Loader.setup_order(): [int]
+    var done: [bool] = []
+    for path in self.files
+        done.add(false)
+    end
+    var order: [int] = []
+    self.visit(0, done, order)
+    return order
+end
+
+func Loader.has_seen(path: string): bool
+    var key = lower(path)
+    for done in self.seen
+        if done == key
+            return true
+        end
+    end
+    return false
+end
+
+# Lexes and parses one file into the program, and answers false if it has a mistake
+func Loader.read(name: string, source: string): bool
+    var file = self.errors.add_file(name, source)
+    self.program.file_names.add(name)
+    var lexer = new_lexer(source)
+    lexer.read_tokens()
+    for problem in lexer.errors
+        self.errors.add(problem.line, problem.column, problem.length, file, problem.words, problem.hint)
+    end
+    if self.errors.any()
+        return false
+    end
+    self.program.uses = []
+    self.program.current_file = file
+    var parser = new_parser(lexer.tokens, lexer.errors, self.program)
+    parser.parse()
+    for problem in lexer.errors
+        self.errors.add(problem.line, problem.column, problem.length, file, problem.words, problem.hint)
+    end
+    return not self.errors.any()
+end
+
+# Answers false only when the main file itself can't be read
+func Loader.load_all(): bool
+    var i = 0
+    while i < len(self.files)
+        self.using_file = i
+        var path = self.files[i]
+        if starts_with(path, BUILT_IN)
+            var name = slice(path, len(BUILT_IN), len(path))
+            if not self.read(name + BUILT_IN_LABEL, builtin_library(name))
+                return true
+            end
+            for use_line in self.program.uses
+                self.add_use(use_line, self.root)
+            end
+            if self.errors.any()
+                return true
+            end
+        else
+            if file_kind(path) != 0
+                if i == 0
+                    return false
+                end
+                self.errors.add(self.from_lines[i], self.from_columns[i], self.from_lengths[i], self.from_files[i], "I can't read the file " + relative_path(path, self.root) + ".", "")
+                return true
+            end
+            if not self.read(relative_path(path, self.root), read_file(path))
+                return true
+            end
+            var folder = parent_path(path)
+            for use_line in self.program.uses
+                self.add_use(use_line, folder)
+            end
+            if self.errors.any()
+                return true
+            end
+        end
+        i += 1
+    end
+    return true
+end
+
+func Loader.add_use(use_line: UseLine, folder: string)
+    # The libraries built into jamo.exe always win, so a program's own file can't hide one
+    if builtin_library(use_line.path) != ""
+        var place = BUILT_IN + use_line.path
+        if not self.has_seen(place)
+            self.add_file(place, use_line.line, use_line.column, use_line.length, use_line.file)
+        end
+        self.note_use(place)
+        return
+    end
+    var written = use_line.path
+    if lower(path_extension(written)) != ".jamo"
+        self.errors.add(use_line.line, use_line.column, use_line.length, use_line.file, "use needs a file that ends in .jamo.", "")
+        return
+    end
+    var outside = "This file is outside the program's folder, so it can't be used."
+    var joined = normal_path(join_path(folder, written))
+    if path_root(written) != "" or not is_inside(joined, self.root)
+        self.errors.add(use_line.line, use_line.column, use_line.length, use_line.file, outside, "")
+        return
+    end
+    var found = canonical_path(joined)
+    if found == ""
+        self.errors.add(use_line.line, use_line.column, use_line.length, use_line.file, "I can't find a file called " + use_line.path + ".", "It looks in the same folder as the file using it.")
+        return
+    end
+    if not is_inside(found, self.root)
+        self.errors.add(use_line.line, use_line.column, use_line.length, use_line.file, outside, "")
+        return
+    end
+    if not self.has_seen(found)
+        self.add_file(found, use_line.line, use_line.column, use_line.length, use_line.file)
+    end
+    self.note_use(found)
+end
+
+# Loads the main file and every file it uses. Answers false when the main file can't be read
+func load_program(main_file: string, errors: Errors, program: Program): bool
+    var full = canonical_path(main_file)
+    if full == ""
+        return false
+    end
+    var loader = new_loader(parent_path(full), errors, program)
+    loader.add_file(full, 0, 0, 1, -1)
+    if not loader.load_all()
+        return false
+    end
+    if not errors.any()
+        program.setup_order = loader.setup_order()
+    end
+    errors.current = 0
+    return true
+end

@@ -1,0 +1,5 @@
+const START = input()
+
+func main()
+    print(START)
+end

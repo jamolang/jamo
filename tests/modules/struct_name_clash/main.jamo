@@ -1,0 +1,8 @@
+use "other.jamo"
+
+struct Thing
+    a: int
+end
+
+func main()
+end

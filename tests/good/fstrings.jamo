@@ -1,0 +1,24 @@
+func double(n: int): int
+    return n * 2
+end
+
+func main()
+    var score = 12
+    var name = "Sam"
+    print(f"Score: {score}")
+    print(f"{name} has {score} points")
+    print(f"{score}{score}")
+    print(f"")
+    print(f"no values")
+    print(f"math: {score + 1} and {double(score) * 2}")
+    print(f"bool: {score > 3}")
+    print(f"text: {"inner" + "!"}")
+    print(f"nested: {f"[{score}]"}")
+    print(f"braces: {{ {score} }}")
+    print(f"tab\there \"quoted\" \\ done\n")
+    print(f"len: {len(name)}")
+    var line = f"saved {score}"
+    print(line + "!")
+    print(len(f"{score}"))
+    print(f"caf{"é"} {score}")
+end

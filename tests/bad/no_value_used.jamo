@@ -1,0 +1,6 @@
+func f()
+end
+
+func main()
+    var x = f()
+end

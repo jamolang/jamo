@@ -1,0 +1,3 @@
+match_on_float.jamo line 2: match works on enums, ints and strings, but this is a float.
+        match 1.5
+              ^^^

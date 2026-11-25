@@ -1,0 +1,23 @@
+# Finds every prime number below a limit, by crossing out the multiples of each one.
+
+func main()
+    print("Find primes below what number?")
+    var limit = int(input())
+    var crossed_out: [bool] = []
+    for i in 0..limit
+        crossed_out.add(false)
+    end
+    var primes: [int] = []
+    for number in 2..limit
+        if not crossed_out[number]
+            primes.add(number)
+            var multiple = number * number
+            while multiple < limit
+                crossed_out[multiple] = true
+                multiple += number
+            end
+        end
+    end
+    print(primes)
+    print(f"Found {len(primes)} primes.")
+end

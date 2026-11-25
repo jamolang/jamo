@@ -1,0 +1,127 @@
+func total(items: [int]): int
+    var sum = 0
+    for item in items
+        sum += item
+    end
+    return sum
+end
+
+func fill(items: [int], count: int)
+    for i in 0..count
+        items.add(i * 10)
+    end
+end
+
+func make(first: int): [int]
+    return [first, first + 1]
+end
+
+func make_empty(): [string]
+    return []
+end
+
+func main()
+    var items = [1, 2, 3]
+    print(items)
+    print(items[0])
+    print(items[2])
+    print(len(items))
+    items[0] = 5
+    print(items)
+    items[1] += 10
+    items[1] *= 2
+    print(items[1])
+    items.add(4)
+    print(items)
+    print(items.pop())
+    print(len(items))
+    print(total(items))
+
+    var empty: [int] = []
+    print(empty)
+    print(len(empty))
+    fill(empty, 3)
+    print(empty)
+
+    var floats = [1.5, 2.0]
+    floats.add(-0.5)
+    floats[0] /= 2.0
+    print(floats)
+    print(floats.pop())
+    var bools = [true, false]
+    bools.add(1 > 2)
+    bools[0] = false
+    print(bools)
+    print(bools.pop())
+    var words = ["a", "b"]
+    words.add("c" + "d")
+    words[0] = "z"
+    print(words)
+    print(words.pop())
+    print(words[1])
+    print(f"got {words} and {floats}")
+    print(string(bools))
+
+    var shared = items
+    shared[0] = 99
+    shared.add(7)
+    print(items)
+    print(len(items))
+
+    print(make(5))
+    print(len(make_empty()))
+    print(make(5)[1])
+
+    var grid = [[1, 2], [3]]
+    grid[1].add(4)
+    grid.add([])
+    grid[2].add(9)
+    print(grid)
+    print(grid[0][1])
+    var empty_grid: [[string]] = [[]]
+    print(empty_grid)
+
+    for word in words
+        print(word)
+    end
+    for nothing_here in empty
+        if nothing_here > 100
+            print("never")
+        end
+    end
+    for row in grid
+        for cell in row
+            if cell == 3
+                continue
+            end
+            if cell == 4
+                break
+            end
+            print(cell)
+        end
+    end
+
+    var growing = [1, 2]
+    var rounds = 0
+    for item in growing
+        rounds += 1
+        if len(growing) < 4
+            growing.add(item * 10)
+        end
+    end
+    print(rounds)
+    print(growing)
+    var shrinking = [1, 2, 3, 4]
+    rounds = 0
+    for item in shrinking
+        rounds += 1
+        shrinking.pop()
+    end
+    print(rounds)
+
+    var trailing = [
+        1,
+        2,
+    ]
+    print(trailing)
+end

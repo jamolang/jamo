@@ -1,0 +1,3 @@
+field_on_int.jamo line 3: Only structs have fields, but this is an int.
+        print(x.health)
+              ^

@@ -1,0 +1,4 @@
+subtract_assign_from_string.jamo line 3: This only works on numbers, but word holds a string.
+        word -= "b"
+        ^^^^
+Text only takes +=.

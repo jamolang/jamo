@@ -1,0 +1,3 @@
+constant_changed.jamo line 4: LIMIT is a constant, so it can't be changed.
+        LIMIT = 20
+        ^^^^^

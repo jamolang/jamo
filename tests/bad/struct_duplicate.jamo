@@ -1,0 +1,10 @@
+struct Enemy
+    health: int
+end
+
+struct Enemy
+    speed: int
+end
+
+func main()
+end

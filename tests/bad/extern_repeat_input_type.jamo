@@ -1,0 +1,6 @@
+use "window.jamo"
+
+extern "kernel32.dll" func QueryPerformanceCounter(place: i32): bool
+
+func main()
+end

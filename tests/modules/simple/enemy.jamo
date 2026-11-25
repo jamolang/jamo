@@ -1,0 +1,15 @@
+enum Mood
+    CALM
+end
+
+struct Enemy
+    health: int
+end
+
+func make_enemy(health: int): Enemy
+    return Enemy{health: health}
+end
+
+func Enemy.hit(damage: int)
+    self.health -= damage
+end

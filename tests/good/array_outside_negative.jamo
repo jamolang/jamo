@@ -1,0 +1,6 @@
+func main()
+    var items = [1]
+    var i = -1
+    items[i] = 2
+    print(items)
+end

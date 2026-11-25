@@ -1,0 +1,2677 @@
+# Code generator: writes real x86-64 machine code for a checked Jamo program. The same as src/codegen.cpp.
+#
+# How the generated code works:
+# - Every expression leaves its answer in rax. Half-finished sums wait on the stack.
+# - Jamo functions get their inputs on the stack, left to right, and answer in rax.
+# - Only the startup and runtime code talk to Windows, keeping its stack rules there.
+#
+# Jamo has only signed ints and no bit operators, so the unsigned math for dividing by a constant and the
+# float bits are worked out with the helpers below, giving exactly what the C++ code gives.
+
+use "ast.jamo"
+use "assembler.jamo"
+use "runtime.jamo"
+use "dict.jamo"
+use "text.jamo"
+
+const WORD_SIZE = 8
+const WINDOWS_SPACE = 32
+const NO_OPTIMIZING = 8
+# No console, and a run error shows in a message box
+const WINDOW_PROGRAM = 16
+const JUMP_FROM_SET = 16
+const PAGE_SIZE = 4096
+const SHOW_FRAME = 32
+const SHOW_PROGRESS = -8
+const VARIABLE_REGISTERS = 4
+# Statements and expressions, together, in a function written in place
+const INLINE_MOST_PARTS = 64
+const REGISTER_MIN_USES = 3
+const SHOW_VALUE = -16
+const SET_ABOVE = 151
+const SET_AT_LEAST = 147
+const SET_EQUAL = 148
+const SET_NOT_EQUAL = 149
+const SET_UNORDERED = 154
+const SET_ORDERED = 155
+const SIGN_BIT = -9223372036854775808
+const TWO_TO_62 = 4611686018427387904
+const TWO_TO_32 = 4294967296
+
+struct Generator
+    program: Program
+    file_name: string
+    cleaner_mode: int
+    optimizing: bool
+    out: Assembler
+    rt: [int]
+    text: RuntimeText
+    function_labels: Dict
+    function_named: Dict
+    functions_in_use: Dict
+    callback_labels: Dict
+    slot_registers: [int]
+    saved_count: int
+    import_dlls: [string]
+    import_names: [string]
+    import_numbers: Dict
+    opengl_lookup: int
+    current_function: string
+    loop_nexts: [int]
+    loop_ends: [int]
+    show_labels: Dict
+    shows_to_write: [int]
+    strings: [string]
+    string_numbers: Dict
+    input_count: int
+    bits: int
+    scratch: int
+    inline_ok: Dict
+    inline_count: int
+    slot_shift: int
+    inline_end: int
+    inline_top: int
+end
+
+func condition_of(op: int): int
+    if op == OP_EQUAL
+        return 148
+    elif op == OP_NOT_EQUAL
+        return 149
+    elif op == OP_LESS
+        return 156
+    elif op == OP_GREATER
+        return 159
+    elif op == OP_LESS_EQUAL
+        return 158
+    end
+    return 157
+end
+
+# --- Unsigned 64-bit math, for dividing by a constant ---
+
+# Adding the sign bit turns unsigned order into signed order
+func unsigned_less(a: int, b: int): bool
+    return a + SIGN_BIT < b + SIGN_BIT
+end
+
+# a / b with a unsigned, for b from 1 up to 2^63 - 1
+func unsigned_divide(a: int, b: int): int
+    if a >= 0
+        return a / b
+    end
+    var half = (a + SIGN_BIT) / 2 + TWO_TO_62
+    var answer = half / b * 2
+    if not unsigned_less(a - answer * b, b)
+        answer += 1
+    end
+    return answer
+end
+
+# --- Starting ---
+
+func new_runtime_text(): RuntimeText
+    return RuntimeText{file_names: [], true_word: 0, false_word: 0, line_word: 0, error_word: 0, divide_by_zero: 0, out_of_memory: 0, float_too_large: 0, index_word: 0, outside_string: 0, bytes_word: 0, pop_empty: 0, outside_array: 0, items_word: 0, quote: 0, new_line: 0, cant_turn: 0, into_int: 0, into_float: 0, cant_read: 0, cant_write: 0, period: 0, cleaner_bad_header: 0, cleaner_freed_changed: 0, cleaner_freed_reference: 0, cleaner_double_free: 0, more_calls: 0, user32_dll: 0, message_box: 0, error_title: 0}
+end
+
+# file_name appears in run errors. test_flags: 1 cleans at every allocation, 2 adds cleaner checks, 4 turns
+# the cleaner off, 8 turns off optimizing. The machine code, strings and imports are left in the Generator
+func generate_code(program: Program, file_name: string, test_flags: int): Generator
+    var g = Generator{program: program, file_name: file_name, cleaner_mode: test_flags % 8 + test_flags / WINDOW_PROGRAM % 2 * WINDOW_PROGRAM, optimizing: test_flags / 8 % 2 == 0, out: new_assembler(), rt: [], text: new_runtime_text(), function_labels: new_dict(), function_named: new_dict(), functions_in_use: new_dict(), callback_labels: new_dict(), slot_registers: [], saved_count: 0, import_dlls: [], import_names: [], import_numbers: new_dict(), opengl_lookup: -1, current_function: "", loop_nexts: [], loop_ends: [], show_labels: new_dict(), shows_to_write: [], strings: [], string_numbers: new_dict(), input_count: 0, bits: 0, scratch: memory(8), inline_ok: new_dict(), inline_count: 0, slot_shift: -1, inline_end: -1, inline_top: 0}
+    g.generate()
+    return g
+end
+
+func Generator.ex(place: int): Expr
+    return self.program.exprs[place]
+end
+
+func Generator.st(place: int): Stmt
+    return self.program.stmts[place]
+end
+
+func Generator.function_of(name: string): Function
+    return self.program.functions[self.function_named.get(name)]
+end
+
+func Generator.generate()
+    var out = self.out
+    self.rt = make_runtime_labels(out)
+    var t = self.text
+    t.true_word = self.string_number("true")
+    t.false_word = self.string_number("false")
+    if len(self.program.file_names) == 0
+        t.file_names.add(self.string_number(self.file_name))
+    end
+    for name in self.program.file_names
+        t.file_names.add(self.string_number(name))
+    end
+    t.line_word = self.string_number(" line ")
+    t.error_word = self.string_number(": Error: ")
+    t.divide_by_zero = self.string_number("division by zero")
+    t.out_of_memory = self.string_number("the program ran out of memory")
+    t.float_too_large = self.string_number("this float doesn't fit in an int")
+    t.index_word = self.string_number("index ")
+    t.outside_string = self.string_number(" is outside this string, which has ")
+    t.bytes_word = self.string_number(" bytes")
+    t.pop_empty = self.string_number("pop needs an item, but this array is empty")
+    t.outside_array = self.string_number(" is outside this array, which has ")
+    t.items_word = self.string_number(" items")
+    t.quote = self.string_number("\"")
+    t.new_line = self.string_number("\n")
+    t.cant_turn = self.string_number("can't turn \"")
+    t.into_int = self.string_number("\" into an int")
+    t.into_float = self.string_number("\" into a float")
+    t.cant_read = self.string_number("can't read the file ")
+    t.cant_write = self.string_number("can't write the file ")
+    t.period = self.string_number(".")
+    t.cleaner_bad_header = self.string_number("the memory cleaner found a damaged block header")
+    t.cleaner_freed_changed = self.string_number("the memory cleaner found that freed memory was changed")
+    t.cleaner_freed_reference = self.string_number("the memory cleaner found a reference to freed memory")
+    t.cleaner_double_free = self.string_number("the memory cleaner tried to free the same block twice")
+    t.more_calls = self.string_number("    and more calls before those\n")
+    # For a window program's message box. Windows wants these ending in a zero byte. Other programs never
+    # reach that code, so they point it at a text they already have, and mention no other DLL
+    t.user32_dll = t.new_line
+    t.message_box = t.new_line
+    t.error_title = t.new_line
+    if self.cleaner_mode / WINDOW_PROGRAM % 2 == 1
+        t.user32_dll = self.string_number("user32.dll" + zero_text(1))
+        t.message_box = self.string_number("MessageBoxA" + zero_text(1))
+        var title = self.file_name
+        if len(title) > 5 and ends_with(title, ".jamo")
+            title = slice(title, 0, len(title) - 5)
+        end
+        t.error_title = self.string_number(title + " stopped" + zero_text(1))
+    end
+    for i in 0..len(self.program.functions)
+        var function = self.program.functions[i]
+        self.function_labels.set(function.name, out.new_label())
+        self.function_named.set(function.name, i)
+    end
+    self.write_startup()
+    write_runtime(out, self.rt, t)
+    if self.optimizing
+        self.find_functions_in_use()
+    end
+    for function in self.program.functions
+        if function.dll == "" and (not self.optimizing or self.functions_in_use.has(function.name))
+            self.write_function(function)
+        end
+    end
+    while len(self.shows_to_write) > 0
+        self.write_show_function(self.shows_to_write.pop())
+    end
+    var names = self.callback_labels.key_list()
+    sort_strings(names)
+    for name in names
+        self.write_callback(self.function_of(name), self.callback_labels.get(name))
+    end
+    if self.opengl_lookup >= 0
+        self.write_opengl_lookup()
+    end
+    out.finish()
+end
+
+func Generator.write_startup()
+    var out = self.out
+    out.sub_rsp(40)
+    out.call_windows(DATA_GET_PROCESS_HEAP)
+    out.store_rax_data(DATA_HEAP_HANDLE)
+    out.add_rsp(40)
+    out.mov_rax_number(self.cleaner_mode)
+    out.call(self.rt[R_CLEANER_START])
+    if self.function_labels.has(SETUP_NAME)
+        # The variables outside functions go on the stack below the cleaner's starting point, so it
+        # looks at them like any other value in use. They start as zeros, then the setup gives them their values.
+        # The cleaner noted its start inside its own call, a word below here, so one spare word keeps them all under it
+        var setup = self.function_of(SETUP_NAME)
+        var count = len(setup.body)
+        var bytes = (count * WORD_SIZE + WORD_SIZE + 15) / 16 * 16
+        var touched = PAGE_SIZE
+        while touched < bytes
+            out.touch_stack_below(touched)
+            touched += PAGE_SIZE
+        end
+        out.sub_rsp(bytes)
+        out.start_globals(count)
+        out.call(self.function_labels.get(SETUP_NAME))
+    end
+    out.call(self.function_labels.get("main"))
+    out.hex("31c9")
+    out.jump(self.rt[R_EXIT])
+end
+
+# A run error's file and line, kept together in one value
+func place_of(line: int, file: int): int
+    if file < 0
+        return line
+    end
+    return file * TWO_TO_32 + line
+end
+
+func expr_place(e: Expr): int
+    return place_of(e.line, e.file)
+end
+
+func stmt_place(s: Stmt): int
+    return place_of(s.line, s.file)
+end
+
+# The same text always shares one entry in the string table
+func Generator.string_number(words: string): int
+    if self.string_numbers.has(words)
+        return self.string_numbers.get(words)
+    end
+    var number = len(self.strings)
+    self.strings.add(words)
+    self.string_numbers.set(words, number)
+    return number
+end
+
+# --- Leaving out functions that can never be called ---
+
+func Generator.find_functions_in_use()
+    var to_visit = ["main"]
+    if self.function_labels.has(SETUP_NAME)
+        to_visit.add(SETUP_NAME)
+    end
+    while len(to_visit) > 0
+        var name = to_visit.pop()
+        if self.functions_in_use.has(name)
+            continue
+        end
+        self.functions_in_use.set(name, 1)
+        var called: [string] = []
+        if self.function_named.has(name)
+            self.find_calls_in_block(self.function_of(name).body, called)
+        end
+        for other in called
+            to_visit.add(other)
+        end
+    end
+end
+
+func Generator.find_calls_in_block(block: [int], called: [string])
+    for place in block
+        var s = self.st(place)
+        self.find_calls(s.target, called)
+        self.find_calls(s.value, called)
+        self.find_calls(s.range_end, called)
+        self.find_calls_in_block(s.body, called)
+        for part in s.elifs
+            self.find_calls(part.condition, called)
+            self.find_calls_in_block(part.body, called)
+        end
+        for part in s.cases
+            self.find_calls(part.value, called)
+            self.find_calls_in_block(part.body, called)
+        end
+        self.find_calls_in_block(s.other_body, called)
+    end
+end
+
+func Generator.find_calls(place: int, called: [string])
+    if place < 0
+        return
+    end
+    var e = self.ex(place)
+    if e.kind == EX_CALL
+        called.add(e.name)
+    end
+    if e.kind == EX_BUILTIN_CALL and e.name == "callback"
+        called.add(e.text)
+    end
+    if e.kind == EX_METHOD_CALL and self.is_struct(self.ex(e.left).type)
+        called.add(self.type_name(self.ex(e.left).type) + "." + e.name)
+    end
+    self.find_calls(e.left, called)
+    self.find_calls(e.right, called)
+    for input in e.inputs
+        self.find_calls(input, called)
+    end
+end
+
+# --- Types ---
+
+func Generator.type_name(type: int): string
+    return self.program.types.name(type)
+end
+
+func Generator.is_struct(type: int): bool
+    return type_is_custom(type) and self.program.types.entry(type).is_struct
+end
+
+func Generator.is_enum(type: int): bool
+    return type_is_custom(type) and self.program.types.entry(type).is_enum
+end
+
+# --- Floats as bits ---
+
+func Generator.float_bits(value: float): int
+    poke_f64(self.scratch, 0, value)
+    return peek_i64(self.scratch, 0)
+end
+
+func Generator.bits_float(bits: int): float
+    poke_i64(self.scratch, 0, bits)
+    return peek_f64(self.scratch, 0)
+end
+
+# --- Working out constants ---
+
+# Answers true if the value is known now, leaving its bits in self.bits. Leaves anything that would be a
+# run error for the program to find
+func Generator.constant_of(place: int): bool
+    if not self.optimizing
+        return false
+    end
+    var e = self.ex(place)
+    var kind = e.kind
+    if kind == EX_NUMBER
+        self.bits = e.number
+        return true
+    elif kind == EX_FLOAT
+        self.bits = self.float_bits(e.real)
+        return true
+    elif kind == EX_BOOL
+        self.bits = 0
+        if e.truth
+            self.bits = 1
+        end
+        return true
+    elif kind == EX_NEGATE
+        if not self.constant_of(e.left)
+            return false
+        end
+        if e.type == TYPE_FLOAT
+            self.bits = self.bits + SIGN_BIT
+        else
+            self.bits = 0 - self.bits
+        end
+        return true
+    elif kind == EX_NOT
+        if not self.constant_of(e.left)
+            return false
+        end
+        self.bits = 1 - self.bits
+        return true
+    elif kind == EX_BINARY
+        return self.constant_of_binary(e)
+    end
+    return false
+end
+
+func Generator.constant_of_binary(e: Expr): bool
+    if not self.constant_of(e.left)
+        return false
+    end
+    var left = self.bits
+    if not self.constant_of(e.right)
+        return false
+    end
+    var right = self.bits
+    var type = self.ex(e.left).type
+    if type == TYPE_INT
+        return self.constant_of_ints(e.op, left, right)
+    end
+    if type == TYPE_FLOAT
+        return self.constant_of_floats(e.op, self.bits_float(left), self.bits_float(right))
+    end
+    if e.op == OP_AND
+        self.bits = left * right
+    elif e.op == OP_OR
+        self.bits = 0
+        if left + right > 0
+            self.bits = 1
+        end
+    elif e.op == OP_EQUAL
+        self.bits = truth_bits(left == right)
+    elif e.op == OP_NOT_EQUAL
+        self.bits = truth_bits(left != right)
+    else
+        return false
+    end
+    return true
+end
+
+func truth_bits(value: bool): int
+    if value
+        return 1
+    end
+    return 0
+end
+
+func Generator.constant_of_ints(op: int, left: int, right: int): bool
+    if op == OP_ADD
+        self.bits = left + right
+    elif op == OP_SUBTRACT
+        self.bits = left - right
+    elif op == OP_MULTIPLY
+        self.bits = left * right
+    elif op == OP_DIVIDE
+        if right == 0
+            return false
+        end
+        if right == -1
+            self.bits = 0 - left
+        else
+            self.bits = left / right
+        end
+    elif op == OP_REMAINDER
+        if right == 0
+            return false
+        end
+        if right == -1
+            self.bits = 0
+        else
+            self.bits = left % right
+        end
+    elif op == OP_EQUAL
+        self.bits = truth_bits(left == right)
+    elif op == OP_NOT_EQUAL
+        self.bits = truth_bits(left != right)
+    elif op == OP_LESS
+        self.bits = truth_bits(left < right)
+    elif op == OP_GREATER
+        self.bits = truth_bits(left > right)
+    elif op == OP_LESS_EQUAL
+        self.bits = truth_bits(left <= right)
+    elif op == OP_GREATER_EQUAL
+        self.bits = truth_bits(left >= right)
+    else
+        return false
+    end
+    return true
+end
+
+func Generator.constant_of_floats(op: int, left: float, right: float): bool
+    var answer = 0.0
+    if op == OP_ADD
+        answer = left + right
+    elif op == OP_SUBTRACT
+        answer = left - right
+    elif op == OP_MULTIPLY
+        answer = left * right
+    elif op == OP_DIVIDE
+        answer = left / right
+    elif op == OP_EQUAL
+        self.bits = truth_bits(left == right)
+        return true
+    elif op == OP_NOT_EQUAL
+        self.bits = truth_bits(left != right)
+        return true
+    elif op == OP_LESS
+        self.bits = truth_bits(left < right)
+        return true
+    elif op == OP_GREATER
+        self.bits = truth_bits(left > right)
+        return true
+    elif op == OP_LESS_EQUAL
+        self.bits = truth_bits(left <= right)
+        return true
+    elif op == OP_GREATER_EQUAL
+        self.bits = truth_bits(left >= right)
+        return true
+    else
+        return false
+    end
+    if answer != answer
+        return false
+    end
+    self.bits = self.float_bits(answer)
+    return true
+end
+
+# Something that can load into rcx without touching rax or running any code
+func Generator.is_simple(place: int): bool
+    if not self.optimizing
+        return false
+    end
+    var kind = self.ex(place).kind
+    return kind == EX_NAME or kind == EX_STRING or kind == EX_ENUM_VALUE or self.is_variable_field(place) or self.constant_of(place)
+end
+
+# A field of a struct held by a variable, like self.x, which reads without running any code
+func Generator.is_variable_field(place: int): bool
+    var e = self.ex(place)
+    if e.kind != EX_FIELD
+        return false
+    end
+    var left = self.ex(e.left)
+    return left.kind == EX_NAME and left.slot >= 0 and self.is_struct(left.type)
+end
+
+# True when running the expression could call a function, which could change a field
+func Generator.has_call(place: int): bool
+    if place < 0
+        return false
+    end
+    var e = self.ex(place)
+    if e.kind == EX_CALL or e.kind == EX_METHOD_CALL or e.kind == EX_BUILTIN_CALL
+        return true
+    end
+    if self.has_call(e.left) or self.has_call(e.right)
+        return true
+    end
+    for input in e.inputs
+        if self.has_call(input)
+            return true
+        end
+    end
+    return false
+end
+
+func Generator.write_simple_to_rcx(place: int)
+    var e = self.ex(place)
+    if e.kind == EX_NAME
+        self.load_slot_rcx(e.slot)
+    elif self.is_variable_field(place)
+        self.load_slot_rcx(self.ex(e.left).slot)
+        self.out.load_rcx_field(e.slot)
+    elif e.kind == EX_STRING
+        self.out.lea_string(REG_RCX, self.string_number(e.text))
+    elif e.kind == EX_ENUM_VALUE
+        self.out.mov_rcx_value(e.number)
+    else
+        self.constant_of(place)
+        self.out.mov_rcx_value(self.bits)
+    end
+end
+
+# An int constant small enough to go straight into an instruction, leaving it in self.bits
+func Generator.small_constant(place: int): bool
+    return self.ex(place).type == TYPE_INT and self.constant_of(place) and fits_int32(self.bits)
+end
+
+# rax = the array, rcx = the index. Answers with the item, calling the runtime only to stop with the error
+func Generator.write_array_read(line: int)
+    var out = self.out
+    var inside = out.new_label()
+    out.cmp_rcx_length()
+    out.jump_if_below(inside)
+    out.note_line(line)
+    out.call(self.rt[R_ARRAY_AT])
+    out.place(inside)
+    out.load_rax_items()
+    out.load_rax_item_rcx()
+end
+
+# The left side is already in rax. Leaves it there, with the right side in rcx
+func Generator.then_right(right: int)
+    if self.is_simple(right)
+        self.write_simple_to_rcx(right)
+        return
+    end
+    self.out.push_rax()
+    self.write_expression(right)
+    self.out.mov_rcx_rax()
+    self.out.pop_rax()
+end
+
+# --- Jumping on a condition, without making a bool first ---
+
+func Generator.is_int_comparison(e: Expr): bool
+    if e.kind != EX_BINARY
+        return false
+    end
+    var left = self.ex(e.left).type
+    if left == TYPE_FLOAT or left == TYPE_STRING
+        return false
+    end
+    var op = e.op
+    return op == OP_EQUAL or op == OP_NOT_EQUAL or op == OP_LESS or op == OP_GREATER or op == OP_LESS_EQUAL or op == OP_GREATER_EQUAL
+end
+
+func Generator.write_jump(place: int, jump_when: bool, target: int)
+    var out = self.out
+    if self.constant_of(place)
+        if (self.bits != 0) == jump_when
+            out.jump(target)
+        end
+        return
+    end
+    var condition = self.ex(place)
+    if self.optimizing and condition.kind == EX_NOT
+        self.write_jump(condition.left, not jump_when, target)
+        return
+    end
+    if self.optimizing and condition.kind == EX_BINARY and (condition.op == OP_AND or condition.op == OP_OR)
+        var is_and = condition.op == OP_AND
+        if is_and != jump_when
+            self.write_jump(condition.left, jump_when, target)
+            self.write_jump(condition.right, jump_when, target)
+        else
+            var skip = out.new_label()
+            self.write_jump(condition.left, not jump_when, skip)
+            self.write_jump(condition.right, jump_when, target)
+            out.place(skip)
+        end
+        return
+    end
+    var op = condition.op
+    if self.optimizing and condition.kind == EX_BINARY and self.ex(condition.left).type == TYPE_FLOAT and (op == OP_LESS or op == OP_GREATER or op == OP_LESS_EQUAL or op == OP_GREATER_EQUAL)
+        # Float comparisons jump straight from the compare. NaN makes every one of these false, as before
+        self.write_float_sides(condition.left, condition.right)
+        if op == OP_LESS or op == OP_LESS_EQUAL
+            out.compare_xmm1_xmm0()
+        else
+            out.compare_xmm0_xmm1()
+        end
+        var if_true = 131
+        if op == OP_LESS or op == OP_GREATER
+            if_true = 135
+        end
+        if jump_when
+            out.jump_when(if_true, target)
+        elif if_true % 2 == 0
+            out.jump_when(if_true + 1, target)
+        else
+            out.jump_when(if_true - 1, target)
+        end
+        return
+    end
+    if self.optimizing and self.is_int_comparison(condition)
+        var reg = self.register_name(condition.left)
+        var other = self.register_name(condition.right)
+        if reg >= 0 and other >= 0
+            out.cmp_reg_reg(reg, other)
+        elif reg >= 0 and self.small_constant(condition.right)
+            out.cmp_reg_value(reg, self.bits)
+        elif reg >= 0 and self.is_simple(condition.right)
+            self.write_simple_to_rcx(condition.right)
+            out.cmp_reg_rcx(reg)
+        elif self.small_constant(condition.right)
+            var value = self.bits
+            self.write_expression(condition.left)
+            out.cmp_rax_value(value)
+        else
+            self.write_expression(condition.left)
+            self.then_right(condition.right)
+            out.cmp_rax_rcx()
+        end
+        var jump_if_true = condition_of(condition.op) - JUMP_FROM_SET
+        if jump_when
+            out.jump_when(jump_if_true, target)
+        elif jump_if_true % 2 == 0
+            out.jump_when(jump_if_true + 1, target)
+        else
+            out.jump_when(jump_if_true - 1, target)
+        end
+        return
+    end
+    self.write_expression(place)
+    out.test_rax_rax()
+    if jump_when
+        out.jump_if_not_equal(target)
+    else
+        out.jump_if_equal(target)
+    end
+end
+
+# --- Jamo code ---
+
+func Generator.write_function(function: Function)
+    var out = self.out
+    self.input_count = len(function.inputs)
+    self.current_function = function.name
+    self.choose_registers(function)
+    out.place(self.function_labels.get(function.name))
+    out.push_rbp()
+    out.mov_rbp_rsp()
+    for reg in 0..self.saved_count
+        out.push_reg(reg)
+    end
+    self.inline_top = function.slot_count
+    var spare = 0
+    if self.optimizing
+        spare = self.inline_slots_block(function.body)
+    end
+    var local_bytes = (function.slot_count + spare - self.input_count) * WORD_SIZE
+    var touched = PAGE_SIZE
+    while touched < local_bytes
+        out.touch_stack_below(touched)
+        touched += PAGE_SIZE
+    end
+    if local_bytes > 0
+        out.sub_rsp(local_bytes)
+    end
+    for slot in 0..len(self.slot_registers)
+        if self.slot_registers[slot] >= 0 and slot < self.input_count
+            out.load_reg_from_frame(self.slot_registers[slot], self.frame_offset(slot))
+        end
+    end
+    self.write_block(function.body)
+    if not self.always_leaves(function.body)
+        self.write_return()
+    end
+end
+
+# Puts back the registers this function used, then returns
+func Generator.write_return()
+    for reg in 0..self.saved_count
+        self.out.load_reg_from_frame(reg, 0 - (reg + 1) * WORD_SIZE)
+    end
+    self.out.leave_and_return()
+end
+
+# Inputs sit above the saved rbp and return address. Below rbp come the saved registers, then the locals
+func Generator.frame_offset(slot: int): int
+    if slot < self.input_count
+        return 2 * WORD_SIZE + (self.input_count - 1 - slot) * WORD_SIZE
+    end
+    return 0 - (slot - self.input_count + 1 + self.saved_count) * WORD_SIZE
+end
+
+func Generator.register_of(slot: int): int
+    if slot >= 0 and slot < len(self.slot_registers)
+        return self.slot_registers[slot]
+    end
+    return -1
+end
+
+# The register holding a variable, from its place before any inlining shift, or -1 when it lives on the stack
+func Generator.register_at(place: int): int
+    return self.register_of(self.real_slot(place))
+end
+
+# A variable held in a register, read with nothing else running
+func Generator.register_name(place: int): int
+    var e = self.ex(place)
+    if not self.optimizing or e.kind != EX_NAME or e.slot < 0
+        return -1
+    end
+    return self.register_at(e.slot)
+end
+
+# Variables outside functions have slots from -2 down, and live where the startup put them
+func is_global_slot(slot: int): bool
+    return slot <= FIRST_GLOBAL_SLOT
+end
+
+func global_offset(slot: int): int
+    return (FIRST_GLOBAL_SLOT - slot) * WORD_SIZE
+end
+
+func Generator.load_slot_rax(place: int)
+    if is_global_slot(place)
+        self.out.load_r11_globals()
+        self.out.load_rax_global(global_offset(place))
+        return
+    end
+    var slot = self.real_slot(place)
+    var reg = self.register_of(slot)
+    if reg >= 0
+        self.out.mov_rax_reg(reg)
+    else
+        self.out.load_rax_from_frame(self.frame_offset(slot))
+    end
+end
+
+func Generator.load_slot_rcx(place: int)
+    if is_global_slot(place)
+        self.out.load_r11_globals()
+        self.out.load_rcx_global(global_offset(place))
+        return
+    end
+    var slot = self.real_slot(place)
+    var reg = self.register_of(slot)
+    if reg >= 0
+        self.out.mov_rcx_reg(reg)
+    else
+        self.out.load_rcx_from_frame(self.frame_offset(slot))
+    end
+end
+
+func Generator.store_slot_rax(place: int)
+    if is_global_slot(place)
+        self.out.load_r11_globals()
+        self.out.store_rax_global(global_offset(place))
+        return
+    end
+    var slot = self.real_slot(place)
+    var reg = self.register_of(slot)
+    if reg >= 0
+        self.out.mov_reg_rax(reg)
+    else
+        self.out.store_rax_to_frame(self.frame_offset(slot))
+    end
+end
+
+# --- Inlining small functions ---
+
+# A function is written into its caller, instead of called, when it's small and can never stop with an error.
+# A run error lists the calls that led to it, so a function that can't stop is the only kind whose call can
+# disappear without changing what a program shows. Its inputs and variables go in spare slots of the caller's
+# frame, and each return jumps to the end of its body
+func Generator.can_inline(function: Function): bool
+    if not self.optimizing or function.dll != "" or function.name == "main"
+        return false
+    end
+    if self.inline_ok.has(function.name)
+        return self.inline_ok.get(function.name) == 1
+    end
+    # A function being checked counts as no until it's done, so functions that call each other never qualify
+    self.inline_ok.set(function.name, 0)
+    var outer_count = self.inline_count
+    self.inline_count = 0
+    var ok = self.inline_safe_block(function.body)
+    self.inline_count = outer_count
+    self.inline_ok.set(function.name, truth_bits(ok))
+    return ok
+end
+
+func Generator.inline_safe_block(block: [int]): bool
+    for place in block
+        if not self.inline_safe_stmt(place)
+            return false
+        end
+    end
+    return true
+end
+
+func Generator.inline_safe_stmt(place: int): bool
+    self.inline_count += 1
+    if self.inline_count > INLINE_MOST_PARTS
+        return false
+    end
+    var s = self.st(place)
+    var kind = s.kind
+    if kind == ST_VAR or kind == ST_CALL
+        return self.inline_safe_expr(s.value)
+    end
+    if kind == ST_RETURN
+        return s.value < 0 or self.inline_safe_expr(s.value)
+    end
+    if kind == ST_ASSIGN
+        if s.target >= 0
+            var target = self.ex(s.target)
+            if not (target.kind == EX_FIELD and self.ex(target.left).kind == EX_NAME)
+                return false
+            end
+        end
+        var type = self.ex(s.value).type
+        if s.has_operation and type == TYPE_STRING
+            return false
+        end
+        if s.has_operation and type == TYPE_INT and (s.operation == OP_DIVIDE or s.operation == OP_REMAINDER) and not self.is_nonzero_constant(s.value)
+            return false
+        end
+        return self.inline_safe_expr(s.value)
+    end
+    if kind == ST_IF
+        if not self.inline_safe_expr(s.value) or not self.inline_safe_block(s.body) or not self.inline_safe_block(s.other_body)
+            return false
+        end
+        for part in s.elifs
+            if not self.inline_safe_expr(part.condition) or not self.inline_safe_block(part.body)
+                return false
+            end
+        end
+        return true
+    end
+    return false
+end
+
+func Generator.is_nonzero_constant(place: int): bool
+    return self.constant_of(place) and self.bits != 0
+end
+
+func Generator.inline_safe_expr(place: int): bool
+    self.inline_count += 1
+    if self.inline_count > INLINE_MOST_PARTS
+        return false
+    end
+    var e = self.ex(place)
+    var kind = e.kind
+    if kind == EX_NUMBER or kind == EX_FLOAT or kind == EX_BOOL or kind == EX_STRING or kind == EX_NAME or kind == EX_ENUM_VALUE
+        return true
+    end
+    if kind == EX_FIELD or kind == EX_NEGATE or kind == EX_NOT or kind == EX_LENGTH
+        return self.inline_safe_expr(e.left)
+    end
+    if kind == EX_CONVERT
+        return e.convert_to == TYPE_FLOAT and self.ex(e.left).type == TYPE_INT and self.inline_safe_expr(e.left)
+    end
+    if kind == EX_BINARY
+        if e.op == OP_ADD and e.type == TYPE_STRING
+            return false
+        end
+        if (e.op == OP_DIVIDE or e.op == OP_REMAINDER) and self.ex(e.left).type == TYPE_INT and not self.is_nonzero_constant(e.right)
+            return false
+        end
+        return self.inline_safe_expr(e.left) and self.inline_safe_expr(e.right)
+    end
+    if kind == EX_CALL or kind == EX_METHOD_CALL
+        # Calls Windows, or a function that's written in place too
+        var is_windows = kind == EX_CALL and self.function_of(e.name).dll != ""
+        if not is_windows and self.inlined_function(place) == ""
+            return false
+        end
+        if kind == EX_METHOD_CALL and not self.inline_safe_expr(e.left)
+            return false
+        end
+        for input in e.inputs
+            if not self.inline_safe_expr(input)
+                return false
+            end
+        end
+        return true
+    end
+    return false
+end
+
+# The name of the function a call goes to, when it's written in place, or ""
+func Generator.inlined_function(place: int): string
+    var e = self.ex(place)
+    var name = ""
+    if e.kind == EX_CALL
+        name = e.name
+    elif e.kind == EX_METHOD_CALL and self.is_struct(self.ex(e.left).type)
+        name = self.type_name(self.ex(e.left).type) + "." + e.name
+    else
+        return ""
+    end
+    if self.can_inline(self.function_of(name))
+        return name
+    end
+    return ""
+end
+
+# How many spare slots a function's frame needs for the calls written in place. A call's inputs run while its
+# own slots are taken, so calls in them need slots past those
+func Generator.inline_slots_block(block: [int]): int
+    var most = 0
+    for place in block
+        var s = self.st(place)
+        most = max_int_of(most, self.inline_slots_expr(s.target))
+        most = max_int_of(most, self.inline_slots_expr(s.value))
+        most = max_int_of(most, self.inline_slots_expr(s.range_end))
+        most = max_int_of(most, self.inline_slots_block(s.body))
+        most = max_int_of(most, self.inline_slots_block(s.other_body))
+        for part in s.elifs
+            most = max_int_of(most, self.inline_slots_expr(part.condition))
+            most = max_int_of(most, self.inline_slots_block(part.body))
+        end
+        for part in s.cases
+            most = max_int_of(most, self.inline_slots_expr(part.value))
+            most = max_int_of(most, self.inline_slots_block(part.body))
+        end
+    end
+    return most
+end
+
+func Generator.inline_slots_expr(place: int): int
+    if place < 0
+        return 0
+    end
+    var e = self.ex(place)
+    var most = max_int_of(self.inline_slots_expr(e.left), self.inline_slots_expr(e.right))
+    for input in e.inputs
+        most = max_int_of(most, self.inline_slots_expr(input))
+    end
+    var name = self.inlined_function(place)
+    if name != ""
+        # The calls inside a function written in place need slots past its own
+        var function = self.function_of(name)
+        return function.slot_count + max_int_of(most, self.inline_slots_block(function.body))
+    end
+    return most
+end
+
+# Writes the function's body in place. object is the struct a method was called on, or -1
+func Generator.write_inline_call(function: Function, object: int, inputs: [int])
+    var out = self.out
+    var base = self.inline_top
+    self.inline_top += function.slot_count
+    var slot = base
+    if object >= 0
+        self.write_expression(object)
+        self.store_own_slot_rax(slot)
+        slot += 1
+    end
+    for input in inputs
+        self.write_expression(input)
+        self.store_own_slot_rax(slot)
+        slot += 1
+    end
+    var finished = out.new_label()
+    var outer_shift = self.slot_shift
+    var outer_end = self.inline_end
+    self.slot_shift = base
+    self.inline_end = finished
+    self.write_block(function.body)
+    out.place(finished)
+    self.slot_shift = outer_shift
+    self.inline_end = outer_end
+    self.inline_top = base
+end
+
+# Stores rax in one of the frame's own slots, even while a function is being written in place
+func Generator.store_own_slot_rax(slot: int)
+    var outer_shift = self.slot_shift
+    self.slot_shift = -1
+    self.store_slot_rax(slot)
+    self.slot_shift = outer_shift
+end
+
+# A slot of the function being written in place is one of the caller's spare slots
+func Generator.real_slot(slot: int): int
+    if self.slot_shift >= 0 and slot >= 0
+        return slot + self.slot_shift
+    end
+    return slot
+end
+
+func max_int_of(a: int, b: int): int
+    if a > b
+        return a
+    end
+    return b
+end
+
+# --- Registers for the busiest variables ---
+
+# Counts each variable's uses, with uses inside loops counting 10 times for each loop, and gives the
+# busiest ones r12 to r15. Ties go to the lower slot, like the C++ sort
+func Generator.choose_registers(function: Function)
+    self.slot_registers = []
+    self.saved_count = 0
+    if not self.optimizing
+        return
+    end
+    var uses: [int] = []
+    for i in 0..function.slot_count
+        uses.add(0)
+        self.slot_registers.add(-1)
+    end
+    self.count_uses_in_block(function.body, 0, uses)
+    var busiest: [int] = []
+    for slot in 0..len(uses)
+        if uses[slot] >= REGISTER_MIN_USES
+            var at = len(busiest)
+            busiest.add(slot)
+            while at > 0 and uses[busiest[at - 1]] < uses[slot]
+                busiest[at] = busiest[at - 1]
+                at -= 1
+            end
+            busiest[at] = slot
+        end
+    end
+    for slot in busiest
+        if self.saved_count == VARIABLE_REGISTERS
+            break
+        end
+        self.slot_registers[slot] = self.saved_count
+        self.saved_count += 1
+    end
+end
+
+func loop_weight(depth: int): int
+    var weight = 1
+    var i = 0
+    while i < depth and i < 4
+        weight *= 10
+        i += 1
+    end
+    return weight
+end
+
+func Generator.count_uses_in_block(block: [int], depth: int, uses: [int])
+    for place in block
+        var s = self.st(place)
+        var here = loop_weight(depth)
+        var is_loop = s.kind == ST_WHILE or s.kind == ST_FOR
+        self.count_uses(s.target, here, uses)
+        if s.kind == ST_WHILE
+            self.count_uses(s.value, loop_weight(depth + 1), uses)
+        else
+            self.count_uses(s.value, here, uses)
+        end
+        self.count_uses(s.range_end, here, uses)
+        if s.kind == ST_FOR
+            for slot in [s.slot, s.end_slot, s.array_slot]
+                if slot >= 0
+                    uses[slot] += 3 * loop_weight(depth + 1)
+                end
+            end
+        elif s.slot >= 0 and s.target < 0 and (s.kind == ST_VAR or s.kind == ST_ASSIGN or s.kind == ST_MATCH)
+            uses[s.slot] += here
+        end
+        if is_loop
+            self.count_uses_in_block(s.body, depth + 1, uses)
+        else
+            self.count_uses_in_block(s.body, depth, uses)
+        end
+        for part in s.elifs
+            self.count_uses(part.condition, here, uses)
+            self.count_uses_in_block(part.body, depth, uses)
+        end
+        for part in s.cases
+            self.count_uses(part.value, here, uses)
+            self.count_uses_in_block(part.body, depth, uses)
+        end
+        self.count_uses_in_block(s.other_body, depth, uses)
+    end
+end
+
+func Generator.count_uses(place: int, weight: int, uses: [int])
+    if place < 0
+        return
+    end
+    var e = self.ex(place)
+    if e.kind == EX_NAME and e.slot >= 0
+        uses[e.slot] += weight
+    end
+    self.count_uses(e.left, weight, uses)
+    self.count_uses(e.right, weight, uses)
+    for input in e.inputs
+        self.count_uses(input, weight, uses)
+    end
+end
+
+# --- Statements ---
+
+# True when the block always leaves, by return, break or continue, so nothing needs to follow it.
+# write_block stops at the first of these, so only the block's own statements count
+func Generator.always_leaves(block: [int]): bool
+    if not self.optimizing
+        return false
+    end
+    for place in block
+        var kind = self.st(place).kind
+        if kind == ST_RETURN or kind == ST_BREAK or kind == ST_CONTINUE
+            return true
+        end
+    end
+    return false
+end
+
+func Generator.write_block(block: [int])
+    for place in block
+        self.write_statement(place)
+        # Anything after these can never run
+        var kind = self.st(place).kind
+        if self.optimizing and (kind == ST_RETURN or kind == ST_BREAK or kind == ST_CONTINUE)
+            return
+        end
+    end
+end
+
+func Generator.write_statement(place: int)
+    var s = self.st(place)
+    var out = self.out
+    var kind = s.kind
+    if kind == ST_VAR
+        var reg = -1
+        if self.optimizing
+            reg = self.register_at(s.slot)
+        end
+        if reg >= 0 and self.small_constant(s.value)
+            out.mov_reg_value(reg, self.bits)
+        else
+            self.write_expression(s.value)
+            self.store_slot_rax(s.slot)
+        end
+    elif kind == ST_ASSIGN
+        self.write_assign(s)
+    elif kind == ST_IF
+        self.write_if(s)
+    elif kind == ST_WHILE
+        self.write_while(s)
+    elif kind == ST_FOR
+        self.write_for(s)
+    elif kind == ST_MATCH
+        self.write_match(s)
+    elif kind == ST_BREAK
+        out.jump(self.loop_ends[len(self.loop_ends) - 1])
+    elif kind == ST_CONTINUE
+        out.jump(self.loop_nexts[len(self.loop_nexts) - 1])
+    elif kind == ST_RETURN
+        if s.value >= 0
+            self.write_expression(s.value)
+        end
+        if self.inline_end >= 0
+            out.jump(self.inline_end)
+        else
+            self.write_return()
+        end
+    elif kind == ST_CALL
+        self.write_expression(s.value)
+    elif kind == ST_PRINT
+        self.write_expression(s.value)
+        out.note_line(stmt_place(s))
+        self.write_print(self.ex(s.value).type)
+    end
+end
+
+func Generator.write_assign(s: Stmt)
+    if s.target >= 0 and self.ex(s.target).kind == EX_FIELD
+        self.write_assign_to_field(s)
+        return
+    end
+    if s.target >= 0
+        self.write_assign_to_item(s)
+        return
+    end
+    if self.optimizing
+        var reg = self.register_at(s.slot)
+        if reg >= 0 and self.write_register_assign(s, reg)
+            return
+        end
+    end
+    if s.has_operation and self.optimizing and (s.operation == OP_ADD or s.operation == OP_SUBTRACT) and self.small_constant(s.value)
+        var value = self.bits
+        self.load_slot_rax(s.slot)
+        if s.operation == OP_ADD
+            self.out.add_rax_value(value)
+        else
+            self.out.sub_rax_value(value)
+        end
+    elif s.has_operation and self.optimizing and self.ex(s.value).type == TYPE_FLOAT and s.operation != OP_REMAINDER and not self.has_call(s.value)
+        # The variable can't change while the value runs, so it's read after it
+        self.write_float_xmm1(s.value)
+        self.load_slot_rax(s.slot)
+        self.out.mov_xmm0_rax()
+        self.write_float_math(s.operation)
+        self.out.mov_rax_xmm0()
+    elif s.has_operation
+        self.load_slot_rax(s.slot)
+        self.then_right(s.value)
+        self.write_operation(s.operation, self.ex(s.value).type, stmt_place(s))
+    else
+        self.write_expression(s.value)
+    end
+    self.store_slot_rax(s.slot)
+end
+
+# Changes a variable held in a register straight in its register, without going through rax.
+# Ints wrap, and nothing can change a local variable while its value runs, so reading it after is the same.
+# Answers false when the assignment needs the usual way
+func Generator.write_register_assign(s: Stmt, reg: int): bool
+    var out = self.out
+    if not s.has_operation
+        if not self.small_constant(s.value)
+            return false
+        end
+        out.mov_reg_value(reg, self.bits)
+        return true
+    end
+    if self.ex(s.value).type != TYPE_INT or (s.operation != OP_ADD and s.operation != OP_SUBTRACT)
+        return false
+    end
+    var adding = s.operation == OP_ADD
+    if self.small_constant(s.value)
+        var value = self.bits
+        if value == 1
+            if adding
+                out.inc_reg(reg)
+            else
+                out.dec_reg(reg)
+            end
+        elif adding
+            out.add_reg_value(reg, value)
+        else
+            out.sub_reg_value(reg, value)
+        end
+        return true
+    end
+    self.write_expression(s.value)
+    if adding
+        out.add_reg_rax(reg)
+    else
+        out.sub_reg_rax(reg)
+    end
+    return true
+end
+
+func Generator.write_assign_to_field(s: Stmt)
+    var out = self.out
+    var target = self.ex(s.target)
+    var type = self.ex(s.value).type
+    var op = s.operation
+    var simple_operation = s.has_operation and not self.has_call(s.value) and ((type == TYPE_INT and (op == OP_ADD or op == OP_SUBTRACT or op == OP_MULTIPLY)) or (type == TYPE_FLOAT and (op == OP_ADD or op == OP_SUBTRACT or op == OP_MULTIPLY or op == OP_DIVIDE)))
+    var left = self.ex(target.left)
+    if self.optimizing and left.kind == EX_NAME and left.slot >= 0 and (not s.has_operation or simple_operation)
+        # The variable can't change while the value runs, and with an operation the value has no calls, so the field is read after it safely
+        if s.has_operation and type == TYPE_FLOAT
+            self.write_float_xmm1(s.value)
+            self.load_slot_rax(left.slot)
+            out.mov_rdx_rax()
+            out.load_xmm0_field_of_rdx(target.slot)
+            self.write_float_math(op)
+            out.store_xmm0_in_rdx_field(target.slot)
+            return
+        end
+        self.write_expression(s.value)
+        if s.has_operation
+            out.mov_rcx_rax()
+            self.load_slot_rax(left.slot)
+            out.mov_rdx_rax()
+            out.load_rax_field_of_rdx(target.slot)
+            self.write_operation(op, type, stmt_place(s))
+            out.store_rax_in_rdx_field(target.slot)
+        else
+            out.mov_r9_rax()
+            self.load_slot_rax(left.slot)
+            out.store_r9_in_rax_field(target.slot)
+        end
+        return
+    end
+    self.write_expression(target.left)
+    out.push_rax()
+    if s.has_operation
+        out.load_rax_from_stack_top()
+        out.load_rax_field(target.slot)
+        out.push_rax()
+    end
+    self.write_expression(s.value)
+    if s.has_operation
+        out.mov_rcx_rax()
+        out.pop_rax()
+        self.write_operation(s.operation, self.ex(s.value).type, stmt_place(s))
+    end
+    out.mov_r9_rax()
+    out.pop_rax()
+    out.store_r9_in_rax_field(target.slot)
+end
+
+# The item's place is only worked out after the value, since the value could grow the array
+func Generator.write_assign_to_item(s: Stmt)
+    var out = self.out
+    var target = self.ex(s.target)
+    var line = stmt_place(s)
+    self.write_expression(target.left)
+    out.push_rax()
+    self.write_expression(target.right)
+    out.push_rax()
+    if s.has_operation
+        out.load_rax_from_stack_second()
+        out.load_rcx_from_stack_top()
+        if self.optimizing
+            self.write_array_read(line)
+        else
+            out.note_line(line)
+            out.call(self.rt[R_ARRAY_AT])
+        end
+        out.push_rax()
+    end
+    self.write_expression(s.value)
+    if s.has_operation
+        out.mov_rcx_rax()
+        out.pop_rax()
+        self.write_operation(s.operation, self.ex(s.value).type, line)
+    end
+    out.mov_r9_rax()
+    out.pop_rcx()
+    out.pop_rax()
+    if self.optimizing
+        # The runtime is only called to stop with the error
+        var inside = out.new_label()
+        out.cmp_rcx_length()
+        out.jump_if_below(inside)
+        out.note_line(line)
+        out.call(self.rt[R_ARRAY_ADDRESS])
+        out.place(inside)
+        out.load_rax_items()
+        out.lea_rax_item_rcx()
+    else
+        out.note_line(line)
+        out.call(self.rt[R_ARRAY_ADDRESS])
+    end
+    out.store_r9_at_rax()
+end
+
+func Generator.write_print(type: int)
+    var out = self.out
+    if type_is_custom(type)
+        out.push_rax()
+        out.call(self.rt[R_BUILDER_START])
+        out.pop_rax()
+        self.write_show(type)
+        out.call(self.rt[R_BUILDER_PRINT])
+        return
+    end
+    if type == TYPE_BOOL
+        out.call(self.rt[R_PRINT_BOOL])
+    elif type == TYPE_FLOAT
+        out.call(self.rt[R_PRINT_FLOAT])
+    elif type == TYPE_STRING
+        out.call(self.rt[R_PRINT_STRING])
+    else
+        out.call(self.rt[R_PRINT_INT])
+    end
+end
+
+func Generator.write_if(s: Stmt)
+    var finished = self.out.new_label()
+    # With nothing after the last part, its jump to the end would land on the very next instruction
+    var nothing_after = self.optimizing and len(s.other_body) == 0
+    self.write_if_part(s.value, s.body, finished, nothing_after and len(s.elifs) == 0)
+    for i in 0..len(s.elifs)
+        var part = s.elifs[i]
+        self.write_if_part(part.condition, part.body, finished, nothing_after and i + 1 == len(s.elifs))
+    end
+    self.write_block(s.other_body)
+    self.out.place(finished)
+end
+
+func Generator.write_if_part(condition: int, body: [int], finished: int, last: bool)
+    var next = self.out.new_label()
+    self.write_jump(condition, false, next)
+    self.write_block(body)
+    if not last and not self.always_leaves(body)
+        self.out.jump(finished)
+    end
+    self.out.place(next)
+end
+
+func Generator.write_match(s: Stmt)
+    var out = self.out
+    var finished = out.new_label()
+    self.write_expression(s.value)
+    self.store_slot_rax(s.slot)
+    for part in s.cases
+        var next = out.new_label()
+        self.write_expression(part.value)
+        out.mov_rcx_rax()
+        self.load_slot_rax(s.slot)
+        if self.ex(s.value).type == TYPE_STRING
+            out.call(self.rt[R_STRINGS_EQUAL])
+            out.test_rax_rax()
+            out.jump_if_equal(next)
+        else
+            out.cmp_rax_rcx()
+            out.jump_if_not_equal(next)
+        end
+        self.write_block(part.body)
+        if not self.always_leaves(part.body)
+            out.jump(finished)
+        end
+        out.place(next)
+    end
+    self.write_block(s.other_body)
+    out.place(finished)
+end
+
+func Generator.write_while(s: Stmt)
+    var out = self.out
+    if self.optimizing
+        # The check sits after the body, so each round takes one jump instead of two
+        var body = out.new_label()
+        var check = out.new_label()
+        var done = out.new_label()
+        self.loop_nexts.add(check)
+        self.loop_ends.add(done)
+        out.jump(check)
+        out.place(body)
+        self.write_block(s.body)
+        out.place(check)
+        self.write_jump(s.value, true, body)
+        out.place(done)
+        self.loop_nexts.pop()
+        self.loop_ends.pop()
+        return
+    end
+    var start = out.new_label()
+    var finished = out.new_label()
+    self.loop_nexts.add(start)
+    self.loop_ends.add(finished)
+    out.place(start)
+    self.write_jump(s.value, false, finished)
+    self.write_block(s.body)
+    out.jump(start)
+    out.place(finished)
+    self.loop_nexts.pop()
+    self.loop_ends.pop()
+end
+
+# Looks at the array's length every round, since the loop's body can grow it
+func Generator.write_for_array(s: Stmt)
+    var out = self.out
+    var start = out.new_label()
+    var next = out.new_label()
+    var finished = out.new_label()
+    self.write_expression(s.value)
+    self.store_slot_rax(s.array_slot)
+    out.zero_eax()
+    self.store_slot_rax(s.end_slot)
+    self.loop_nexts.add(next)
+    self.loop_ends.add(finished)
+    if self.optimizing
+        # The check sits after the body, so each round takes one jump instead of two
+        var body = out.new_label()
+        out.jump(start)
+        out.place(body)
+        self.load_slot_rax(s.array_slot)
+        out.load_rax_items()
+        self.load_slot_rcx(s.end_slot)
+        out.load_rax_item_rcx()
+        self.store_slot_rax(s.slot)
+        self.write_block(s.body)
+        out.place(next)
+        var reg = self.register_at(s.end_slot)
+        if reg >= 0
+            out.inc_reg(reg)
+        else
+            self.load_slot_rax(s.end_slot)
+            out.inc_rax()
+            self.store_slot_rax(s.end_slot)
+        end
+        out.place(start)
+        self.load_slot_rax(s.array_slot)
+        out.mov_rcx_from_rax()
+        self.load_slot_rax(s.end_slot)
+        out.cmp_rax_rcx()
+        out.jump_if_less(body)
+        out.place(finished)
+        self.loop_nexts.pop()
+        self.loop_ends.pop()
+        return
+    end
+    out.place(start)
+    self.load_slot_rax(s.array_slot)
+    out.mov_rcx_from_rax()
+    self.load_slot_rax(s.end_slot)
+    out.cmp_rax_rcx()
+    out.jump_if_greater_equal(finished)
+    self.load_slot_rax(s.array_slot)
+    out.load_rax_items()
+    self.load_slot_rcx(s.end_slot)
+    out.load_rax_item_rcx()
+    self.store_slot_rax(s.slot)
+    self.write_block(s.body)
+    out.place(next)
+    self.load_slot_rax(s.end_slot)
+    out.inc_rax()
+    self.store_slot_rax(s.end_slot)
+    out.jump(start)
+    out.place(finished)
+    self.loop_nexts.pop()
+    self.loop_ends.pop()
+end
+
+# The variable stays below the end, so adding one to it can't overflow
+func Generator.write_for(s: Stmt)
+    if s.range_end < 0
+        self.write_for_array(s)
+        return
+    end
+    var out = self.out
+    var start = out.new_label()
+    var next = out.new_label()
+    var finished = out.new_label()
+    self.write_expression(s.value)
+    self.store_slot_rax(s.slot)
+    self.write_expression(s.range_end)
+    self.store_slot_rax(s.end_slot)
+    self.loop_nexts.add(next)
+    self.loop_ends.add(finished)
+    if self.optimizing
+        # The check sits after the body, and a variable in a register is counted and compared where it is
+        var body = out.new_label()
+        out.jump(start)
+        out.place(body)
+        self.write_block(s.body)
+        out.place(next)
+        var reg = self.register_at(s.slot)
+        if reg >= 0
+            out.inc_reg(reg)
+        else
+            self.load_slot_rax(s.slot)
+            out.inc_rax()
+            self.store_slot_rax(s.slot)
+        end
+        out.place(start)
+        var end_reg = self.register_at(s.end_slot)
+        if reg >= 0 and end_reg >= 0
+            out.cmp_reg_reg(reg, end_reg)
+        else
+            self.load_slot_rcx(s.end_slot)
+            self.load_slot_rax(s.slot)
+            out.cmp_rax_rcx()
+        end
+        out.jump_if_less(body)
+        out.place(finished)
+        self.loop_nexts.pop()
+        self.loop_ends.pop()
+        return
+    end
+    out.place(start)
+    self.load_slot_rcx(s.end_slot)
+    self.load_slot_rax(s.slot)
+    out.cmp_rax_rcx()
+    out.jump_if_greater_equal(finished)
+    self.write_block(s.body)
+    out.place(next)
+    self.load_slot_rax(s.slot)
+    out.inc_rax()
+    self.store_slot_rax(s.slot)
+    out.jump(start)
+    out.place(finished)
+    self.loop_nexts.pop()
+    self.loop_ends.pop()
+end
+
+# --- Expressions ---
+
+func Generator.write_expression(place: int)
+    var out = self.out
+    if self.constant_of(place)
+        out.mov_rax_number(self.bits)
+        return
+    end
+    var e = self.ex(place)
+    var kind = e.kind
+    if kind == EX_NUMBER
+        out.mov_rax_number(e.number)
+    elif kind == EX_FLOAT
+        out.mov_rax_number(self.float_bits(e.real))
+    elif kind == EX_BOOL
+        out.mov_rax_number(truth_bits(e.truth))
+    elif kind == EX_STRING
+        out.lea_rax_string(self.string_number(e.text))
+    elif kind == EX_INDEX and self.optimizing
+        self.write_expression(e.left)
+        self.then_right(e.right)
+        if self.ex(e.left).type == TYPE_STRING
+            out.note_line(expr_place(e))
+            out.call(self.rt[R_STRING_AT])
+        else
+            self.write_array_read(expr_place(e))
+        end
+    elif kind == EX_INDEX
+        self.write_expression(e.left)
+        out.push_rax()
+        self.write_expression(e.right)
+        out.mov_rcx_rax()
+        out.pop_rax()
+        out.note_line(expr_place(e))
+        if self.ex(e.left).type == TYPE_STRING
+            out.call(self.rt[R_STRING_AT])
+        else
+            out.call(self.rt[R_ARRAY_AT])
+        end
+    elif kind == EX_ARRAY_LITERAL
+        self.write_array_literal(e)
+    elif kind == EX_METHOD_CALL
+        self.write_method_call(place, e)
+    elif kind == EX_FIELD
+        self.write_expression(e.left)
+        out.load_rax_field(e.slot)
+    elif kind == EX_STRUCT_LITERAL
+        self.write_struct_literal(e)
+    elif kind == EX_BUILTIN_CALL
+        self.write_builtin_call(e)
+    elif kind == EX_ENUM_VALUE
+        out.mov_rax_number(e.number)
+    elif kind == EX_LENGTH
+        self.write_expression(e.left)
+        out.load_rax_from_rax()
+    elif kind == EX_CONVERT
+        self.write_expression(e.left)
+        self.write_convert(e)
+    elif kind == EX_FSTRING
+        self.write_fstring(e)
+    elif kind == EX_NAME
+        self.load_slot_rax(e.slot)
+    elif kind == EX_NEGATE
+        self.write_expression(e.left)
+        if e.type == TYPE_FLOAT
+            out.flip_rax_sign_bit()
+        else
+            out.neg_rax()
+        end
+    elif kind == EX_NOT
+        self.write_expression(e.left)
+        out.flip_rax_bit_zero()
+    elif kind == EX_BINARY
+        self.write_binary(e)
+    elif kind == EX_CALL
+        if self.function_of(e.name).dll != ""
+            self.write_extern_call(e)
+            return
+        end
+        var inlined = self.inlined_function(place)
+        if inlined != ""
+            self.write_inline_call(self.function_of(inlined), -1, e.inputs)
+            return
+        end
+        for input in e.inputs
+            self.write_expression(input)
+            out.push_rax()
+        end
+        out.call(self.function_labels.get(e.name))
+        self.note_call_site(e)
+        if len(e.inputs) > 0
+            out.add_rsp(len(e.inputs) * WORD_SIZE)
+        end
+    end
+end
+
+func Generator.note_call_site(e: Expr)
+    var file = self.file_name
+    if len(self.program.file_names) > 0
+        var which = e.file
+        if which < 0
+            which = 0
+        end
+        file = self.program.file_names[which]
+    end
+    var caller = self.current_function
+    if caller == SETUP_NAME
+        caller = "setting up the variables outside functions"
+    end
+    self.out.note_call_site(self.string_number("    called from " + caller + ", " + file + " line " + string(e.line) + "\n"))
+end
+
+# --- Calling Windows, by its x64 rules ---
+
+# The inputs are pushed first. rbx keeps where they are, since Windows functions keep rbx as it was
+func Generator.write_extern_call(e: Expr)
+    var out = self.out
+    var function = self.function_of(e.name)
+    for input in e.inputs
+        self.write_expression(input)
+        out.push_rax()
+    end
+    var count = len(e.inputs)
+    var on_stack = 0
+    if count > 4
+        on_stack = count - 4
+    end
+    out.mov_rbx_rsp()
+    if function.dll == "OpenGL"
+        self.write_opengl_address(function)
+        out.mov_r11_rax()
+    end
+    out.sub_rsp(WINDOWS_SPACE + on_stack * WORD_SIZE + WORD_SIZE)
+    out.align_rsp()
+    for i in 4..count
+        if function.input_is_f32[i]
+            out.copy_f32_input_to_stack((count - 1 - i) * WORD_SIZE, WINDOWS_SPACE + (i - 4) * WORD_SIZE)
+        else
+            out.copy_input_to_stack((count - 1 - i) * WORD_SIZE, WINDOWS_SPACE + (i - 4) * WORD_SIZE)
+        end
+    end
+    var i = 0
+    while i < count and i < 4
+        out.load_reg_from_inputs(i, function.inputs[i].type == TYPE_FLOAT, (count - 1 - i) * WORD_SIZE)
+        if function.input_is_f32[i]
+            out.shrink_float_in(i)
+        end
+        i += 1
+    end
+    if function.dll == "OpenGL"
+        out.call_r11()
+    else
+        out.call_import(self.import_of(function.dll, function.name))
+    end
+    out.mov_rsp_rbx()
+    if count > 0
+        out.add_rsp(count * WORD_SIZE)
+    end
+    if function.return_type == TYPE_FLOAT
+        if function.returns_f32
+            out.grow_float_answer()
+        end
+        out.mov_rax_xmm0()
+    end
+    if function.return_type == TYPE_BOOL
+        out.eax_to_bool()
+    end
+    if function.return_type == TYPE_INT and function.returns_i32
+        out.sign_extend_eax()
+    end
+end
+
+func Generator.import_of(dll: string, name: string): int
+    if self.import_numbers.has(name)
+        return self.import_numbers.get(name)
+    end
+    self.import_dlls.add(dll)
+    self.import_names.add(name)
+    self.import_numbers.set(name, len(self.import_names) - 1)
+    return len(self.import_names) - 1
+end
+
+# Text made of zero bytes
+func zero_text(count: int): string
+    return memory_text(memory(count), count)
+end
+
+# OpenGL 3.3's functions only exist once a window has OpenGL, so each is looked up on its first call.
+# Its address is kept in a string entry made only for it, which lives in the data section like any string
+func Generator.write_opengl_address(function: Function)
+    var out = self.out
+    var known = out.new_label()
+    var slot = self.string_number(zero_text(8) + "OpenGL address of " + function.name)
+    out.load_rax_string_bytes(slot)
+    out.test_rax_rax()
+    out.jump_if_not_equal(known)
+    out.lea_rax_string(self.string_number(function.name + zero_text(1)))
+    out.call(self.opengl_lookup_label())
+    out.store_rax_string_bytes(slot)
+    out.place(known)
+end
+
+func Generator.opengl_lookup_label(): int
+    if self.opengl_lookup < 0
+        self.opengl_lookup = self.out.new_label()
+    end
+    return self.opengl_lookup
+end
+
+# rax = the name, as a string ending in a zero byte. Answers with the function's address
+func Generator.write_opengl_lookup()
+    var out = self.out
+    var fallback = out.new_label()
+    var found = out.new_label()
+    out.place(self.opengl_lookup)
+    out.hex("554889e55356")
+    out.align_rsp()
+    out.sub_rsp(WINDOWS_SPACE)
+    out.hex("488d5808")
+    out.hex("4889d9")
+    out.call_import(self.import_of("opengl32.dll", "wglGetProcAddress"))
+    out.hex("4883f803")
+    out.jump_if_at_most(fallback)
+    out.hex("4883f8ff")
+    out.jump_if_not_equal(found)
+    out.place(fallback)
+    out.lea_string(REG_RCX, self.string_number("opengl32.dll" + zero_text(1)))
+    out.hex("4883c108")
+    out.call_import(self.import_of("kernel32.dll", "GetModuleHandleA"))
+    out.hex("4889c14889da")
+    out.call_import(self.import_of("kernel32.dll", "GetProcAddress"))
+    out.test_rax_rax()
+    out.jump_if_not_equal(found)
+    out.lea_rax_string(self.string_number("OpenGL 3.3 isn't available on this PC, so it can't draw."))
+    out.call(self.rt[R_RUN_ERROR])
+    out.place(found)
+    out.hex("488d65f05e5b5dc3")
+end
+
+# Windows calls this with its own rules, and it calls the Jamo function with Jamo's
+func Generator.write_callback(function: Function, label: int)
+    var out = self.out
+    out.place(label)
+    out.hex("554889e5")
+    out.hex("535657")
+    out.hex("4154415541564157")
+    out.hex("4883ec08")
+    var pushes = ["51", "52", "4150", "4151"]
+    for i in 0..len(function.inputs)
+        out.hex(pushes[i])
+    end
+    out.call(self.function_labels.get(function.name))
+    if len(function.inputs) > 0
+        out.add_rsp(len(function.inputs) * WORD_SIZE)
+    end
+    out.hex("488d65c8")
+    out.hex("415f415e415d415c5f5e5b5dc3")
+end
+
+func Generator.write_peek(name: string)
+    var out = self.out
+    if name == "peek_i64" or name == "peek_f64"
+        out.hex("488b00")
+    end
+    if name == "peek_i32"
+        out.hex("486300")
+    end
+    if name == "peek_u16"
+        out.hex("0fb700")
+    end
+    if name == "peek_u8"
+        out.hex("0fb600")
+    end
+    if name == "peek_f32"
+        out.hex("f30f5a00")
+        out.mov_rax_xmm0()
+    end
+end
+
+# rax = where, rcx = the value
+func Generator.write_poke(name: string)
+    var out = self.out
+    if name == "poke_i64" or name == "poke_f64"
+        out.hex("488908")
+    end
+    if name == "poke_i32"
+        out.hex("8908")
+    end
+    if name == "poke_u16"
+        out.hex("668908")
+    end
+    if name == "poke_u8"
+        out.hex("8808")
+    end
+    if name == "poke_f32"
+        out.hex("66480f6ec1f20f5ac0f30f1100")
+    end
+end
+
+func Generator.write_builtin_call(e: Expr)
+    var out = self.out
+    var name = e.name
+    if name == "callback"
+        if not self.callback_labels.has(e.text)
+            self.callback_labels.set(e.text, out.new_label())
+        end
+        out.lea_rax_label(self.callback_labels.get(e.text))
+        return
+    end
+    if starts_with(name, "peek_")
+        self.write_expression(e.inputs[0])
+        self.then_right(e.inputs[1])
+        out.add_rax_rcx_only()
+        self.write_peek(name)
+        return
+    end
+    if starts_with(name, "poke_")
+        self.write_expression(e.inputs[0])
+        out.push_rax()
+        self.write_expression(e.inputs[1])
+        out.push_rax()
+        self.write_expression(e.inputs[2])
+        out.mov_rcx_rax()
+        out.pop_rdx()
+        out.pop_rax()
+        out.add_rax_rdx()
+        self.write_poke(name)
+        return
+    end
+    if name == "hash_of"
+        self.write_expression(e.inputs[0])
+        if self.ex(e.inputs[0]).type == TYPE_STRING
+            out.hash_text_rax()
+        end
+        out.mix_hash_rax()
+        return
+    end
+    if name == "memory"
+        self.write_expression(e.inputs[0])
+        out.mov_rcx_rax()
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_ALLOC_TEXT])
+        return
+    end
+    if name == "memory_text"
+        self.write_expression(e.inputs[0])
+        self.then_right(e.inputs[1])
+        out.hex("4889c2")
+        out.hex("4989c8")
+        out.hex("4d85c0")
+        out.hex("7903")
+        out.hex("4531c0")
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_MAKE_STRING])
+        return
+    end
+    if name == "byte"
+        var inside = out.new_label()
+        self.write_expression(e.inputs[0])
+        self.then_right(e.inputs[1])
+        out.hex("483b08")
+        out.jump_if_below(inside)
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_STRING_AT])
+        out.place(inside)
+        out.hex("0fb6440808")
+        return
+    end
+    if name == "fail"
+        self.write_expression(e.inputs[0])
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_RUN_ERROR])
+        return
+    end
+    if name == "wide"
+        self.write_expression(e.inputs[0])
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_TO_WIDE])
+        return
+    end
+    if name == "write_file"
+        self.write_expression(e.inputs[0])
+        out.push_rax()
+        self.write_expression(e.inputs[1])
+        out.mov_rcx_rax()
+        out.pop_rax()
+    elif len(e.inputs) > 0
+        self.write_expression(e.inputs[0])
+    end
+    out.note_line(expr_place(e))
+    if name == "input"
+        out.call(self.rt[R_READ_LINE])
+    end
+    if name == "args"
+        out.call(self.rt[R_GET_ARGS])
+    end
+    if name == "read_file"
+        out.call(self.rt[R_READ_WHOLE_FILE])
+    end
+    if name == "write_file"
+        out.call(self.rt[R_WRITE_WHOLE_FILE])
+    end
+    if name == "exists"
+        out.call(self.rt[R_FILE_EXISTS])
+    end
+end
+
+func Generator.write_struct_literal(e: Expr)
+    var out = self.out
+    var field_count = len(self.program.types.entry(e.type).fields)
+    if field_count == 0
+        field_count = 1
+    end
+    out.note_line(expr_place(e))
+    out.mov_rcx_number(field_count * WORD_SIZE)
+    out.call(self.rt[R_ALLOC])
+    out.push_rax()
+    for i in 0..len(e.inputs)
+        self.write_expression(e.inputs[i])
+        out.store_rax_in_new_struct(e.field_numbers[i])
+    end
+    out.pop_rax()
+end
+
+func Generator.write_array_literal(e: Expr)
+    var out = self.out
+    out.note_line(expr_place(e))
+    out.mov_rcx_number(len(e.inputs))
+    out.call(self.rt[R_NEW_ARRAY])
+    out.push_rax()
+    for i in 0..len(e.inputs)
+        self.write_expression(e.inputs[i])
+        out.store_rax_in_new_array(i)
+    end
+    out.pop_rax()
+end
+
+func Generator.write_method_call(place: int, e: Expr)
+    var out = self.out
+    var inlined = self.inlined_function(place)
+    if inlined != ""
+        self.write_inline_call(self.function_of(inlined), e.left, e.inputs)
+        return
+    end
+    self.write_expression(e.left)
+    var left_type = self.ex(e.left).type
+    if self.is_struct(left_type)
+        out.push_rax()
+        for input in e.inputs
+            self.write_expression(input)
+            out.push_rax()
+        end
+        out.call(self.function_labels.get(self.type_name(left_type) + "." + e.name))
+        self.note_call_site(e)
+        out.add_rsp((len(e.inputs) + 1) * WORD_SIZE)
+        return
+    end
+    if e.name == "pop"
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_ARRAY_POP])
+        return
+    end
+    if self.optimizing
+        # When there's room, the item goes straight in. Only growing calls the runtime
+        var has_room = out.new_label()
+        var finished = out.new_label()
+        self.then_right(e.inputs[0])
+        out.load_rdx_length()
+        out.cmp_rdx_room()
+        out.jump_if_below(has_room)
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_ARRAY_ADD])
+        out.jump(finished)
+        out.place(has_room)
+        out.store_rcx_as_item_rdx()
+        out.grow_length()
+        out.place(finished)
+        return
+    end
+    out.push_rax()
+    self.write_expression(e.inputs[0])
+    out.mov_rcx_rax()
+    out.pop_rax()
+    out.note_line(expr_place(e))
+    out.call(self.rt[R_ARRAY_ADD])
+end
+
+# --- Showing arrays and other custom types ---
+
+# rax = the value, added to the text builder
+func Generator.write_show(type: int)
+    var out = self.out
+    if type == TYPE_INT
+        out.call(self.rt[R_BUILDER_ADD_INT])
+    elif type == TYPE_FLOAT
+        out.call(self.rt[R_BUILDER_ADD_FLOAT])
+    elif type == TYPE_BOOL
+        out.call(self.rt[R_BUILDER_ADD_BOOL])
+    elif type == TYPE_STRING
+        out.call(self.rt[R_BUILDER_ADD_QUOTED])
+    else
+        out.call(self.show_label(type))
+    end
+end
+
+func Generator.show_label(type: int): int
+    var key = string(type)
+    if self.show_labels.has(key)
+        return self.show_labels.get(key)
+    end
+    var label = self.out.new_label()
+    self.show_labels.set(key, label)
+    self.shows_to_write.add(type)
+    return label
+end
+
+func Generator.write_show_word(word: string)
+    self.out.lea_rax_string(self.string_number(word))
+    self.out.call(self.rt[R_BUILDER_ADD_STRING])
+end
+
+# The frame: [rbp-8] is how far along it is, and show_enter uses [rbp-16] and [rbp-24]
+func Generator.write_show_function(type: int)
+    if self.is_enum(type)
+        self.write_show_enum(type)
+        return
+    end
+    var out = self.out
+    var not_shown_yet = out.new_label()
+    out.place(self.show_labels.get(string(type)))
+    out.push_rbp()
+    out.mov_rbp_rsp()
+    out.sub_rsp(SHOW_FRAME)
+    out.call(self.rt[R_SHOW_ENTER])
+    out.test_rax_rax()
+    out.jump_if_equal(not_shown_yet)
+    self.write_show_word("...")
+    out.leave_and_return()
+    out.place(not_shown_yet)
+    if self.is_struct(type)
+        self.write_show_struct(type)
+    else
+        self.write_show_array(type)
+    end
+    out.call(self.rt[R_SHOW_LEAVE])
+    out.leave_and_return()
+end
+
+func Generator.write_show_enum(type: int)
+    var out = self.out
+    out.place(self.show_labels.get(string(type)))
+    var members = self.program.types.entry(type).members
+    for i in 0..len(members)
+        var next = out.new_label()
+        out.mov_rcx_number(i)
+        out.cmp_rax_rcx()
+        out.jump_if_not_equal(next)
+        out.lea_rax_string(self.string_number(self.type_name(type) + "." + members[i]))
+        out.jump(self.rt[R_BUILDER_ADD_STRING])
+        out.place(next)
+    end
+end
+
+func Generator.write_show_struct(type: int)
+    var opening = self.type_name(type) + "{"
+    var fields = self.program.types.entry(type).fields
+    for i in 0..len(fields)
+        var between = ", "
+        if i == 0
+            between = ""
+        end
+        self.write_show_word(opening + between + fields[i].name + ": ")
+        opening = ""
+        self.out.load_rax_from_frame(SHOW_VALUE)
+        self.out.load_rax_field(i)
+        self.write_show(fields[i].type)
+    end
+    self.write_show_word(opening + "}")
+end
+
+func Generator.write_show_array(type: int)
+    var out = self.out
+    var start = out.new_label()
+    var no_comma = out.new_label()
+    var finished = out.new_label()
+    self.write_show_word("[")
+    out.zero_eax()
+    out.store_rax_to_frame(SHOW_PROGRESS)
+    out.place(start)
+    out.load_rax_from_frame(SHOW_VALUE)
+    out.mov_rcx_from_rax()
+    out.load_rax_from_frame(SHOW_PROGRESS)
+    out.cmp_rax_rcx()
+    out.jump_if_greater_equal(finished)
+    out.test_rax_rax()
+    out.jump_if_equal(no_comma)
+    self.write_show_word(", ")
+    out.place(no_comma)
+    out.load_rax_from_frame(SHOW_VALUE)
+    out.load_rax_items()
+    out.load_rcx_from_frame(SHOW_PROGRESS)
+    out.load_rax_item_rcx()
+    self.write_show(self.program.types.entry(type).element)
+    out.load_rax_from_frame(SHOW_PROGRESS)
+    out.inc_rax()
+    out.store_rax_to_frame(SHOW_PROGRESS)
+    out.jump(start)
+    out.place(finished)
+    self.write_show_word("]")
+end
+
+func Generator.write_convert(e: Expr)
+    var out = self.out
+    var from = self.ex(e.left).type
+    if e.convert_to == TYPE_STRING
+        self.write_to_string(from, expr_place(e))
+    elif from == TYPE_STRING
+        out.note_line(expr_place(e))
+        if e.convert_to == TYPE_INT
+            out.call(self.rt[R_STRING_TO_INT])
+        else
+            out.call(self.rt[R_STRING_TO_FLOAT])
+        end
+    elif e.convert_to == TYPE_INT
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_FLOAT_TO_INT])
+    else
+        out.int_to_float()
+        out.mov_rax_xmm0()
+    end
+end
+
+func Generator.write_to_string(type: int, line: int)
+    if type == TYPE_STRING
+        return
+    end
+    var out = self.out
+    out.note_line(line)
+    if type_is_custom(type)
+        out.push_rax()
+        out.call(self.rt[R_BUILDER_START])
+        out.pop_rax()
+        self.write_show(type)
+        out.call(self.rt[R_BUILDER_TO_STRING])
+        return
+    end
+    if type == TYPE_BOOL
+        out.call(self.rt[R_BOOL_TO_STRING])
+    elif type == TYPE_FLOAT
+        out.call(self.rt[R_FLOAT_TO_STRING])
+    else
+        out.call(self.rt[R_INT_TO_STRING])
+    end
+end
+
+func Generator.write_fstring(e: Expr)
+    var out = self.out
+    if self.optimizing and len(e.inputs) >= 2
+        self.write_join_many(e.inputs, expr_place(e), true)
+        return
+    end
+    out.lea_rax_string(self.string_number(""))
+    for part in e.inputs
+        out.push_rax()
+        self.write_expression(part)
+        self.write_to_string(self.ex(part).type, expr_place(e))
+        out.mov_rcx_rax()
+        out.pop_rax()
+        out.note_line(expr_place(e))
+        out.call(self.rt[R_JOIN_STRINGS])
+    end
+end
+
+# The right side only runs when the left side doesn't already decide the answer
+func Generator.write_and_or(e: Expr)
+    var out = self.out
+    var finished = out.new_label()
+    self.write_expression(e.left)
+    out.test_rax_rax()
+    if e.op == OP_AND
+        out.jump_if_equal(finished)
+    else
+        out.jump_if_not_equal(finished)
+    end
+    self.write_expression(e.right)
+    out.place(finished)
+end
+
+# The pieces of a chain of + on text, like "a" + b + "c", left to right
+func Generator.collect_joined(place: int, parts: [int])
+    var e = self.ex(place)
+    if e.kind == EX_BINARY and e.op == OP_ADD and e.type == TYPE_STRING
+        self.collect_joined(e.left, parts)
+        self.collect_joined(e.right, parts)
+    else
+        parts.add(place)
+    end
+end
+
+# Pushes each piece, then makes the text once, instead of making a new string at every +
+func Generator.write_join_many(parts: [int], line: int, to_text: bool)
+    var out = self.out
+    for part in parts
+        self.write_expression(part)
+        if to_text
+            self.write_to_string(self.ex(part).type, line)
+        end
+        out.push_rax()
+    end
+    out.mov_rcx_number(len(parts))
+    out.note_line(line)
+    out.call(self.rt[R_JOIN_MANY])
+    out.add_rsp(len(parts) * WORD_SIZE)
+end
+
+func Generator.write_binary(e: Expr)
+    if e.op == OP_AND or e.op == OP_OR
+        self.write_and_or(e)
+        return
+    end
+    if self.optimizing and e.op == OP_ADD and e.type == TYPE_STRING
+        var parts: [int] = []
+        self.collect_joined(e.left, parts)
+        self.collect_joined(e.right, parts)
+        if len(parts) > 2
+            self.write_join_many(parts, expr_place(e), false)
+            return
+        end
+    end
+    var left_type = self.ex(e.left).type
+    if (e.op == OP_DIVIDE or e.op == OP_REMAINDER) and left_type == TYPE_INT and self.constant_of(e.right) and self.bits >= 2
+        var divisor = self.bits
+        self.write_expression(e.left)
+        self.write_divide_by_constant(divisor, e.op == OP_REMAINDER)
+        return
+    end
+    if self.optimizing and left_type != TYPE_FLOAT and left_type != TYPE_STRING and e.op != OP_MULTIPLY and e.op != OP_DIVIDE and e.op != OP_REMAINDER and self.small_constant(e.right)
+        var value = self.bits
+        self.write_expression(e.left)
+        if e.op == OP_ADD
+            self.out.add_rax_value(value)
+        elif e.op == OP_SUBTRACT
+            self.out.sub_rax_value(value)
+        else
+            self.out.cmp_rax_value(value)
+            self.out.setcc_al(condition_of(e.op))
+            self.out.movzx_eax_al()
+        end
+        return
+    end
+    if self.optimizing and left_type == TYPE_FLOAT and e.op != OP_REMAINDER
+        self.write_float_sides(e.left, e.right)
+        self.write_float_finish(e.op)
+        return
+    end
+    self.write_expression(e.left)
+    self.then_right(e.right)
+    self.write_operation(e.op, left_type, expr_place(e))
+end
+
+# --- Dividing by a constant ---
+
+# A number to multiply by and a shift that give the same answer as dividing by d, for d of 2 or more,
+# from Hacker's Delight. The numbers are unsigned 64-bit ones, as in the C++
+func Generator.write_divide_by_constant(d: int, remainder: bool)
+    var two63 = SIGN_BIT
+    var anc = two63 - 1 - (two63 - unsigned_divide(two63, d) * d)
+    var p = 63
+    var q1 = unsigned_divide(two63, anc)
+    var r1 = two63 - q1 * anc
+    var q2 = unsigned_divide(two63, d)
+    var r2 = two63 - q2 * d
+    while true
+        p += 1
+        q1 *= 2
+        r1 *= 2
+        if not unsigned_less(r1, anc)
+            q1 += 1
+            r1 -= anc
+        end
+        q2 *= 2
+        r2 *= 2
+        if not unsigned_less(r2, d)
+            q2 += 1
+            r2 -= d
+        end
+        var delta = d - r2
+        if not (unsigned_less(q1, delta) or (q1 == delta and r1 == 0))
+            break
+        end
+    end
+    var multiply = q2 + 1
+    var shift = p - 64
+    var out = self.out
+    out.mov_r8_rax()
+    out.mov_r11_value(multiply)
+    out.imul_r11()
+    if multiply < 0
+        out.add_rdx_r8()
+    end
+    if shift > 0
+        out.sar_rdx(shift)
+    end
+    out.mov_rax_rdx()
+    out.shr_rax_63()
+    out.add_rdx_rax()
+    if remainder
+        if d <= 2147483647
+            out.imul_rdx_value(d)
+        else
+            out.mov_r11_value(d)
+            out.imul_rdx_r11()
+        end
+        out.mov_rax_r8()
+        out.sub_rax_rdx()
+    else
+        out.mov_rax_rdx()
+    end
+end
+
+# rax = the left side, rcx = the right side
+func Generator.write_operation(op: int, type: int, line: int)
+    if type == TYPE_STRING
+        self.write_string_operation(op, line)
+    elif type == TYPE_FLOAT
+        self.write_float_operation(op)
+    else
+        self.write_int_operation(op, line)
+    end
+end
+
+func Generator.write_string_operation(op: int, line: int)
+    var out = self.out
+    if op == OP_ADD
+        out.note_line(line)
+        out.call(self.rt[R_JOIN_STRINGS])
+        return
+    end
+    out.call(self.rt[R_STRINGS_EQUAL])
+    if op == OP_NOT_EQUAL
+        out.flip_rax_bit_zero()
+    end
+end
+
+# --- Float math kept in float registers ---
+
+func is_float_math(op: int): bool
+    return op == OP_ADD or op == OP_SUBTRACT or op == OP_MULTIPLY or op == OP_DIVIDE
+end
+
+# xmm0 = xmm0 (op) xmm1
+func Generator.write_float_math(op: int)
+    if op == OP_ADD
+        self.out.addsd()
+    elif op == OP_SUBTRACT
+        self.out.subsd()
+    elif op == OP_MULTIPLY
+        self.out.mulsd()
+    else
+        self.out.divsd()
+    end
+end
+
+# Leaves a float's value in xmm0, without moving it through rax between operations
+func Generator.write_float_xmm0(place: int)
+    var e = self.ex(place)
+    if e.kind == EX_BINARY and self.ex(e.left).type == TYPE_FLOAT and is_float_math(e.op) and not self.constant_of(place)
+        self.write_float_sides(e.left, e.right)
+        self.write_float_math(e.op)
+    elif e.kind == EX_CONVERT and e.convert_to == TYPE_FLOAT and self.ex(e.left).type == TYPE_INT
+        self.write_expression(e.left)
+        self.out.int_to_float()
+    else
+        self.write_expression(place)
+        self.out.mov_xmm0_rax()
+    end
+end
+
+# Leaves the left side in xmm0 and the right in xmm1. A simple left side is read last when the right side
+# has no calls, since then nothing can change it
+func Generator.write_float_sides(left: int, right: int)
+    var out = self.out
+    if self.is_simple(left) and not self.is_simple(right) and not self.has_call(right)
+        self.write_float_xmm0(right)
+        out.mov_xmm1_xmm0()
+        self.write_simple_to_rcx(left)
+        out.mov_xmm0_rcx()
+        return
+    end
+    self.write_float_xmm0(left)
+    if self.is_simple(right)
+        self.write_simple_to_rcx(right)
+        out.mov_xmm1_rcx()
+        return
+    end
+    out.mov_rax_xmm0()
+    out.push_rax()
+    self.write_float_xmm0(right)
+    out.mov_xmm1_xmm0()
+    out.pop_rax()
+    out.mov_xmm0_rax()
+end
+
+# Leaves a float's value in xmm1
+func Generator.write_float_xmm1(place: int)
+    if self.is_simple(place)
+        self.write_simple_to_rcx(place)
+        self.out.mov_xmm1_rcx()
+        return
+    end
+    self.write_float_xmm0(place)
+    self.out.mov_xmm1_xmm0()
+end
+
+func Generator.write_float_operation(op: int)
+    var out = self.out
+    if op == OP_REMAINDER
+        out.call(self.rt[R_FLOAT_MOD])
+        return
+    end
+    out.mov_xmm0_rax()
+    out.mov_xmm1_rcx()
+    self.write_float_finish(op)
+end
+
+# xmm0 = the left side, xmm1 = the right side. Leaves the answer in rax
+func Generator.write_float_finish(op: int)
+    var out = self.out
+    if is_float_math(op)
+        self.write_float_math(op)
+        out.mov_rax_xmm0()
+        return
+    end
+    # These flags say "below" for NaN, so only "above" answers can be true when a NaN is compared
+    if op == OP_LESS
+        out.compare_xmm1_xmm0()
+        out.setcc_al(SET_ABOVE)
+    elif op == OP_GREATER
+        out.compare_xmm0_xmm1()
+        out.setcc_al(SET_ABOVE)
+    elif op == OP_LESS_EQUAL
+        out.compare_xmm1_xmm0()
+        out.setcc_al(SET_AT_LEAST)
+    elif op == OP_GREATER_EQUAL
+        out.compare_xmm0_xmm1()
+        out.setcc_al(SET_AT_LEAST)
+    elif op == OP_EQUAL
+        out.compare_xmm0_xmm1()
+        out.setcc_al(SET_EQUAL)
+        out.setcc_cl(SET_ORDERED)
+        out.and_al_cl()
+    else
+        out.compare_xmm0_xmm1()
+        out.setcc_al(SET_NOT_EQUAL)
+        out.setcc_cl(SET_UNORDERED)
+        out.or_al_cl()
+    end
+    out.movzx_eax_al()
+end
+
+func Generator.write_int_operation(op: int, line: int)
+    var out = self.out
+    if op == OP_ADD
+        out.add_rax_rcx()
+    elif op == OP_SUBTRACT
+        out.sub_rax_rcx()
+    elif op == OP_MULTIPLY
+        out.imul_rax_rcx()
+    elif op == OP_DIVIDE
+        self.write_divide(line)
+    elif op == OP_REMAINDER
+        self.write_remainder(line)
+    else
+        out.cmp_rax_rcx()
+        out.setcc_al(condition_of(op))
+        out.movzx_eax_al()
+    end
+end
+
+# The line is only noted when it's needed, on the way to the error
+func Generator.write_divide_by_zero_check(line: int)
+    var out = self.out
+    var not_zero = out.new_label()
+    out.test_rcx_rcx()
+    out.jump_if_not_equal(not_zero)
+    out.note_line(line)
+    out.jump(self.rt[R_DIVIDE_BY_ZERO])
+    out.place(not_zero)
+end
+
+func Generator.write_divide(line: int)
+    var out = self.out
+    var normal = out.new_label()
+    var finished = out.new_label()
+    self.write_divide_by_zero_check(line)
+    # The processor crashes on the smallest int / -1, and x / -1 is always just -x
+    out.cmp_rcx_minus_one()
+    out.jump_if_not_equal(normal)
+    out.neg_rax()
+    out.jump(finished)
+    out.place(normal)
+    out.cqo()
+    out.idiv_rcx()
+    out.place(finished)
+end
+
+func Generator.write_remainder(line: int)
+    var out = self.out
+    var normal = out.new_label()
+    var finished = out.new_label()
+    self.write_divide_by_zero_check(line)
+    # The same crash as dividing, and x % -1 is always 0
+    out.cmp_rcx_minus_one()
+    out.jump_if_not_equal(normal)
+    out.zero_eax()
+    out.jump(finished)
+    out.place(normal)
+    out.cqo()
+    out.idiv_rcx()
+    out.mov_rax_rdx()
+    out.place(finished)
+end

@@ -1,0 +1,34 @@
+func main()
+    var items: [int] = []
+    for i in 0..100000
+        items.add(i)
+    end
+    print(len(items))
+    print(items[99999])
+    var sum = 0
+    for item in items
+        sum += item
+    end
+    print(sum)
+    while len(items) > 10
+        items.pop()
+    end
+    print(items)
+    var words: [string] = []
+    for i in 0..4000
+        words.add(string(i))
+    end
+    print(words[3999])
+    print(len(string(words)))
+    var rows: [[float]] = []
+    for i in 0..500
+        rows.add([float(i)])
+        rows[i].add(0.5)
+    end
+    print(rows[499])
+    var kept = items
+    for i in 0..10000
+        kept.add(i)
+    end
+    print(len(items))
+end

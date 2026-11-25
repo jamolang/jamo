@@ -1,0 +1,3 @@
+generic_wrong_shape.jamo line 6: The input items must be a [T], but this is an int.
+        print(first(5))
+                    ^

@@ -1,0 +1,32 @@
+# Counts the lines, words and bytes in a file. jamo run word_counter.jamo notes.txt
+# With no file named, it asks for one.
+
+func main()
+    var inputs = args()
+    var path = ""
+    if len(inputs) > 0
+        path = inputs[0]
+    else
+        print("Which file?")
+        path = input()
+    end
+    var text = read_file(path)
+    var lines = 0
+    var words = 0
+    var in_word = false
+    for i in 0..len(text)
+        var letter = text[i]
+        if letter == "\n"
+            lines += 1
+        end
+        if letter == " " or letter == "\n" or letter == "\t" or letter == "\r"
+            in_word = false
+        elif not in_word
+            in_word = true
+            words += 1
+        end
+    end
+    print(f"Lines: {lines}")
+    print(f"Words: {words}")
+    print(f"Bytes: {len(text)}")
+end

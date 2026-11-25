@@ -1,0 +1,3 @@
+for_variable_gone_after.jamo line 5: nothing has this name: count
+        print(count)
+              ^^^^^

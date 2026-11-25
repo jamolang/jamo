@@ -1,0 +1,4 @@
+struct_field_needs_type.jamo line 2: A field needs a type.
+        health
+              ^
+Like this: health: int

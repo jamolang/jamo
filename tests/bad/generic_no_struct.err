@@ -1,0 +1,7 @@
+generic_no_struct.jamo line 2: There's no generic struct called Bax.
+        var b: Bax<int> = []
+            ^
+generic_no_struct.jamo line 2: An empty [ ] needs a type.
+        var b: Bax<int> = []
+                          ^^
+Like this: var items: [int] = []

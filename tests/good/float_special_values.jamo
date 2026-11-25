@@ -1,0 +1,17 @@
+func main()
+    var zero = 0.0
+    var infinity = 1.0 / zero
+    var nothing_at_all = zero / zero
+    print(infinity)
+    print(-infinity)
+    print(nothing_at_all)
+    print(f"{infinity} {nothing_at_all}")
+    print(nothing_at_all == nothing_at_all)
+    print(nothing_at_all != nothing_at_all)
+    print(nothing_at_all < 1.0)
+    print(nothing_at_all > 1.0)
+    print(nothing_at_all <= 1.0)
+    print(nothing_at_all >= 1.0)
+    print(infinity > 1.0)
+    print(0.0 == -0.0)
+end

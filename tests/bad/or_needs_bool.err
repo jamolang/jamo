@@ -1,0 +1,3 @@
+or_needs_bool.jamo line 2: or needs a bool, but this is a string.
+        print(true or "a")
+                      ^^^

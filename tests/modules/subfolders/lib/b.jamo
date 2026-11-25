@@ -1,0 +1,3 @@
+func b(): int
+    return 10
+end

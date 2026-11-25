@@ -1,0 +1,11 @@
+struct Box<T>
+    item: T
+end
+
+func Box.get(): int
+    return 1
+end
+
+func main()
+    print(2)
+end

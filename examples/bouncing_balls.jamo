@@ -1,0 +1,100 @@
+# Bouncing Balls: balls bounce around the window, and each bounce makes a sound that matches the
+# ball's size. Click to add a ball, press C to clear them all.
+
+use "gfx.jamo"
+use "sound.jamo"
+use "math.jamo"
+
+struct Ball
+    x: float
+    y: float
+    dx: float
+    dy: float
+    radius: float
+    color: Color
+    beep: Clip
+end
+
+func bright_color(): Color
+    var colors = [rgb(255, 99, 72), rgb(255, 196, 61), rgb(90, 200, 120), rgb(72, 160, 255), rgb(190, 110, 255), rgb(255, 120, 190)]
+    return colors[random_int(0, len(colors) - 1)]
+end
+
+# Bigger balls get lower notes
+func new_ball(x: float, y: float, notes: [Clip]): Ball
+    var size = random_int(0, len(notes) - 1)
+    var radius = 12.0 + float(size) * 6.0
+    var speed = 180.0 + random_float() * 220.0
+    var angle = random_float() * 2.0 * pi()
+    return Ball{x: x, y: y, dx: cos(angle) * speed, dy: sin(angle) * speed, radius: radius, color: bright_color(), beep: notes[size]}
+end
+
+# Keeps a ball inside the window, and plays its note when it hits a wall hard enough
+func bounce(ball: Ball, width: float, height: float, speakers: Sound)
+    var hit = 0.0
+    if ball.x < ball.radius
+        ball.x = ball.radius
+        hit = abs(ball.dx)
+        ball.dx = abs(ball.dx)
+    elif ball.x > width - ball.radius
+        ball.x = width - ball.radius
+        hit = abs(ball.dx)
+        ball.dx = 0.0 - abs(ball.dx)
+    end
+    if ball.y < ball.radius
+        ball.y = ball.radius
+        hit = max(hit, abs(ball.dy))
+        ball.dy = abs(ball.dy)
+    elif ball.y > height - ball.radius
+        ball.y = height - ball.radius
+        hit = max(hit, abs(ball.dy))
+        ball.dy = 0.0 - abs(ball.dy)
+    end
+    if hit > 80.0
+        var voice = speakers.play(ball.beep)
+        voice.set_volume(clamp(hit / 1200.0, 0.05, 0.6))
+    end
+end
+
+func main()
+    var window = open_window("Bouncing Balls", 800, 520)
+    var screen = start_gfx(window)
+    var speakers = start_sound()
+    var notes = [tone(880.0, 0.12, "sine"), tone(698.0, 0.12, "sine"), tone(587.0, 0.12, "sine"), tone(440.0, 0.14, "sine"), tone(349.0, 0.16, "sine"), tone(262.0, 0.18, "sine")]
+    var balls: [Ball] = []
+    for i in 0..8
+        balls.add(new_ball(400.0, 200.0, notes))
+    end
+    var gravity = 700.0
+    while window.is_open()
+        var step = min(window.frame_time(), 0.05)
+        var width = float(window.width())
+        var height = float(window.height())
+        if window.mouse_pressed("left")
+            balls.add(new_ball(float(window.mouse_x()), float(window.mouse_y()), notes))
+        end
+        if window.key_pressed("c")
+            balls = []
+        end
+        for ball in balls
+            ball.dy += gravity * step
+            ball.x += ball.dx * step
+            ball.y += ball.dy * step
+            bounce(ball, width, height, speakers)
+        end
+        speakers.update()
+
+        screen.clear(rgb(18, 22, 34))
+        screen.rect(0.0, height - 4.0, width, 4.0, rgb(52, 60, 84))
+        for ball in balls
+            screen.circle(ball.x + 4.0, ball.y + 6.0, ball.radius, rgba(0, 0, 0, 90))
+            screen.circle(ball.x, ball.y, ball.radius, ball.color)
+            screen.circle(ball.x - ball.radius * 0.35, ball.y - ball.radius * 0.35, ball.radius * 0.3, rgba(255, 255, 255, 110))
+        end
+        screen.text(f"{len(balls)} balls", 16.0, 14.0, 20.0, rgb(235, 238, 245))
+        screen.text("Click to add a ball, C to clear", 16.0, 40.0, 16.0, rgb(160, 168, 190))
+        screen.show()
+        window.wait_frame(60)
+    end
+    speakers.close()
+end

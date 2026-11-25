@@ -1,0 +1,11 @@
+struct Enemy
+    health: int
+end
+
+func Enemy.hit(damage: int)
+end
+
+func main()
+    var e = Enemy{health: 1}
+    e.hit("a")
+end

@@ -1,0 +1,4 @@
+global_empty_array.jamo line 1: An empty [ ] needs a type.
+    var a = []
+            ^^
+Like this: var items: [int] = []

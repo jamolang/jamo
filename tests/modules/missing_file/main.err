@@ -1,0 +1,4 @@
+main.jamo line 1: I can't find a file called nope.jamo.
+    use "nope.jamo"
+        ^^^^^^^^^^^
+It looks in the same folder as the file using it.

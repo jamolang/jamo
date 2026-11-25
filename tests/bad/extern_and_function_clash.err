@@ -1,0 +1,4 @@
+gfx.jamo (built in) line 31: sqrt is used in both extern_and_function_clash.jamo and gfx.jamo (built in).
+    extern "msvcrt.dll" func sqrt(value: float): float
+                             ^^^^
+Each name can only be used once in a program, so rename one of them.

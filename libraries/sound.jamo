@@ -1,0 +1,552 @@
+# sound: plays WAV files and made-up tones through the speakers, many at once. use "sound.jamo"
+#
+# Sound goes out through waveOut, 44100 frames a second in 16-bit stereo, as six short buffers that
+# take turns: while the speakers play some, update() mixes the next ones. Windows reads those buffers
+# and writes their headers whenever it likes, so they live in memory from VirtualAlloc, which the
+# memory cleaner never sees, and only close() gives it back. The block: six 48-byte headers, then at
+# 512 the six buffers of 2048 bytes each.
+# A clip keeps its frames as 16-bit stereo with 32768 added, so each sample reads back with peek_u16.
+
+extern "winmm.dll" func waveOutGetNumDevs(): i32
+extern "winmm.dll" func waveOutOpen(handle: int, device: i32, format: int, callback: int, instance: int, flags: i32): i32
+extern "winmm.dll" func waveOutPrepareHeader(handle: int, header: int, size: i32): i32
+extern "winmm.dll" func waveOutUnprepareHeader(handle: int, header: int, size: i32): i32
+extern "winmm.dll" func waveOutWrite(handle: int, header: int, size: i32): i32
+extern "winmm.dll" func waveOutReset(handle: int): i32
+extern "winmm.dll" func waveOutClose(handle: int): i32
+extern "winmm.dll" func waveOutSetVolume(handle: int, volume: i32): i32
+extern "winmm.dll" func waveOutGetPosition(handle: int, time: int, size: i32): i32
+extern "kernel32.dll" func VirtualAlloc(place: int, size: int, kind: i32, protect: i32): int
+extern "kernel32.dll" func VirtualFree(place: int, size: int, kind: i32): bool
+
+struct Clip
+    samples: int
+    frames: int
+end
+
+struct Voice
+    clip: Clip
+    place: int
+    volume: float
+    looping: bool
+    playing: bool
+end
+
+struct Sound
+    device: int
+    block: int
+    next: int
+    mix: int
+    voices: [Voice]
+    volume: float
+    gaps: int
+    started: bool
+    silent: bool
+    open: bool
+    closed_by_program: bool
+end
+
+# --- Starting and stopping ---
+
+# Opens the PC's default speakers
+func start_sound(): Sound
+    return start_sound_device(-1)
+end
+
+# Opens one sound device by number, from 0. A PC without it runs on in silence, with a note saying so
+func start_sound_device(number: int): Sound
+    var s = Sound{device: 0, block: 0, next: 0, mix: memory(8192), voices: [], volume: 1.0, gaps: 0, started: false, silent: false, open: true, closed_by_program: false}
+    if waveOutGetNumDevs() == 0
+        print("Note: this PC has no sound device, so the program runs without sound.")
+        return s
+    end
+    var format = memory(24)
+    poke_u16(format, 0, 1)
+    poke_u16(format, 2, 2)
+    poke_i32(format, 4, 44100)
+    poke_i32(format, 8, 176400)
+    poke_u16(format, 12, 4)
+    poke_u16(format, 14, 16)
+    var handle = memory(8)
+    var result = waveOutOpen(handle, number, format, 0, 0, 0)
+    if result != 0
+        if number == -1
+            print("Note: the speakers couldn't be opened, so the program runs without sound.")
+        else
+            print(f"Note: there's no sound device {number} to use, so the program runs without sound.")
+        end
+        return s
+    end
+    s.device = peek_i64(handle, 0)
+    s.block = VirtualAlloc(0, 512 + 6 * 2048, 12288, 4)
+    if s.block == 0
+        waveOutClose(s.device)
+        fail("There isn't enough memory to play sound.")
+    end
+    for i in 0..6
+        var header = s.block + i * 48
+        poke_i64(header, 0, s.block + 512 + i * 2048)
+        poke_i32(header, 8, 2048)
+        waveOutPrepareHeader(s.device, header, 48)
+        waveOutWrite(s.device, header, 48)
+    end
+    return s
+end
+
+# Keeps tests silent: the speakers still play, at no volume. If Windows can't turn the volume down,
+# only silence goes out
+func Sound.quiet()
+    self.must_be_open()
+    if self.device != 0 and waveOutSetVolume(self.device, 0) != 0
+        self.silent = true
+    end
+end
+
+func Sound.must_be_open()
+    if not self.open
+        fail("This sound player is closed, so it can't be used.")
+    end
+end
+
+# True when sound really reaches a device
+func Sound.has_device(): bool
+    self.must_be_open()
+    return self.device != 0
+end
+
+# Stops every sound and lets the speakers go
+func Sound.close()
+    if self.closed_by_program
+        fail("This sound player is already closed.")
+    end
+    self.closed_by_program = true
+    self.open = false
+    self.voices = []
+    if self.device != 0
+        waveOutReset(self.device)
+        for i in 0..6
+            waveOutUnprepareHeader(self.device, self.block + i * 48, 48)
+        end
+        waveOutClose(self.device)
+        VirtualFree(self.block, 0, 32768)
+        self.device = 0
+        self.block = 0
+    end
+end
+
+# --- Playing ---
+
+func Sound.play(clip: Clip): Voice
+    return self.start_voice(clip, false)
+end
+
+# Plays a clip over and over until it's stopped
+func Sound.play_loop(clip: Clip): Voice
+    return self.start_voice(clip, true)
+end
+
+func Sound.start_voice(clip: Clip, looping: bool): Voice
+    self.must_be_open()
+    var voice = Voice{clip: clip, place: 0, volume: 1.0, looping: looping, playing: self.device != 0 and clip.frames > 0}
+    if voice.playing
+        if len(self.voices) == 64
+            self.voices[0].playing = false
+            for i in 1..64
+                self.voices[i - 1] = self.voices[i]
+            end
+            self.voices.pop()
+        end
+        self.voices.add(voice)
+    end
+    return voice
+end
+
+# Sets the volume of everything, from 0.0 to 1.0. Above 1.0 makes it louder, up to 4.0
+func Sound.set_volume(volume: float)
+    self.must_be_open()
+    self.volume = sound_volume(volume)
+end
+
+func Sound.stop_all()
+    self.must_be_open()
+    for voice in self.voices
+        voice.playing = false
+    end
+    self.voices = []
+end
+
+# How many sounds are playing now
+func Sound.playing(): int
+    self.must_be_open()
+    var count = 0
+    for voice in self.voices
+        if voice.playing
+            count = count + 1
+        end
+    end
+    return count
+end
+
+# How many times the speakers ran out of sound, because update() wasn't called often enough
+func Sound.gaps(): int
+    self.must_be_open()
+    return self.gaps
+end
+
+# How many frames the speakers have played since the start
+func Sound.played(): int
+    self.must_be_open()
+    if self.device == 0
+        return 0
+    end
+    var time = memory(16)
+    poke_i32(time, 0, 2)
+    waveOutGetPosition(self.device, time, 12)
+    return peek_i32(time, 4)
+end
+
+func Voice.stop()
+    self.playing = false
+end
+
+func Voice.is_playing(): bool
+    return self.playing
+end
+
+func Voice.set_volume(volume: float)
+    self.volume = sound_volume(volume)
+end
+
+func sound_volume(volume: float): float
+    if volume < 0.0 or volume > 4.0 or volume != volume
+        fail(f"A volume goes from 0.0 to 4.0, not {volume}.")
+    end
+    return volume
+end
+
+# --- Mixing ---
+
+# Mixes the next sound for the speakers. Call it once a frame
+func Sound.update()
+    self.must_be_open()
+    if self.device == 0
+        return
+    end
+    var done = 0
+    while done < 6
+        var header = self.block + self.next * 48
+        var flags = peek_i32(header, 24)
+        if flags % 2 == 0
+            break
+        end
+        self.fill(self.block + 512 + self.next * 2048)
+        poke_i32(header, 24, flags - 1)
+        waveOutWrite(self.device, header, 48)
+        self.next = (self.next + 1) % 6
+        done = done + 1
+    end
+    if done == 6 and self.started
+        self.gaps = self.gaps + 1
+    end
+    self.started = true
+    var kept: [Voice] = []
+    for voice in self.voices
+        if voice.playing
+            kept.add(voice)
+        end
+    end
+    if len(kept) != len(self.voices)
+        self.voices = kept
+    end
+end
+
+# Mixes 512 frames into one buffer
+func Sound.fill(data: int)
+    var mix = self.mix
+    for i in 0..1024
+        poke_i64(mix, i * 8, 0)
+    end
+    for voice in self.voices
+        if voice.playing
+            var level = int(voice.volume * self.volume * 32768.0)
+            var samples = voice.clip.samples
+            var frames = voice.clip.frames
+            var at = 0
+            while at < 512 and voice.playing
+                var count = frames - voice.place
+                if count > 512 - at
+                    count = 512 - at
+                end
+                var from = voice.place * 4
+                var to = at * 16
+                for f in 0..count
+                    poke_i64(mix, to, peek_i64(mix, to) + (peek_u16(samples, from) - 32768) * level)
+                    poke_i64(mix, to + 8, peek_i64(mix, to + 8) + (peek_u16(samples, from + 2) - 32768) * level)
+                    from = from + 4
+                    to = to + 16
+                end
+                at = at + count
+                voice.place = voice.place + count
+                if voice.place == frames
+                    if voice.looping
+                        voice.place = 0
+                    else
+                        voice.playing = false
+                    end
+                end
+            end
+        end
+    end
+    for i in 0..1024
+        var value = peek_i64(mix, i * 8) / 32768
+        if value > 32767
+            value = 32767
+        elif value < -32768
+            value = -32768
+        end
+        if self.silent
+            value = 0
+        end
+        poke_u16(data, i * 2, (value + 65536) % 65536)
+    end
+end
+
+# --- Clips ---
+
+# How long a clip lasts, in seconds
+func Clip.seconds(): float
+    return float(self.frames) / 44100.0
+end
+
+# Makes a tone: "sine", "square", "saw", "triangle" or "noise", fading in and out over 5 ms
+func tone(frequency: float, seconds: float, wave: string): Clip
+    if not (frequency > 0.0 and frequency <= 20000.0)
+        fail(f"A tone's frequency goes from above 0.0 to 20000.0, not {frequency}.")
+    end
+    if not (seconds >= 0.0 and seconds <= 600.0)
+        fail(f"A tone lasts from 0.0 to 600.0 seconds, not {seconds}.")
+    end
+    var kind = 0
+    if wave == "sine"
+        kind = 0
+    elif wave == "square"
+        kind = 1
+    elif wave == "saw"
+        kind = 2
+    elif wave == "triangle"
+        kind = 3
+    elif wave == "noise"
+        kind = 4
+    else
+        fail(f"sound doesn't know the wave {wave}. Use sine, square, saw, triangle or noise.")
+    end
+    var frames = int(seconds * 44100.0 + 0.5)
+    var samples = memory(frames * 4 + 4)
+    var step = frequency / 44100.0
+    var phase = 0.0
+    var seed = 12345
+    var fade = 220
+    for f in 0..frames
+        var value = 0.0
+        if kind == 0
+            value = sound_sine(phase)
+        elif kind == 1
+            if phase < 0.5
+                value = 1.0
+            else
+                value = -1.0
+            end
+        elif kind == 2
+            value = 2.0 * phase - 1.0
+        elif kind == 3
+            if phase < 0.5
+                value = 4.0 * phase - 1.0
+            else
+                value = 3.0 - 4.0 * phase
+            end
+        else
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            value = float(seed) / 1073741824.0 - 1.0
+        end
+        if f < fade
+            value = value * float(f) / float(fade)
+        end
+        if frames - 1 - f < fade
+            value = value * float(frames - 1 - f) / float(fade)
+        end
+        var sample = int(value * 16384.0) + 32768
+        poke_u16(samples, f * 4, sample)
+        poke_u16(samples, f * 4 + 2, sample)
+        phase = phase + step
+        if phase >= 1.0
+            phase = phase - 1.0
+        end
+    end
+    return Clip{samples: samples, frames: frames}
+end
+
+# The sine of a whole turn times x, for x from 0.0 to 1.0
+func sound_sine(x: float): float
+    var sign = 1.0
+    var t = x
+    if t >= 0.5
+        t = t - 0.5
+        sign = -1.0
+    end
+    if t > 0.25
+        t = 0.5 - t
+    end
+    var a = t * 6.283185307179586
+    var a2 = a * a
+    return sign * a * (1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0 * (1.0 - a2 / 72.0 * (1.0 - a2 / 110.0)))))
+end
+
+# --- WAV files ---
+
+func sound_damaged(path: string, why: string)
+    fail(f"{path} is damaged or not a WAV file: {why}.")
+end
+
+func sound_number(data: string, place: int, size: int): int
+    var value = 0
+    for i in 0..size
+        value = value + byte(data, place + i) * sound_power(i)
+    end
+    return value
+end
+
+func sound_power(i: int): int
+    if i == 0
+        return 1
+    elif i == 1
+        return 256
+    elif i == 2
+        return 65536
+    end
+    return 16777216
+end
+
+# Reads a WAV file: 8, 16, 24 or 32-bit, or 32-bit float, in mono or stereo, at any rate
+func load_sound(path: string): Clip
+    var data = read_file(path)
+    if len(data) < 12 or sound_number(data, 0, 4) != 1179011410 or sound_number(data, 8, 4) != 1163280727
+        sound_damaged(path, "it doesn't start like one")
+    end
+    var place = 12
+    var kind = -1
+    var channels = 0
+    var rate = 0
+    var bits = 0
+    var start = -1
+    var size = 0
+    while place + 8 <= len(data) and start < 0
+        var name = sound_number(data, place, 4)
+        var length = sound_number(data, place + 4, 4)
+        var body = place + 8
+        if name == 544501094
+            if length < 16 or body + 16 > len(data)
+                sound_damaged(path, "its format part is too short")
+            end
+            kind = sound_number(data, body, 2)
+            channels = sound_number(data, body + 2, 2)
+            rate = sound_number(data, body + 4, 4)
+            bits = sound_number(data, body + 14, 2)
+            if kind == 65534
+                if length < 26 or body + 26 > len(data)
+                    sound_damaged(path, "its format part is too short")
+                end
+                kind = sound_number(data, body + 24, 2)
+            end
+        elif name == 1635017060
+            if kind < 0
+                sound_damaged(path, "its sound comes before its format")
+            end
+            start = body
+            size = length
+            if size > len(data) - body
+                size = len(data) - body
+            end
+        end
+        place = body + length + length % 2
+    end
+    if kind < 0
+        sound_damaged(path, "it has no format part")
+    end
+    if start < 0
+        sound_damaged(path, "it has no sound part")
+    end
+    if channels != 1 and channels != 2
+        fail(f"{path} has {channels} channels, but sound only plays mono and stereo WAV files.")
+    end
+    if rate < 1000 or rate > 384000
+        sound_damaged(path, f"its rate of {rate} frames a second isn't usable")
+    end
+    var supported = (kind == 1 and (bits == 8 or bits == 16 or bits == 24 or bits == 32)) or (kind == 3 and bits == 32)
+    if not supported
+        fail(f"{path} is a kind of WAV sound can't read yet (format {kind}, {bits} bits). Use 8, 16, 24 or 32-bit, or 32-bit float.")
+    end
+    var width = bits / 8
+    var in_frames = size / (width * channels)
+    var raw = memory(in_frames * width * channels + 8)
+    for i in 0..in_frames * width * channels
+        poke_u8(raw, i, byte(data, start + i))
+    end
+    var left = memory(in_frames * 4 + 8)
+    var right = memory(in_frames * 4 + 8)
+    for f in 0..in_frames
+        var at = f * width * channels
+        poke_i32(left, f * 4, sound_sample(raw, at, kind, bits))
+        if channels == 2
+            poke_i32(right, f * 4, sound_sample(raw, at + width, kind, bits))
+        else
+            poke_i32(right, f * 4, peek_i32(left, f * 4))
+        end
+    end
+    if rate == 44100
+        var samples = memory(in_frames * 4 + 4)
+        for f in 0..in_frames
+            poke_u16(samples, f * 4, peek_i32(left, f * 4) + 32768)
+            poke_u16(samples, f * 4 + 2, peek_i32(right, f * 4) + 32768)
+        end
+        return Clip{samples: samples, frames: in_frames}
+    end
+    var frames = in_frames * 44100 / rate
+    var samples = memory(frames * 4 + 4)
+    for f in 0..frames
+        var spot = f * rate
+        var first = spot / 44100
+        var part = spot % 44100
+        var second = first + 1
+        if second >= in_frames
+            second = in_frames - 1
+        end
+        var l = (peek_i32(left, first * 4) * (44100 - part) + peek_i32(left, second * 4) * part) / 44100
+        var r = (peek_i32(right, first * 4) * (44100 - part) + peek_i32(right, second * 4) * part) / 44100
+        poke_u16(samples, f * 4, l + 32768)
+        poke_u16(samples, f * 4 + 2, r + 32768)
+    end
+    return Clip{samples: samples, frames: frames}
+end
+
+# One sample as a 16-bit number
+func sound_sample(raw: int, at: int, kind: int, bits: int): int
+    if kind == 3
+        var value = peek_f32(raw, at)
+        if not (value >= -1.0)
+            return -32768
+        elif value > 1.0
+            return 32767
+        end
+        var whole = int(value * 32767.0)
+        return whole
+    end
+    if bits == 8
+        return (peek_u8(raw, at) - 128) * 256
+    end
+    # The top 16 bits of the sample
+    var top = peek_u16(raw, at + bits / 8 - 2)
+    if top > 32767
+        top = top - 65536
+    end
+    return top
+end

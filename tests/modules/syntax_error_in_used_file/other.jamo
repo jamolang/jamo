@@ -1,0 +1,3 @@
+func broken()
+    var = 1
+end

@@ -1,0 +1,16 @@
+enum Mood
+    CALM
+    ANGRY
+end
+
+func f(m: Mood): int
+    match m
+        case Mood.CALM
+            return 1
+        case Mood.ANGRY
+            print(2)
+    end
+end
+
+func main()
+end

@@ -1,0 +1,93 @@
+# Variables outside functions: set up in order before main, shared by every function, and kept by the
+# memory cleaner. The last one matters most there: it sits next to where the cleaner starts looking
+use "map.jamo"
+
+enum Mode
+    EASY
+    HARD
+end
+
+struct Player
+    name: string
+    lives: int
+end
+
+var score = 0
+var speed = 1.5
+var mode = Mode.EASY
+var title = "Space " + "Race"
+var names: [string] = []
+var best = double(21)
+var counts = new_map<string, int>()
+var hero = Player{name: "Sam", lives: 3}
+var history = [hero, Player{name: "Ava", lives: 1}]
+var last = "the " + "end"
+
+func double(n: int): int
+    return n * 2
+end
+
+func add_point()
+    score += 1
+end
+
+func points(): int
+    return score
+end
+
+func remember(name: string)
+    names.add(name)
+    counts.set(name, counts.get_or(name, 0) + 1)
+end
+
+func bump(): int
+    score += 100
+    return 5
+end
+
+func main()
+    print(score)
+    add_point()
+    add_point()
+    print(points())
+    remember("a")
+    remember("b")
+    remember("a")
+    print(names)
+    print(counts.get("a"))
+    print(title)
+    print(best)
+    hero.lives -= 1
+    print(history[0])
+    speed *= 2.0
+    speed += 0.25
+    print(speed)
+    mode = Mode.HARD
+    print(mode)
+    # A local hides the outside one until its block ends
+    var score = 99
+    print(score)
+    print(points())
+    title = title + "!"
+    print(title)
+    # Lots of short-lived values, so the cleaner runs many times while the outside ones must stay
+    for i in 0..20000
+        var junk = [string(i), "x"]
+        var more = Player{name: junk[0], lives: i}
+        if more.lives % 5000 == 0
+            add_point()
+        end
+    end
+    print(points())
+    print(last)
+    print(history)
+    print(names)
+    # The outside score is read before bump changes it, like any variable
+    change()
+    print(points())
+end
+
+func change()
+    score = 10
+    score += bump()
+end

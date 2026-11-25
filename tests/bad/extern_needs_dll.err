@@ -1,0 +1,4 @@
+extern_needs_dll.jamo line 1: extern needs the DLL's name in quotes.
+    extern func Beep()
+           ^^^^
+Like this: extern "user32.dll" func MessageBeep(kind: i32): i32

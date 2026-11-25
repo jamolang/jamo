@@ -1,0 +1,3 @@
+remainder_by_literal_zero.jamo line 2: This divides by zero, which has no answer.
+        print(5 % 0)
+                  ^

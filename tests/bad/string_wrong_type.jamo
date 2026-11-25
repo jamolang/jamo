@@ -1,0 +1,4 @@
+func main()
+    var word: string = 1
+    print(word)
+end

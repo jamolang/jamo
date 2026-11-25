@@ -1,0 +1,3 @@
+string_compare_int.jamo line 2: == and != need both sides to be the same type, but this compares string and int.
+        print("1" == 1)
+              ^^^^^^^^

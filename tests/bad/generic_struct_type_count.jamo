@@ -1,0 +1,7 @@
+struct Box<T>
+    item: T
+end
+
+func main()
+    var b = Box<int, int>{item: 1}
+end

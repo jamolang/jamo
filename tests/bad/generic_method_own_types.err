@@ -1,0 +1,4 @@
+generic_method_own_types.jamo line 5: A method can't have types of its own.
+    func Box<T>.get<U>(): T
+                   ^
+Give its struct the types instead, like func Box<T>.get(): T

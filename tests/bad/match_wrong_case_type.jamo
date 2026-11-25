@@ -1,0 +1,6 @@
+func main()
+    match 1
+        case "a"
+            print(1)
+    end
+end

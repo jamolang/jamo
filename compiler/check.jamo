@@ -1,0 +1,34 @@
+# Loads a program and every file it uses, checks it, and prints the checked tree, the errors and the
+# warnings, the same way as 'jamo checked', so the two checkers can be compared.
+# jamo run check.jamo some_file.jamo writes check.out
+
+use "modules.jamo"
+use "checker.jamo"
+use "printer.jamo"
+
+func main()
+    var errors = new_errors()
+    var program = new_program()
+    var path = args()[0]
+    if not load_program(path, errors, program)
+        fail("I can't read a file called " + path + ".")
+    end
+    var loaded = not errors.any()
+    if loaded
+        check_program(program, errors)
+    end
+    var out = new_builder()
+    out.line("loaded " + flag(loaded))
+    for name in program.file_names
+        out.line("file " + name)
+    end
+    if loaded
+        var printer = TreePrinter{program: program, out: out, checked: true}
+        printer.print_all()
+    end
+    out.line("errors")
+    out.add(errors.text())
+    out.line("warnings")
+    out.add(errors.warnings_text())
+    write_file("check.out", out.text())
+end

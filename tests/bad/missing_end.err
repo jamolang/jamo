@@ -1,0 +1,4 @@
+missing_end.jamo line 1: This func never gets its end.
+    func main()
+    ^^^^
+Add a line with end to finish it.

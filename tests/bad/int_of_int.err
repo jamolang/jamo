@@ -1,0 +1,3 @@
+int_of_int.jamo line 2: This is already an int, so it doesn't need int( ).
+        print(int(5))
+                  ^

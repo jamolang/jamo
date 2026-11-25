@@ -1,0 +1,66 @@
+func yes(): bool
+    print("yes ran")
+    return true
+end
+
+func no(): bool
+    print("no ran")
+    return false
+end
+
+func grade(score: int): string
+    if score >= 90
+        return "A"
+    elif score >= 80
+        return "B"
+    elif score >= 70
+        return "C"
+    else
+        return "F"
+    end
+end
+
+func main()
+    print(true and true)
+    print(true and false)
+    print(false or true)
+    print(false or false)
+    print(not true)
+    print(not false)
+    print(not not true)
+    print(1 < 2 and 2 < 3)
+    print(not 1 == 2)
+    print(true or false and false)
+    print((true or false) and false)
+    print(no() and yes())
+    print(yes() or no())
+    print(yes() and no())
+    print(no() or yes())
+    print(grade(95))
+    print(grade(85))
+    print(grade(75))
+    print(grade(10))
+    var x = 3
+    if x == 1
+        print("one")
+    elif x == 3
+        print("three")
+    elif x == 3
+        print("second three")
+    end
+    if x == 1
+        print("one")
+    elif x == 2
+        print("two")
+    end
+    if x == 1
+        print("one")
+    elif x == 2
+        print("two")
+    else
+        print("other")
+    end
+    print(f"{x > 1 and x < 5}")
+    var divisor = 0
+    print(divisor != 0 and 10 / divisor > 1)
+end

@@ -1,0 +1,4 @@
+unknown_name.jamo line 3: nothing has this name: scor
+        var total = scor + 1
+                    ^^^^
+Did you mean score?

@@ -1,0 +1,3 @@
+case_outside_match.jamo line 2: A case can only go inside a match.
+        case 1
+        ^^^^

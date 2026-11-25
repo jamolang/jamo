@@ -1,0 +1,3 @@
+array_mixed_items.jamo line 2: All the items in an array share one type, but this is a string and the first is an int.
+        print([1, "a"])
+                  ^^^

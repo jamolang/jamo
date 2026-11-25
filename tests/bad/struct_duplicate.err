@@ -1,0 +1,4 @@
+struct_duplicate.jamo line 5: There's already a struct called Enemy, on line 1.
+    struct Enemy
+           ^^^^^
+Give this one a different name.

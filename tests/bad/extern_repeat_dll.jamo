@@ -1,0 +1,5 @@
+extern "kernel32.dll" func Beep(pitch: i32, length: i32): bool
+extern "user32.dll" func Beep(pitch: i32, length: i32): bool
+
+func main()
+end

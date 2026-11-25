@@ -1,0 +1,4 @@
+enum_unknown_member.jamo line 7: Mood has no member called CLAM.
+        print(Mood.CLAM)
+              ^^^^^^^^^
+Did you mean CALM?

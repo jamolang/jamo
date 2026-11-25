@@ -1,0 +1,571 @@
+# Lexer: splits Jamo source text into tokens, the words and symbols of the language. The same as
+# src/lexer.cpp, and checked against it token by token.
+
+use "text.jamo"
+use "bytes.jamo"
+
+# Token kinds, numbered the same as TokenKind in src/lexer.hpp
+const TK_END = 0
+const TK_NEWLINE = 1
+const TK_NAME = 2
+const TK_NUMBER = 3
+const TK_FLOAT = 4
+const TK_STRING = 5
+const TK_FSTRING_START = 6
+const TK_FSTRING_TEXT = 7
+const TK_FSTRING_END = 8
+const TK_FUNC = 9
+const TK_EXTERN = 10
+const TK_USE = 11
+const TK_STRUCT = 12
+const TK_ENUM = 13
+const TK_CONST = 14
+const TK_MATCH = 15
+const TK_CASE = 16
+const TK_END_WORD = 17
+const TK_VAR = 18
+const TK_IF = 19
+const TK_ELIF = 20
+const TK_ELSE = 21
+const TK_WHILE = 22
+const TK_FOR = 23
+const TK_IN = 24
+const TK_BREAK = 25
+const TK_CONTINUE = 26
+const TK_AND = 27
+const TK_OR = 28
+const TK_NOT = 29
+const TK_RETURN = 30
+const TK_TRUE = 31
+const TK_FALSE = 32
+const TK_PRINT = 33
+const TK_INT = 34
+const TK_FLOAT_WORD = 35
+const TK_BOOL = 36
+const TK_STRING_WORD = 37
+const TK_LEN = 38
+const TK_LEFT_PAREN = 39
+const TK_RIGHT_PAREN = 40
+const TK_LEFT_BRACKET = 41
+const TK_RIGHT_BRACKET = 42
+const TK_LEFT_BRACE = 43
+const TK_RIGHT_BRACE = 44
+const TK_COLON = 45
+const TK_COMMA = 46
+const TK_ASSIGN = 47
+const TK_DOT = 48
+const TK_DOT_DOT = 49
+const TK_PLUS_ASSIGN = 50
+const TK_MINUS_ASSIGN = 51
+const TK_STAR_ASSIGN = 52
+const TK_SLASH_ASSIGN = 53
+const TK_PLUS = 54
+const TK_MINUS = 55
+const TK_STAR = 56
+const TK_SLASH = 57
+const TK_PERCENT = 58
+const TK_EQUAL = 59
+const TK_NOT_EQUAL = 60
+const TK_LESS = 61
+const TK_GREATER = 62
+const TK_LESS_EQUAL = 63
+const TK_GREATER_EQUAL = 64
+
+const MOST_ERRORS = 20
+const TEXT_CLOSED = 0
+const TEXT_BRACE = 1
+const TEXT_UNCLOSED = 2
+
+struct Token
+    kind: int
+    text: string
+    value: string
+    real: float
+    number: int
+    line: int
+    column: int
+    length: int
+end
+
+struct LexError
+    line: int
+    column: int
+    length: int
+    words: string
+    hint: string
+end
+
+struct Lexer
+    source: string
+    size: int
+    at: int
+    line: int
+    line_start: int
+    tokens: [Token]
+    errors: [LexError]
+    fstring_braces: [int]
+    open_brackets: int
+end
+
+# --- Kinds of letters and words ---
+
+func is_letter(letter: int): bool
+    return (letter >= 97 and letter <= 122) or (letter >= 65 and letter <= 90) or letter == 95
+end
+
+func is_digit(letter: int): bool
+    return letter >= 48 and letter <= 57
+end
+
+# These can't be inside brackets, so one starting a line means a closing bracket was forgotten
+func starts_a_statement(kind: int): bool
+    return kind == TK_FUNC or kind == TK_STRUCT or kind == TK_ENUM or kind == TK_USE or kind == TK_END_WORD or kind == TK_VAR or kind == TK_IF or kind == TK_ELIF or kind == TK_ELSE or kind == TK_WHILE or kind == TK_FOR or kind == TK_MATCH or kind == TK_CASE or kind == TK_BREAK or kind == TK_CONTINUE or kind == TK_RETURN or kind == TK_PRINT
+end
+
+# A line that ends with one of these carries on to the next line
+func leaves_line_open(kind: int): bool
+    return kind == TK_COMMA or kind == TK_ASSIGN or kind == TK_DOT_DOT or (kind >= TK_PLUS_ASSIGN and kind <= TK_GREATER_EQUAL) or kind == TK_AND or kind == TK_OR or kind == TK_NOT
+end
+
+func kind_of_word(word: string): int
+    match word
+        case "func"
+            return TK_FUNC
+        case "use"
+            return TK_USE
+        case "extern"
+            return TK_EXTERN
+        case "struct"
+            return TK_STRUCT
+        case "enum"
+            return TK_ENUM
+        case "const"
+            return TK_CONST
+        case "match"
+            return TK_MATCH
+        case "case"
+            return TK_CASE
+        case "end"
+            return TK_END_WORD
+        case "var"
+            return TK_VAR
+        case "if"
+            return TK_IF
+        case "elif"
+            return TK_ELIF
+        case "else"
+            return TK_ELSE
+        case "and"
+            return TK_AND
+        case "or"
+            return TK_OR
+        case "not"
+            return TK_NOT
+        case "while"
+            return TK_WHILE
+        case "for"
+            return TK_FOR
+        case "in"
+            return TK_IN
+        case "break"
+            return TK_BREAK
+        case "continue"
+            return TK_CONTINUE
+        case "return"
+            return TK_RETURN
+        case "true"
+            return TK_TRUE
+        case "false"
+            return TK_FALSE
+        case "print"
+            return TK_PRINT
+        case "int"
+            return TK_INT
+        case "float"
+            return TK_FLOAT_WORD
+        case "bool"
+            return TK_BOOL
+        case "string"
+            return TK_STRING_WORD
+        case "len"
+            return TK_LEN
+    end
+    return TK_NAME
+end
+
+func describe_letter(source: string, at: int): string
+    var code = byte(source, at)
+    if code >= 128
+        return "This character isn't allowed here. Non-English text can only go in comments and quoted text."
+    end
+    if code < 32 or code == 127
+        return "This file has a control character here, which can't be part of Jamo code."
+    end
+    if code == 46
+        return "A decimal number needs a digit before its dot, like 0.5."
+    end
+    return "Jamo doesn't use the character " + source[at] + " here."
+end
+
+# --- The lexer ---
+
+func new_lexer(source: string): Lexer
+    var lexer = Lexer{source: source, size: len(source), at: 0, line: 1, line_start: 0, tokens: [], errors: [], fstring_braces: [], open_brackets: 0}
+    # Notepad can start a file with these three invisible bytes
+    if lexer.size >= 3 and byte(source, 0) == 239 and byte(source, 1) == 187 and byte(source, 2) == 191
+        lexer.at = 3
+        lexer.line_start = 3
+    end
+    return lexer
+end
+
+func Lexer.letter_at(place: int, otherwise: int): int
+    if place < self.size
+        return byte(self.source, place)
+    end
+    return otherwise
+end
+
+func Lexer.error(line: int, column: int, length: int, words: string, hint: string)
+    if len(self.errors) < MOST_ERRORS
+        self.errors.add(LexError{line: line, column: column, length: length, words: words, hint: hint})
+    end
+end
+
+func Lexer.add(kind: int, start: int, length: int): Token
+    var token = Token{kind: kind, text: slice(self.source, start, start + length), value: "", real: 0.0, number: 0, line: self.line, column: start - self.line_start, length: length}
+    self.tokens.add(token)
+    return token
+end
+
+# Reads quoted text up to its closing quote, or in an f-string up to its next {
+func Lexer.read_text(is_fstring: bool, value: Bytes): int
+    while self.at < self.size and byte(self.source, self.at) != 10
+        var inside = byte(self.source, self.at)
+        var after = self.letter_at(self.at + 1, 10)
+        if inside == 34
+            self.at += 1
+            return TEXT_CLOSED
+        end
+        if is_fstring and (inside == 123 or inside == 125) and after == inside
+            value.add_u8(inside)
+            self.at += 2
+        elif is_fstring and inside == 123
+            self.at += 1
+            return TEXT_BRACE
+        elif is_fstring and inside == 125
+            self.error(self.line, self.at - self.line_start, 1, "This } has no { before it.", "To show a } in an f-string, write }}.")
+            self.at += 1
+        elif inside != 92
+            value.add_u8(inside)
+            self.at += 1
+        elif after == 10
+            self.at += 1
+        elif after == 110 or after == 116 or after == 114 or after == 34 or after == 92
+            if after == 110
+                value.add_u8(10)
+            elif after == 116
+                value.add_u8(9)
+            elif after == 114
+                value.add_u8(13)
+            else
+                value.add_u8(after)
+            end
+            self.at += 2
+        else
+            self.error(self.line, self.at - self.line_start, 2, "Jamo doesn't have this escape.", "The escapes are \\n \\t \\r \\\" and \\\\.")
+            self.at += 2
+        end
+    end
+    return TEXT_UNCLOSED
+end
+
+# Reads the next stretch of an f-string's text, after its start or after a }
+func Lexer.read_fstring_part()
+    var start = self.at
+    var value = new_bytes()
+    var text_end = self.read_text(true, value)
+    if text_end == TEXT_UNCLOSED
+        self.error(self.line, start - self.line_start, self.at - start, "This f-string never closes.", "Put a \" at its end. For a new line inside text, write \\n.")
+        self.fstring_braces = []
+        return
+    end
+    if value.length() > 0
+        var token = self.add(TK_FSTRING_TEXT, start, self.at - start - 1)
+        token.value = value.text()
+    end
+    if text_end == TEXT_BRACE
+        self.add(TK_LEFT_BRACE, self.at - 1, 1)
+    else
+        self.add(TK_FSTRING_END, self.at - 1, 1)
+        self.fstring_braces.pop()
+    end
+end
+
+# The number 2^63 can only come after a minus sign, so numbers go up to it, which wraps to the smallest int
+func Lexer.read_number()
+    var start = self.at
+    var number = 0
+    var too_large = false
+    while self.at < self.size and is_digit(byte(self.source, self.at))
+        var digit = byte(self.source, self.at) - 48
+        var limit = (9223372036854775807 - digit) / 10
+        if digit == 8
+            limit += 1
+        end
+        if number > limit
+            too_large = true
+        else
+            number = number * 10 + digit
+        end
+        self.at += 1
+    end
+    if self.at + 1 < self.size and byte(self.source, self.at) == 46 and is_digit(byte(self.source, self.at + 1))
+        self.at += 1
+        while self.at < self.size and is_digit(byte(self.source, self.at))
+            self.at += 1
+        end
+        self.read_float(start)
+        return
+    end
+    var dot_without_digit = false
+    if self.at + 1 >= self.size
+        dot_without_digit = self.at < self.size and byte(self.source, self.at) == 46
+    else
+        dot_without_digit = byte(self.source, self.at) == 46 and byte(self.source, self.at + 1) != 46
+    end
+    if dot_without_digit
+        self.error(self.line, start - self.line_start, self.at - start + 1, "A decimal number needs a digit after its dot.", "Like this: " + slice(self.source, start, self.at) + ".0")
+        self.at += 1
+        return
+    end
+    if self.at < self.size and is_letter(byte(self.source, self.at))
+        self.error(self.line, start - self.line_start, self.at - start, "A name can't start with a number.", "")
+        while self.at < self.size and (is_letter(byte(self.source, self.at)) or is_digit(byte(self.source, self.at)))
+            self.at += 1
+        end
+    elif too_large
+        self.error(self.line, start - self.line_start, self.at - start, "This number is too large for 64 bits.", "The largest int is 9223372036854775807.")
+    else
+        var token = self.add(TK_NUMBER, start, self.at - start)
+        token.number = number
+    end
+end
+
+# Floats round to the nearest one. From here up, a decimal rounds past the largest float: 2^1024 - 2^970
+const FLOAT_TOO_LARGE = "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792"
+# At or below this, a decimal that isn't 0 rounds to 0: 2^-1075, all 1075 digits after the dot
+const FLOAT_TOO_SMALL = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000024703282292062327208828439643411068618252990130716238221279284125033775363510437593264991818081799618989828234772285886546332835517796989819938739800539093906315035659515570226392290858392449105184435931802849936536152500319370457678249219365623669863658480757001585769269903706311928279558551332927834338409351978015531246597263579574622766465272827220056374006485499977096599470454020828166226237857393450736339007967761930577506740176324673600968951340535537458516661134223766678604162159680461914467291840300530057530849048765391711386591646239524912623653881879636239373280423891018672348497668235089863388587925628302755995657524455507255189313690836254779186948667994968324049705821028513185451396213837722826145437693412532098591327667236328125"
+
+# Compares two runs of digits as whole numbers, with no leading zeros: below 0 when a is smaller
+func compare_digits(a: string, b: string): int
+    if len(a) != len(b)
+        return len(a) - len(b)
+    end
+    for i in 0..len(a)
+        if byte(a, i) != byte(b, i)
+            return byte(a, i) - byte(b, i)
+        end
+    end
+    return 0
+end
+
+# Whether float() can turn this decimal (digits, a dot, digits) without it rounding to endless or to 0
+func float_in_range(text: string): bool
+    var dot = find(text, ".")
+    var whole = slice(text, 0, dot)
+    var parts = slice(text, dot + 1, len(text))
+    var first = 0
+    while first < len(whole) and byte(whole, first) == 48
+        first += 1
+    end
+    whole = slice(whole, first, len(whole))
+    if whole != ""
+        return compare_digits(whole, FLOAT_TOO_LARGE) < 0
+    end
+    var last = len(parts)
+    while last > 0 and byte(parts, last - 1) == 48
+        last -= 1
+    end
+    if last == 0
+        return true
+    end
+    # Both have the dot in the same place, so the one with the first larger digit is larger
+    for i in 0..last
+        var mine = byte(parts, i)
+        var bound = 48
+        if i < len(FLOAT_TOO_SMALL)
+            bound = byte(FLOAT_TOO_SMALL, i)
+        end
+        if mine != bound
+            return mine > bound
+        end
+    end
+    return last > len(FLOAT_TOO_SMALL)
+end
+
+func Lexer.read_float(start: int)
+    var text = slice(self.source, start, self.at)
+    if not float_in_range(text)
+        self.error(self.line, start - self.line_start, self.at - start, "This decimal number is too large or too small for a float.", "")
+        return
+    end
+    var token = self.add(TK_FLOAT, start, self.at - start)
+    token.real = float(text)
+end
+
+func Lexer.read_tokens()
+    while self.at < self.size and len(self.errors) < MOST_ERRORS
+        var letter = byte(self.source, self.at)
+        var next = self.letter_at(self.at + 1, 0)
+        if letter == 32 or letter == 9 or letter == 13
+            self.at += 1
+        elif letter == 10
+            if len(self.fstring_braces) > 0
+                self.error(self.line, self.at - self.line_start, 1, "This f-string has a { that never gets its }.", "")
+                self.fstring_braces = []
+            end
+            if self.open_brackets == 0 and (len(self.tokens) == 0 or not leaves_line_open(self.tokens[len(self.tokens) - 1].kind))
+                self.add(TK_NEWLINE, self.at, 1)
+            end
+            self.at += 1
+            self.line += 1
+            self.line_start = self.at
+        elif letter == 35
+            while self.at < self.size and byte(self.source, self.at) != 10
+                self.at += 1
+            end
+        elif is_letter(letter) and not (letter == 102 and next == 34)
+            var start = self.at
+            while self.at < self.size and (is_letter(byte(self.source, self.at)) or is_digit(byte(self.source, self.at)))
+                self.at += 1
+            end
+            var word = kind_of_word(slice(self.source, start, self.at))
+            if self.open_brackets > 0 and starts_a_statement(word) and len(self.tokens) > 0 and self.tokens[len(self.tokens) - 1].line != self.line
+                self.open_brackets = 0
+                self.add(TK_NEWLINE, start, 0)
+            end
+            self.add(word, start, self.at - start)
+        elif is_digit(letter)
+            self.read_number()
+        elif letter == 34
+            var start = self.at
+            var value = new_bytes()
+            self.at += 1
+            if self.read_text(false, value) == TEXT_CLOSED
+                var token = self.add(TK_STRING, start, self.at - start)
+                token.value = value.text()
+            else
+                self.error(self.line, start - self.line_start, self.at - start, "This text never closes.", "Put a \" at its end. For a new line inside text, write \\n.")
+            end
+        elif letter == 102 and next == 34
+            self.add(TK_FSTRING_START, self.at, 2)
+            self.at += 2
+            self.fstring_braces.add(0)
+            self.read_fstring_part()
+        elif letter == 125 and len(self.fstring_braces) > 0 and self.fstring_braces[len(self.fstring_braces) - 1] == 0
+            self.add(TK_RIGHT_BRACE, self.at, 1)
+            self.at += 1
+            self.read_fstring_part()
+        elif letter == 46 and next == 46
+            self.add(TK_DOT_DOT, self.at, 2)
+            self.at += 2
+        elif next == 61 and (letter == 43 or letter == 45 or letter == 42 or letter == 47)
+            var kind = TK_SLASH_ASSIGN
+            if letter == 43
+                kind = TK_PLUS_ASSIGN
+            elif letter == 45
+                kind = TK_MINUS_ASSIGN
+            elif letter == 42
+                kind = TK_STAR_ASSIGN
+            end
+            self.add(kind, self.at, 2)
+            self.at += 2
+        elif letter == 61 and next == 61
+            self.add(TK_EQUAL, self.at, 2)
+            self.at += 2
+        elif letter == 33 and next == 61
+            self.add(TK_NOT_EQUAL, self.at, 2)
+            self.at += 2
+        elif letter == 60 and next == 61
+            self.add(TK_LESS_EQUAL, self.at, 2)
+            self.at += 2
+        elif letter == 62 and next == 61
+            self.add(TK_GREATER_EQUAL, self.at, 2)
+            self.at += 2
+        else
+            self.read_symbol(letter, next)
+        end
+    end
+    if len(self.fstring_braces) > 0
+        self.error(self.line, self.at - self.line_start, 1, "This f-string has a { that never gets its }.", "")
+    end
+    self.add(TK_NEWLINE, self.size, 0)
+    self.add(TK_END, self.size, 0)
+end
+
+func symbol_kind(letter: int, next: int): int
+    match letter
+        case 40
+            return TK_LEFT_PAREN
+        case 41
+            return TK_RIGHT_PAREN
+        case 91
+            return TK_LEFT_BRACKET
+        case 123
+            return TK_LEFT_BRACE
+        case 125
+            return TK_RIGHT_BRACE
+        case 93
+            return TK_RIGHT_BRACKET
+        case 46
+            if is_digit(next)
+                return TK_END
+            end
+            return TK_DOT
+        case 58
+            return TK_COLON
+        case 44
+            return TK_COMMA
+        case 61
+            return TK_ASSIGN
+        case 43
+            return TK_PLUS
+        case 45
+            return TK_MINUS
+        case 42
+            return TK_STAR
+        case 47
+            return TK_SLASH
+        case 37
+            return TK_PERCENT
+        case 60
+            return TK_LESS
+        case 62
+            return TK_GREATER
+    end
+    return TK_END
+end
+
+func Lexer.read_symbol(letter: int, next: int)
+    var kind = symbol_kind(letter, next)
+    var braces = len(self.fstring_braces)
+    if kind == TK_LEFT_BRACE and braces > 0
+        self.fstring_braces[braces - 1] += 1
+    end
+    if kind == TK_RIGHT_BRACE and braces > 0
+        self.fstring_braces[braces - 1] -= 1
+    end
+    if braces == 0 and (kind == TK_LEFT_PAREN or kind == TK_LEFT_BRACKET or kind == TK_LEFT_BRACE)
+        self.open_brackets += 1
+    end
+    if braces == 0 and self.open_brackets > 0 and (kind == TK_RIGHT_PAREN or kind == TK_RIGHT_BRACKET or kind == TK_RIGHT_BRACE)
+        self.open_brackets -= 1
+    end
+    if kind == TK_END
+        self.error(self.line, self.at - self.line_start, 1, describe_letter(self.source, self.at), "")
+    else
+        self.add(kind, self.at, 1)
+    end
+    self.at += 1
+end

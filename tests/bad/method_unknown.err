@@ -1,0 +1,4 @@
+method_unknown.jamo line 10: Enemy has no function called hti.
+        e.hti()
+        ^^^^^^^
+Did you mean hit?

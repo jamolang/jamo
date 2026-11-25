@@ -1,0 +1,6 @@
+func main()
+    var zero = 0.0
+    print("before")
+    print(int(zero / zero))
+    print("never")
+end

@@ -1,0 +1,18 @@
+struct Node
+    value: int
+    next: [Node]
+end
+
+func total(node: Node): int
+    var sum = node.value
+    for child in node.next
+        sum += total(child)
+    end
+    return sum
+end
+
+func main()
+    var root = Node{value: 1, next: [Node{value: 2, next: []}, Node{value: 3, next: [Node{value: 4, next: []}]}]}
+    print(total(root))
+    print(root)
+end

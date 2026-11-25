@@ -1,0 +1,43 @@
+# Functions can be called before they're defined
+func main()
+    print(add(2, 3))
+    print(pick(true, 1, 2))
+    print(pick(false, 1, 2))
+    print(subtract(10, 4))
+    print(is_big(100))
+    say_nine()
+    add(1, 1)
+    print(add(add(1, 2), add(3, 4)))
+    print(change_input(5))
+end
+
+func add(a: int, b: int): int
+    return a + b
+end
+
+func subtract(a: int, b: int): int
+    return a - b
+end
+
+func pick(first: bool, a: int, b: int): int
+    if first
+        return a
+    else
+        return b
+    end
+end
+
+func is_big(n: int): bool
+    return n > 50
+end
+
+func say_nine()
+    print(9)
+    return
+    print(10)
+end
+
+func change_input(n: int): int
+    n = n + 1
+    return n
+end

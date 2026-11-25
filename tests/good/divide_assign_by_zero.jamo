@@ -1,0 +1,6 @@
+func main()
+    var d = 0
+    var x = 5
+    x /= d
+    print(x)
+end

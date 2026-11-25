@@ -1,0 +1,4 @@
+fstring_never_closes.jamo line 2: This f-string never closes.
+        print(f"oops {1}
+                        ^
+Put a " at its end. For a new line inside text, write \n.

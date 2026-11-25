@@ -1,0 +1,4 @@
+constant_not_known.jamo line 1: A constant needs a value that's known before the program runs.
+    const START = input()
+                  ^^^^^^^
+Use numbers, text, true or false, other constants, and operators like + and *.

@@ -1,0 +1,4 @@
+array_unknown_function.jamo line 3: Arrays have no function called push.
+        items.push(1)
+        ^^^^^^^^^^^^^
+They have add and pop.

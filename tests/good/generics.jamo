@@ -1,0 +1,133 @@
+# Generic functions and structs: each set of types gets its own copy
+
+struct Pair<A, B>
+    left: A
+    right: B
+end
+
+func Pair<A, B>.swap(): Pair<B, A>
+    return Pair<B, A>{left: self.right, right: self.left}
+end
+
+struct Box<T>
+    items: [T]
+end
+
+func Box<T>.add(item: T)
+    self.items.add(item)
+end
+
+func Box<T>.first(): T
+    return self.items[0]
+end
+
+func Box<T>.count(): int
+    return len(self.items)
+end
+
+# A method that calls another method on self
+func Box<T>.add_twice(item: T)
+    self.add(item)
+    self.add(item)
+end
+
+func first<T>(items: [T]): T
+    return items[0]
+end
+
+func last_or<T>(items: [T], fallback: T): T
+    if len(items) == 0
+        return fallback
+    end
+    return items[len(items) - 1]
+end
+
+func make_box<T>(): Box<T>
+    var items: [T] = []
+    return Box<T>{items: items}
+end
+
+# A generic that calls other generics, and itself
+func count_down<T>(items: [T], n: int): int
+    if n <= 0
+        return len(items)
+    end
+    return count_down(items, n - 1) + 1
+end
+
+func wrap<T>(item: T): Box<T>
+    var box = make_box<T>()
+    box.add(item)
+    return box
+end
+
+func reversed<T>(items: [T]): [T]
+    var out: [T] = []
+    var i = len(items) - 1
+    while i >= 0
+        out.add(items[i])
+        i -= 1
+    end
+    return out
+end
+
+enum Color
+    RED
+    GREEN
+end
+
+struct Point
+    x: int
+    y: int
+end
+
+func smaller(a: int, b: int): bool
+    return a < b
+end
+
+func main()
+    print(first([3, 1, 2]))
+    print(first(["a", "b"]))
+    print(last_or([1.5, 2.5], 0.0))
+    var empty: [string] = []
+    print(last_or(empty, "none"))
+    var p = Pair<string, int>{left: "hi", right: 5}
+    var q = p.swap()
+    print(q.left)
+    print(q.right)
+    print(q)
+    print(q.swap())
+    var b = make_box<int>()
+    b.add(7)
+    b.add_twice(8)
+    print(b.first())
+    print(b.count())
+    print(b)
+    var names = make_box<string>()
+    names.add("Sam")
+    print(names.first())
+    var nested = wrap(Pair<int, [string]>{left: 1, right: ["x", "y"]})
+    print(nested)
+    print(nested.first().right[1])
+    var boxes = wrap(wrap(3))
+    print(boxes.first().first())
+    print(count_down([true, false], 3))
+    print(reversed([1, 2, 3]))
+    print(reversed(["a"]))
+    print(first([Color.GREEN, Color.RED]))
+    var points = wrap(Point{x: 1, y: 2})
+    points.first().x = 10
+    print(points)
+    print(first<int>([4]))
+    print(last_or<string>([], "given types"))
+    var x = 3
+    var y = 4
+    print(smaller(x, y))
+    # < and > here stay comparisons, since the > isn't followed by ( or {
+    print(both(x < y, y > x))
+    print(both(x > y, y < x))
+end
+
+func both(a: bool, b: bool): bool
+    return a and b
+end

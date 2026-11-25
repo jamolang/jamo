@@ -1,0 +1,3 @@
+string_of_string.jamo line 2: This is already a string, so it doesn't need string( ).
+        print(string("a"))
+                     ^^^

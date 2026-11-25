@@ -1,0 +1,4 @@
+for_never_ends.jamo line 2: This for never gets its end.
+        for i in 0..3
+        ^^^
+Add a line with end to finish it.

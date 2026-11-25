@@ -1,0 +1,3 @@
+fstring_no_value.jamo line 5: This doesn't give back a value, so it can't go in an f-string.
+        print(f"a{nothing()}")
+                  ^^^^^^^^^

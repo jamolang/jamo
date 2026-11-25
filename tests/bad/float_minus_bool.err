@@ -1,0 +1,3 @@
+float_minus_bool.jamo line 2: A minus sign needs a number, but this is a bool.
+        print(-true)
+               ^^^^

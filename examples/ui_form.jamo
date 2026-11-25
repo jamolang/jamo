@@ -1,0 +1,57 @@
+# Sign-up Form: a small form with a text box, a slider, a checkbox, a list and buttons. Press Tab to
+# move between them, or click.
+
+use "ui.jamo"
+
+func main()
+    var window = open_window("Sign Up", 460, 600)
+    var screen = start_gfx(window)
+    var ui = start_ui(screen)
+    var name = ""
+    var age = 12.0
+    var news = true
+    var teams = ["Red Rockets", "Green Giants", "Blue Comets", "Gold Hawks", "Purple Storm"]
+    var team = -1
+    var dark = false
+    var message = "Fill in the form, then press Save."
+    while window.is_open()
+        if dark
+            ui.theme = dark_theme()
+        else
+            ui.theme = light_theme()
+        end
+        screen.clear(ui.theme.background)
+        ui.begin()
+        ui.title("Join the league")
+        ui.note(message)
+        ui.panel(16.0, 104.0, float(window.width()) - 32.0, float(window.height()) - 120.0)
+        ui.label("Your name")
+        name = ui.text_box(name)
+        age = ui.slider("Age", age, 5.0, 99.0)
+        age = float(int(age + 0.5))
+        news = ui.checkbox("Send me the league news", news)
+        dark = ui.checkbox("Dark look", dark)
+        ui.label("Pick a team")
+        team = ui.list(teams, team, 4)
+        ui.space(8.0)
+        ui.columns(2)
+        if ui.button("Clear")
+            name = ""
+            age = 12.0
+            team = -1
+            message = "Cleared."
+        end
+        if ui.button("Save")
+            if name == ""
+                message = "Please type your name first."
+            elif team < 0
+                message = "Please pick a team."
+            else
+                message = f"Saved: {name}, {int(age)}, {teams[team]}."
+            end
+        end
+        ui.finish()
+        screen.show()
+        window.wait_frame(60)
+    end
+end

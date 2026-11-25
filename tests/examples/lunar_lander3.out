@@ -1,0 +1,81 @@
+LUNAR LANDER
+Each turn, type how hard to burn the engine, from 0 to 9.
+Land at a speed of 3 or less. Fuel left gives you points.
+
+Turn 1  height 100  speed 0  fuel 60
+  |                                        A
+Turn 2  height 103  speed -3  fuel 51
+  |                                         A
+Turn 3  height 106  speed -2  fuel 51
+  |                                          A
+Turn 4  height 107  speed -1  fuel 51
+  |                                           A
+Turn 5  height 108  speed 0  fuel 51
+  |                                           A
+Turn 6  height 112  speed -4  fuel 42
+  |                                            A
+Turn 7  height 119  speed -7  fuel 33
+  |                                               A
+Turn 8  height 130  speed -11  fuel 24
+  |                                                    A
+Turn 9  height 140  speed -10  fuel 24
+  |                                                        A
+Turn 10  height 149  speed -9  fuel 24
+  |                                                           A
+Turn 11  height 157  speed -8  fuel 24
+  |                                                               A
+Turn 12  height 164  speed -7  fuel 24
+  |                                                                 A
+Turn 13  height 170  speed -6  fuel 24
+  |                                                                    A
+Turn 14  height 175  speed -5  fuel 24
+  |                                                                      A
+Turn 15  height 179  speed -4  fuel 24
+  |                                                                       A
+Turn 16  height 182  speed -3  fuel 24
+  |                                                                         A
+Turn 17  height 184  speed -2  fuel 24
+  |                                                                         A
+Turn 18  height 185  speed -1  fuel 24
+  |                                                                          A
+Turn 19  height 185  speed 0  fuel 24
+  |                                                                          A
+Turn 20  height 184  speed 1  fuel 24
+  |                                                                         A
+Turn 21  height 182  speed 2  fuel 24
+  |                                                                         A
+Turn 22  height 179  speed 3  fuel 24
+  |                                                                       A
+Turn 23  height 175  speed 4  fuel 24
+  |                                                                      A
+Turn 24  height 170  speed 5  fuel 24
+  |                                                                    A
+Turn 25  height 164  speed 6  fuel 24
+  |                                                                 A
+Turn 26  height 157  speed 7  fuel 24
+  |                                                               A
+Turn 27  height 149  speed 8  fuel 24
+  |                                                           A
+Turn 28  height 140  speed 9  fuel 24
+  |                                                        A
+Turn 29  height 130  speed 10  fuel 24
+  |                                                    A
+Turn 30  height 119  speed 11  fuel 24
+  |                                               A
+Turn 31  height 107  speed 12  fuel 24
+  |                                           A
+Turn 32  height 94  speed 13  fuel 24
+  |                                     A
+Turn 33  height 80  speed 14  fuel 24
+  |                                A
+Turn 34  height 65  speed 15  fuel 24
+  |                          A
+Turn 35  height 49  speed 16  fuel 24
+  |                   A
+Turn 36  height 32  speed 17  fuel 24
+  |             A
+Turn 37  height 14  speed 18  fuel 24
+  |     A
+
+Touchdown at speed 19.0!
+CRASH! There's a new crater on the Moon.

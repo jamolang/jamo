@@ -1,0 +1,3 @@
+global_no_value.jamo line 1: This doesn't give back a value, so it can't go in a variable.
+    var a = print_it()
+            ^^^^^^^^^^

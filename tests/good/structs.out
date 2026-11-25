@@ -1,0 +1,17 @@
+Enemy{health: 3, speed: 1.5}
+3
+1.5
+Enemy{health: 10, speed: 3.0}
+1
+-3
+9
+8
+Enemy{health: 9, speed: 1.5}!
+e is Enemy{health: -3, speed: 3.0}
+Enemy{health: 2, speed: 0.5}
+Team{name: "red", leader: Enemy{health: -3, speed: 3.0}, members: [], ready: false}
+77
+42
+Team{name: "red", leader: Enemy{health: 77, speed: 3.0}, members: [Enemy{health: 9, speed: 1.5}, Enemy{health: 42, speed: 0.0}], ready: false}
+Nothing_inside{}
+1

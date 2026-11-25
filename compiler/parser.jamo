@@ -1,0 +1,1612 @@
+# Parser: turns tokens into the tree in ast.jamo. The same as src/parser.cpp, checked against it.
+#
+# The C++ parser throws on a mistake and catches it at the next statement or top-level item. Jamo has
+# no exceptions, so a mistake sets stopped instead, and every function hands control straight back
+# while it's set. The places that catch in C++ check stopped, then carry on the same way.
+
+use "lexer.jamo"
+use "ast.jamo"
+
+const DEEPEST_NESTING = 200
+const TALLEST_EXPRESSION = 1000
+
+# A marker can only run along one line, so a mistake across several lines marks where it starts
+func length_to(start_line: int, start_column: int, start_length: int, end_line: int, end_column: int, end_length: int): int
+    if start_line == end_line
+        return end_column + end_length - start_column
+    end
+    return start_length
+end
+
+struct Parser
+    tokens: [Token]
+    errors: [LexError]
+    program: Program
+    at: int
+    nesting: int
+    stopped: bool
+    ext_i32: bool
+    ext_f32: bool
+end
+
+func new_parser(tokens: [Token], errors: [LexError], program: Program): Parser
+    return Parser{tokens: tokens, errors: errors, program: program, at: 0, nesting: 0, stopped: false, ext_i32: false, ext_f32: false}
+end
+
+# --- Tokens ---
+
+func Parser.peek(): Token
+    return self.tokens[self.at]
+end
+
+func Parser.take(): Token
+    var token = self.tokens[self.at]
+    if self.at + 1 < len(self.tokens)
+        self.at += 1
+    end
+    return token
+end
+
+func Parser.next_is(kind: int): bool
+    return self.tokens[self.at].kind == kind
+end
+
+func Parser.skip_newlines()
+    while self.next_is(TK_NEWLINE)
+        self.take()
+    end
+end
+
+func Parser.errors_full(): bool
+    return len(self.errors) >= MOST_ERRORS
+end
+
+func Parser.fail(words: string, hint: string)
+    var token = self.peek()
+    self.fail_at(token.line, token.column, token.length, words, hint)
+end
+
+func Parser.fail_at(line: int, column: int, length: int, words: string, hint: string)
+    if len(self.errors) < MOST_ERRORS
+        self.errors.add(LexError{line: line, column: column, length: length, words: words, hint: hint})
+    end
+    self.stopped = true
+end
+
+func Parser.expect(kind: int, words: string, hint: string): Token
+    if not self.next_is(kind)
+        self.fail(words, hint)
+        return self.peek()
+    end
+    return self.take()
+end
+
+func Parser.expect_line_end()
+    # A line ending with > carries on to the next one, so after types like Box<T> the line ends where the next word starts on a new line
+    if not self.next_is(TK_NEWLINE) and self.at > 0
+        var before = self.tokens[self.at - 1]
+        if before.kind == TK_GREATER and self.peek().line > before.line
+            return
+        end
+    end
+    if not self.next_is(TK_NEWLINE)
+        self.fail("Each statement goes on its own line, but there's more on this one.", "")
+        return
+    end
+    self.skip_newlines()
+end
+
+func is_reserved(kind: int): bool
+    return kind >= TK_FUNC and kind <= TK_LEN
+end
+
+func Parser.expect_name(what: string): Token
+    var token = self.peek()
+    if is_reserved(token.kind)
+        self.fail(token.text + " is a reserved word, so it can't be used as a name.", "Try a different name.")
+        return token
+    end
+    return self.expect(TK_NAME, "This needs " + what + ".", "")
+end
+
+func Parser.ex(place: int): Expr
+    return self.program.exprs[place]
+end
+
+func Parser.st(place: int): Stmt
+    return self.program.stmts[place]
+end
+
+func Parser.parse_type(): int
+    if self.next_is(TK_INT)
+        self.take()
+        return TYPE_INT
+    end
+    if self.next_is(TK_BOOL)
+        self.take()
+        return TYPE_BOOL
+    end
+    if self.next_is(TK_FLOAT_WORD)
+        self.take()
+        return TYPE_FLOAT
+    end
+    if self.next_is(TK_STRING_WORD)
+        self.take()
+        return TYPE_STRING
+    end
+    if self.next_is(TK_LEFT_BRACKET)
+        self.take()
+        self.nesting += 1
+        if self.nesting > DEEPEST_NESTING
+            self.fail("This type is nested too deeply.", "")
+            return TYPE_NOTHING
+        end
+        var element = self.parse_type()
+        if self.stopped
+            return TYPE_NOTHING
+        end
+        self.nesting -= 1
+        self.expect(TK_RIGHT_BRACKET, "This array type needs a closing ].", "")
+        if self.stopped
+            return TYPE_NOTHING
+        end
+        return self.program.types.array_of(element)
+    end
+    if self.next_is(TK_NAME)
+        var name = self.take()
+        if not self.next_is(TK_LESS)
+            return self.program.types.named(name.text)
+        end
+        self.nesting += 1
+        if self.nesting > DEEPEST_NESTING
+            self.fail("This type is nested too deeply.", "")
+            return TYPE_NOTHING
+        end
+        var args = self.parse_type_args()
+        if self.stopped
+            return TYPE_NOTHING
+        end
+        self.nesting -= 1
+        return self.program.types.generic(name.text, args)
+    end
+    self.fail("This needs a type here.", "Jamo's types are int, float, bool and string, and [int] is an array of ints.")
+    return TYPE_NOTHING
+end
+
+# <string, int> after a generic struct's or function's name
+func Parser.parse_type_args(): [int]
+    self.take()
+    var args: [int] = []
+    while true
+        var type = self.parse_type()
+        if self.stopped
+            return args
+        end
+        args.add(type)
+        if not self.next_is(TK_COMMA)
+            break
+        end
+        self.take()
+    end
+    self.expect(TK_GREATER, "These types need a closing >.", "Like this: Pair<string, int>")
+    return args
+end
+
+# <T, U> after the name of a generic function or struct that's being made
+func Parser.parse_type_params(params: [int], lines: [int], columns: [int], lengths: [int])
+    self.take()
+    while true
+        var param = self.expect_name("a name for a type, like T")
+        if self.stopped
+            return
+        end
+        params.add(self.program.types.named(param.text))
+        lines.add(param.line)
+        columns.add(param.column)
+        lengths.add(param.length)
+        if not self.next_is(TK_COMMA)
+            break
+        end
+        self.take()
+    end
+    self.expect(TK_GREATER, "These types need a closing >.", "Like this: func first<T>(items: [T]): T")
+end
+
+# After a name, < starts types only when its matching > comes straight before ( or {, the way C# decides.
+# So a < b stays a comparison
+func Parser.looks_like_type_args(): bool
+    var depth = 0
+    for i in self.at..len(self.tokens)
+        var kind = self.tokens[i].kind
+        if kind == TK_LESS
+            depth += 1
+        elif kind == TK_GREATER
+            depth -= 1
+            if depth == 0
+                return i + 1 < len(self.tokens) and (self.tokens[i + 1].kind == TK_LEFT_PAREN or self.tokens[i + 1].kind == TK_LEFT_BRACE)
+            end
+        elif not (kind == TK_NAME or kind == TK_INT or kind == TK_FLOAT_WORD or kind == TK_BOOL or kind == TK_STRING_WORD or kind == TK_LEFT_BRACKET or kind == TK_RIGHT_BRACKET or kind == TK_COMMA)
+            return false
+        end
+    end
+    return false
+end
+
+# --- The top level ---
+
+func Parser.parse()
+    self.skip_newlines()
+    while not self.next_is(TK_END)
+        self.parse_top_level()
+        if self.stopped
+            if self.next_is(TK_END) or self.errors_full()
+                return
+            end
+            self.stopped = false
+            self.nesting = 0
+            self.skip_to_next_top_level()
+        end
+        self.skip_newlines()
+    end
+end
+
+func Parser.parse_top_level()
+    if self.next_is(TK_USE)
+        self.parse_use()
+    elif self.next_is(TK_STRUCT)
+        self.parse_struct()
+    elif self.next_is(TK_ENUM)
+        self.parse_enum()
+    elif self.next_is(TK_CONST)
+        self.parse_const()
+    elif self.next_is(TK_EXTERN)
+        self.parse_extern()
+    elif self.next_is(TK_FUNC)
+        self.parse_function()
+    elif self.next_is(TK_VAR)
+        var global = self.parse_var()
+        if not self.stopped
+            self.program.globals.add(global)
+        end
+    else
+        self.fail("Only functions, structs, enums, constants, variables, extern and use lines can go at the top level of a file.", "Put this code inside a function, like func main().")
+    end
+end
+
+# A mistake in a function's first line leaves the rest of it, so this skips past all of it
+func Parser.skip_to_next_top_level()
+    self.take()
+    while not self.next_is(TK_END) and not self.next_is(TK_FUNC) and not self.next_is(TK_STRUCT) and not self.next_is(TK_ENUM) and not self.next_is(TK_CONST) and not self.next_is(TK_USE)
+        self.take()
+    end
+end
+
+func Parser.skip_rest_of_line()
+    if self.next_is(TK_END_WORD) or self.next_is(TK_ELSE) or self.next_is(TK_ELIF) or self.next_is(TK_CASE)
+        return
+    end
+    while not self.next_is(TK_NEWLINE) and not self.next_is(TK_END)
+        self.take()
+    end
+    self.skip_newlines()
+end
+
+# After a mistake on a line that opens a block, its lines still get read, and its end doesn't close the wrong thing
+func Parser.recover_from_statement(first_word: int, line: int, column: int, length: int)
+    self.skip_rest_of_line()
+    var opens_block = first_word == TK_IF or first_word == TK_WHILE or first_word == TK_FOR or first_word == TK_MATCH or first_word == TK_FUNC
+    if not opens_block
+        return
+    end
+    while true
+        self.parse_block(line, column, length, "block")
+        if self.stopped
+            return
+        end
+        if self.next_is(TK_END_WORD)
+            self.take()
+            self.skip_rest_of_line()
+            return
+        end
+        self.take()
+        self.skip_rest_of_line()
+    end
+end
+
+func Parser.parse_use()
+    self.take()
+    var path = self.expect(TK_STRING, "use needs a file name in quotes.", "Like this: use \"enemy.jamo\"")
+    if self.stopped
+        return
+    end
+    self.program.uses.add(UseLine{path: path.value, line: path.line, column: path.column, length: path.length, file: self.program.current_file})
+    self.expect_line_end()
+end
+
+func Parser.parse_struct()
+    var keyword = self.take()
+    var name = self.expect_name("a struct name")
+    if self.stopped
+        return
+    end
+    var decl = StructDecl{name: name.text, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(name.text), fields: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: []}
+    if self.next_is(TK_LESS)
+        self.parse_type_params(decl.type_params, decl.type_param_lines, decl.type_param_columns, decl.type_param_lengths)
+        if self.stopped
+            return
+        end
+    end
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    while not self.next_is(TK_END_WORD)
+        if self.next_is(TK_END)
+            self.fail_at(keyword.line, keyword.column, keyword.length, "This struct never gets its end.", "Add a line with end to finish it.")
+            return
+        end
+        var field_name = self.expect_name("a field name, like health: int")
+        if self.stopped
+            return
+        end
+        self.expect(TK_COLON, "A field needs a type.", "Like this: " + field_name.text + ": int")
+        if self.stopped
+            return
+        end
+        var type = self.parse_type()
+        if self.stopped
+            return
+        end
+        self.expect_line_end()
+        if self.stopped
+            return
+        end
+        decl.fields.add(StructField{name: field_name.text, line: field_name.line, column: field_name.column, length: field_name.length, type: type})
+    end
+    self.take()
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    self.program.structs.add(decl)
+end
+
+func Parser.parse_enum()
+    var keyword = self.take()
+    var name = self.expect_name("an enum name")
+    if self.stopped
+        return
+    end
+    var decl = EnumDecl{name: name.text, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(name.text), members: [], member_lines: [], member_columns: [], member_lengths: []}
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    while not self.next_is(TK_END_WORD)
+        if self.next_is(TK_END)
+            self.fail_at(keyword.line, keyword.column, keyword.length, "This enum never gets its end.", "Add a line with end to finish it.")
+            return
+        end
+        var member = self.expect_name("a member name, like CALM")
+        if self.stopped
+            return
+        end
+        decl.members.add(member.text)
+        decl.member_lines.add(member.line)
+        decl.member_columns.add(member.column)
+        decl.member_lengths.add(member.length)
+        self.expect_line_end()
+        if self.stopped
+            return
+        end
+    end
+    self.take()
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    self.program.enums.add(decl)
+end
+
+# const MAX = 64
+func Parser.parse_const()
+    self.take()
+    var name = self.expect_name("a constant's name")
+    if self.stopped
+        return
+    end
+    self.expect(TK_ASSIGN, "A constant needs = and its value.", "Like this: const " + name.text + " = 64")
+    if self.stopped
+        return
+    end
+    var value = self.parse_expression()
+    if self.stopped
+        return
+    end
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    self.program.consts.add(ConstDecl{name: name.text, line: name.line, column: name.column, length: name.length, file: self.program.current_file, value: value})
+end
+
+# extern "user32.dll" func MessageBoxW(window: int, text: int, title: int, kind: i32): i32
+func Parser.parse_extern()
+    self.take()
+    var function = new_function()
+    function.file = self.program.current_file
+    var dll = self.expect(TK_STRING, "extern needs the DLL's name in quotes.", "Like this: extern \"user32.dll\" func MessageBeep(kind: i32): i32")
+    if self.stopped
+        return
+    end
+    function.dll = dll.value
+    self.expect(TK_FUNC, "extern needs func after the DLL's name.", "")
+    if self.stopped
+        return
+    end
+    var name = self.expect_name("a function name")
+    if self.stopped
+        return
+    end
+    function.name = name.text
+    function.line = name.line
+    function.column = name.column
+    function.length = name.length
+    self.expect(TK_LEFT_PAREN, "A function name needs ( after it.", "")
+    if self.stopped
+        return
+    end
+    if not self.next_is(TK_RIGHT_PAREN)
+        while true
+            var input_name = self.expect_name("an input name")
+            if self.stopped
+                return
+            end
+            self.expect(TK_COLON, "Inputs need a type.", "Like this: " + input_name.text + ": int")
+            if self.stopped
+                return
+            end
+            var type = self.parse_extern_type()
+            if self.stopped
+                return
+            end
+            function.inputs.add(Input{name: input_name.text, line: input_name.line, column: input_name.column, length: input_name.length, type: type})
+            function.input_is_i32.add(self.ext_i32)
+            function.input_is_f32.add(self.ext_f32)
+            if not self.next_is(TK_COMMA)
+                break
+            end
+            self.take()
+        end
+    end
+    self.expect(TK_RIGHT_PAREN, "The inputs need a closing ).", "")
+    if self.stopped
+        return
+    end
+    if self.next_is(TK_COLON)
+        self.take()
+        function.return_type = self.parse_extern_type()
+        function.returns_i32 = self.ext_i32
+        function.returns_f32 = self.ext_f32
+        if self.stopped
+            return
+        end
+    end
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    self.program.functions.add(function)
+end
+
+func Parser.parse_extern_type(): int
+    self.ext_i32 = false
+    self.ext_f32 = false
+    var token = self.peek()
+    if token.kind == TK_NAME and token.text == "i32"
+        self.take()
+        self.ext_i32 = true
+        return TYPE_INT
+    end
+    if token.kind == TK_NAME and token.text == "f32"
+        self.take()
+        self.ext_f32 = true
+        return TYPE_FLOAT
+    end
+    return self.parse_type()
+end
+
+func Parser.parse_function()
+    var keyword = self.take()
+    var function = new_function()
+    function.file = self.program.current_file
+    var name = self.expect_name("a function name")
+    if self.stopped
+        return
+    end
+    function.name = name.text
+    function.line = name.line
+    function.column = name.column
+    function.length = name.length
+    if self.next_is(TK_LESS)
+        self.parse_type_params(function.type_params, function.type_param_lines, function.type_param_columns, function.type_param_lengths)
+        if self.stopped
+            return
+        end
+    end
+    if self.next_is(TK_DOT)
+        # A method's first input is always self, the struct it was called on. A generic struct's method has its types
+        self.take()
+        var method = self.expect_name("a method name")
+        if self.stopped
+            return
+        end
+        if self.next_is(TK_LESS)
+            self.fail("A method can't have types of its own.", "Give its struct the types instead, like func Box<T>.get(): T")
+            return
+        end
+        if len(function.type_params) == 0
+            function.owner = self.program.types.named(name.text)
+        else
+            function.owner = self.program.types.generic(name.text, function.type_params)
+        end
+        function.owner_line = name.line
+        function.owner_column = name.column
+        function.owner_length = name.length
+        function.name = name.text + "." + method.text
+        function.line = method.line
+        function.column = method.column
+        function.length = method.length
+        function.inputs.add(Input{name: "self", line: name.line, column: name.column, length: name.length, type: function.owner})
+    end
+    self.expect(TK_LEFT_PAREN, "A function name needs ( after it.", "Like this: func " + name.text + "()")
+    if self.stopped
+        return
+    end
+    if not self.next_is(TK_RIGHT_PAREN)
+        while true
+            var input_name = self.expect_name("an input name")
+            if self.stopped
+                return
+            end
+            self.expect(TK_COLON, "Inputs need a type.", "Like this: " + input_name.text + ": int")
+            if self.stopped
+                return
+            end
+            var type = self.parse_type()
+            if self.stopped
+                return
+            end
+            function.inputs.add(Input{name: input_name.text, line: input_name.line, column: input_name.column, length: input_name.length, type: type})
+            if not self.next_is(TK_COMMA)
+                break
+            end
+            self.take()
+        end
+    end
+    self.expect(TK_RIGHT_PAREN, "The inputs need a closing ).", "")
+    if self.stopped
+        return
+    end
+    if self.next_is(TK_COLON)
+        self.take()
+        function.return_type = self.parse_type()
+        if self.stopped
+            return
+        end
+    end
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    function.body = self.parse_block(keyword.line, keyword.column, keyword.length, "func")
+    if self.stopped
+        return
+    end
+    if self.next_is(TK_CASE)
+        self.fail("A case can only go inside a match.", "")
+        return
+    end
+    self.expect(TK_END_WORD, "This function needs an end.", "")
+    if self.stopped
+        return
+    end
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    self.program.functions.add(function)
+end
+
+# --- Statements ---
+
+func Parser.parse_block(line: int, column: int, length: int, opener_name: string): [int]
+    var block: [int] = []
+    self.nesting += 1
+    if self.nesting > DEEPEST_NESTING
+        self.fail("This code is nested too deeply.", "")
+        return block
+    end
+    self.skip_newlines()
+    while not self.next_is(TK_END_WORD) and not self.next_is(TK_ELSE) and not self.next_is(TK_ELIF) and not self.next_is(TK_CASE)
+        if self.next_is(TK_END)
+            self.fail_at(line, column, length, "This " + opener_name + " never gets its end.", "Add a line with end to finish it.")
+            return block
+        end
+        var first = self.peek()
+        var nesting_here = self.nesting
+        var stmt = self.parse_statement()
+        if self.stopped
+            if self.next_is(TK_END) or self.errors_full()
+                return block
+            end
+            self.stopped = false
+            self.nesting = nesting_here
+            self.recover_from_statement(first.kind, first.line, first.column, first.length)
+            if self.stopped
+                return block
+            end
+        else
+            block.add(stmt)
+        end
+    end
+    self.nesting -= 1
+    return block
+end
+
+func Parser.parse_statement(): int
+    var kind = self.peek().kind
+    if kind == TK_VAR
+        return self.parse_var()
+    elif kind == TK_IF
+        return self.parse_if()
+    elif kind == TK_WHILE
+        return self.parse_while()
+    elif kind == TK_FOR
+        return self.parse_for()
+    elif kind == TK_MATCH
+        return self.parse_match()
+    elif kind == TK_BREAK
+        return self.parse_loop_word(ST_BREAK)
+    elif kind == TK_CONTINUE
+        return self.parse_loop_word(ST_CONTINUE)
+    elif kind == TK_RETURN
+        return self.parse_return()
+    elif kind == TK_PRINT
+        return self.parse_print()
+    elif kind == TK_NAME
+        return self.parse_name_statement()
+    elif kind == TK_USE
+        self.fail("use can only go at the top level of a file, outside functions.", "")
+    elif kind == TK_FUNC
+        self.fail("Functions can't go inside functions.", "Move this one outside, and finish the function above with end.")
+    else
+        self.fail("A statement can't start with this.", "")
+    end
+    return -1
+end
+
+func Parser.parse_var(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_VAR, keyword.line, keyword.column, keyword.length)
+    var name = self.expect_name("a variable name")
+    if self.stopped
+        return -1
+    end
+    var s = self.st(stmt)
+    s.name = name.text
+    s.name_line = name.line
+    s.name_column = name.column
+    s.name_length = name.length
+    if self.next_is(TK_COLON)
+        self.take()
+        s.has_type = true
+        s.declared_type = self.parse_type()
+        if self.stopped
+            return -1
+        end
+    end
+    self.expect(TK_ASSIGN, "A variable always needs a value.", "Like this: var " + name.text + " = 0")
+    if self.stopped
+        return -1
+    end
+    s.value = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_if(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_IF, keyword.line, keyword.column, keyword.length)
+    var s = self.st(stmt)
+    s.value = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    s.body = self.parse_block(keyword.line, keyword.column, keyword.length, "if")
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_ELIF)
+        self.take()
+        var condition = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        self.expect_line_end()
+        if self.stopped
+            return -1
+        end
+        var body = self.parse_block(keyword.line, keyword.column, keyword.length, "if")
+        if self.stopped
+            return -1
+        end
+        s.elifs.add(ElifPart{condition: condition, body: body})
+    end
+    if self.next_is(TK_ELSE)
+        self.take()
+        s.has_else = true
+        self.expect_line_end()
+        if self.stopped
+            return -1
+        end
+        s.other_body = self.parse_block(keyword.line, keyword.column, keyword.length, "if")
+        if self.stopped
+            return -1
+        end
+        if self.next_is(TK_ELSE)
+            self.fail("An if can only have one else.", "")
+            return -1
+        end
+        if self.next_is(TK_ELIF)
+            self.fail("An elif must go before the else.", "")
+            return -1
+        end
+    end
+    if self.next_is(TK_CASE)
+        self.fail("A case can only go inside a match, and this if needs its end first.", "")
+        return -1
+    end
+    self.expect(TK_END_WORD, "This if needs an end.", "")
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_while(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_WHILE, keyword.line, keyword.column, keyword.length)
+    var s = self.st(stmt)
+    s.value = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    s.body = self.parse_block(keyword.line, keyword.column, keyword.length, "while")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_ELSE)
+        self.fail("A while can't have an else.", "")
+        return -1
+    end
+    if self.next_is(TK_ELIF)
+        self.fail("A while can't have an elif.", "")
+        return -1
+    end
+    if self.next_is(TK_CASE)
+        self.fail("A case can only go inside a match.", "")
+        return -1
+    end
+    self.expect(TK_END_WORD, "This while needs an end.", "")
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_for(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_FOR, keyword.line, keyword.column, keyword.length)
+    var s = self.st(stmt)
+    var name = self.expect_name("a variable name")
+    if self.stopped
+        return -1
+    end
+    s.name = name.text
+    s.name_line = name.line
+    s.name_column = name.column
+    s.name_length = name.length
+    self.expect(TK_IN, "A for loop needs in after its variable.", "Like this: for i in 0..10")
+    if self.stopped
+        return -1
+    end
+    s.value = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_DOT_DOT)
+        self.take()
+        s.range_end = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    s.body = self.parse_block(keyword.line, keyword.column, keyword.length, "for")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_ELSE)
+        self.fail("A for can't have an else.", "")
+        return -1
+    end
+    if self.next_is(TK_ELIF)
+        self.fail("A for can't have an elif.", "")
+        return -1
+    end
+    if self.next_is(TK_CASE)
+        self.fail("A case can only go inside a match.", "")
+        return -1
+    end
+    self.expect(TK_END_WORD, "This for needs an end.", "")
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_match(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_MATCH, keyword.line, keyword.column, keyword.length)
+    var s = self.st(stmt)
+    s.value = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_CASE)
+        self.take()
+        var value = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        self.expect_line_end()
+        if self.stopped
+            return -1
+        end
+        var body = self.parse_block(keyword.line, keyword.column, keyword.length, "match")
+        if self.stopped
+            return -1
+        end
+        s.cases.add(CasePart{value: value, body: body})
+    end
+    if self.next_is(TK_ELSE)
+        self.take()
+        s.has_else = true
+        self.expect_line_end()
+        if self.stopped
+            return -1
+        end
+        s.other_body = self.parse_block(keyword.line, keyword.column, keyword.length, "match")
+        if self.stopped
+            return -1
+        end
+        if self.next_is(TK_CASE)
+            self.fail("A case must go before the else.", "")
+            return -1
+        end
+    end
+    if self.next_is(TK_END)
+        self.fail_at(keyword.line, keyword.column, keyword.length, "This match never gets its end.", "Add a line with end to finish it.")
+        return -1
+    end
+    self.expect(TK_END_WORD, "A match can only hold case and else lines here.", "Like this: case Mood.CALM")
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_loop_word(kind: int): int
+    var word = self.take()
+    var stmt = self.program.new_stmt(kind, word.line, word.column, word.length)
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func is_operation_assign(kind: int): bool
+    return kind == TK_PLUS_ASSIGN or kind == TK_MINUS_ASSIGN or kind == TK_STAR_ASSIGN or kind == TK_SLASH_ASSIGN
+end
+
+func operation_of(kind: int): int
+    if kind == TK_PLUS_ASSIGN
+        return OP_ADD
+    elif kind == TK_MINUS_ASSIGN
+        return OP_SUBTRACT
+    elif kind == TK_STAR_ASSIGN
+        return OP_MULTIPLY
+    end
+    return OP_DIVIDE
+end
+
+func Parser.parse_return(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_RETURN, keyword.line, keyword.column, keyword.length)
+    if not self.next_is(TK_NEWLINE)
+        var value = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        self.st(stmt).value = value
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_print(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_PRINT, keyword.line, keyword.column, keyword.length)
+    self.expect(TK_LEFT_PAREN, "print needs ( after it.", "Like this: print(42)")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_RIGHT_PAREN)
+        self.fail("print needs one value.", "Like this: print(42)")
+        return -1
+    end
+    var value = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    self.st(stmt).value = value
+    if self.next_is(TK_COMMA)
+        self.fail("print takes one value at a time.", "Use one print for each value.")
+        return -1
+    end
+    self.expect(TK_RIGHT_PAREN, "print needs a closing ).", "")
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+func Parser.parse_name_statement(): int
+    var name = self.peek()
+    var stmt = self.program.new_stmt(ST_VAR, name.line, name.column, name.length)
+    var s = self.st(stmt)
+    var start = self.parse_postfix()
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_PERCENT) and self.tokens[self.at + 1].kind == TK_ASSIGN
+        self.fail_at(name.line, name.column, name.length, "Jamo doesn't have %=.", "Write it out: " + name.text + " = " + name.text + " % 2")
+        return -1
+    end
+    var first = self.ex(start)
+    if self.next_is(TK_ASSIGN) or is_operation_assign(self.peek().kind)
+        if first.kind != EX_NAME and first.kind != EX_INDEX and first.kind != EX_FIELD
+            self.fail_at(first.line, first.column, first.length, "Only a variable, a field or an item can be set.", "")
+            return -1
+        end
+        var kind = self.take().kind
+        s.kind = ST_ASSIGN
+        s.has_operation = kind != TK_ASSIGN
+        s.operation = operation_of(kind)
+        if first.kind == EX_NAME
+            s.name = first.name
+            s.name_line = first.line
+            s.name_column = first.column
+            s.name_length = first.length
+        else
+            s.target = start
+        end
+        s.value = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+    elif first.kind == EX_CALL or first.kind == EX_METHOD_CALL
+        s.kind = ST_CALL
+        s.value = start
+    elif first.kind == EX_NAME
+        self.fail_at(name.line, name.column, name.length, "This line doesn't do anything.", "A statement can set a variable, like " + name.text + " = 1, or call a function, like " + name.text + "().")
+        return -1
+    else
+        self.fail_at(first.line, first.column, first.length, "This line doesn't do anything.", "")
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+# --- Expressions ---
+
+func Parser.parse_expression(): int
+    self.nesting += 1
+    if self.nesting > DEEPEST_NESTING
+        self.fail("This expression is nested too deeply.", "")
+        return -1
+    end
+    var value = self.parse_or()
+    if self.stopped
+        return -1
+    end
+    self.nesting -= 1
+    return value
+end
+
+func Parser.parse_or(): int
+    var left = self.parse_and()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_OR)
+        self.take()
+        var right = self.parse_and()
+        if self.stopped
+            return -1
+        end
+        left = self.make_binary(OP_OR, left, right)
+        if self.stopped
+            return -1
+        end
+    end
+    return left
+end
+
+func Parser.parse_and(): int
+    var left = self.parse_not()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_AND)
+        self.take()
+        var right = self.parse_not()
+        if self.stopped
+            return -1
+        end
+        left = self.make_binary(OP_AND, left, right)
+        if self.stopped
+            return -1
+        end
+    end
+    return left
+end
+
+func Parser.parse_not(): int
+    if not self.next_is(TK_NOT)
+        return self.parse_equality()
+    end
+    var word = self.take()
+    self.nesting += 1
+    if self.nesting > DEEPEST_NESTING
+        self.fail("This expression is nested too deeply.", "")
+        return -1
+    end
+    var inner = self.parse_not()
+    if self.stopped
+        return -1
+    end
+    self.nesting -= 1
+    var left = self.ex(inner)
+    var place = self.program.new_expr(EX_NOT, word.line, word.column, length_to(word.line, word.column, word.length, left.line, left.column, left.length))
+    var e = self.ex(place)
+    e.left = inner
+    e.depth = left.depth + 1
+    return place
+end
+
+func Parser.make_binary(op: int, left: int, right: int): int
+    var a = self.ex(left)
+    var b = self.ex(right)
+    var depth = a.depth
+    if b.depth > depth
+        depth = b.depth
+    end
+    depth += 1
+    if depth > TALLEST_EXPRESSION
+        self.fail_at(a.line, a.column, a.length, "This expression is too long.", "Split it across a few variables.")
+        return -1
+    end
+    var place = self.program.new_expr(EX_BINARY, a.line, a.column, length_to(a.line, a.column, a.length, b.line, b.column, b.length))
+    var e = self.ex(place)
+    e.op = op
+    e.depth = depth
+    e.left = left
+    e.right = right
+    return place
+end
+
+func Parser.parse_equality(): int
+    var left = self.parse_comparison()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_EQUAL) or self.next_is(TK_NOT_EQUAL)
+        var op = OP_NOT_EQUAL
+        if self.take().kind == TK_EQUAL
+            op = OP_EQUAL
+        end
+        var right = self.parse_comparison()
+        if self.stopped
+            return -1
+        end
+        left = self.make_binary(op, left, right)
+        if self.stopped
+            return -1
+        end
+    end
+    return left
+end
+
+func Parser.parse_comparison(): int
+    var left = self.parse_sum()
+    if self.stopped
+        return -1
+    end
+    while true
+        var kind = self.peek().kind
+        var op = -1
+        if kind == TK_LESS
+            op = OP_LESS
+        elif kind == TK_GREATER
+            op = OP_GREATER
+        elif kind == TK_LESS_EQUAL
+            op = OP_LESS_EQUAL
+        elif kind == TK_GREATER_EQUAL
+            op = OP_GREATER_EQUAL
+        else
+            return left
+        end
+        self.take()
+        var right = self.parse_sum()
+        if self.stopped
+            return -1
+        end
+        left = self.make_binary(op, left, right)
+        if self.stopped
+            return -1
+        end
+    end
+    return left
+end
+
+func Parser.parse_sum(): int
+    var left = self.parse_product()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_PLUS) or self.next_is(TK_MINUS)
+        var op = OP_SUBTRACT
+        if self.take().kind == TK_PLUS
+            op = OP_ADD
+        end
+        var right = self.parse_product()
+        if self.stopped
+            return -1
+        end
+        left = self.make_binary(op, left, right)
+        if self.stopped
+            return -1
+        end
+    end
+    return left
+end
+
+func Parser.parse_product(): int
+    var left = self.parse_unary()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_STAR) or self.next_is(TK_SLASH) or self.next_is(TK_PERCENT)
+        var kind = self.take().kind
+        var op = OP_REMAINDER
+        if kind == TK_STAR
+            op = OP_MULTIPLY
+        elif kind == TK_SLASH
+            op = OP_DIVIDE
+        end
+        var right = self.parse_unary()
+        if self.stopped
+            return -1
+        end
+        left = self.make_binary(op, left, right)
+        if self.stopped
+            return -1
+        end
+    end
+    return left
+end
+
+func Parser.parse_unary(): int
+    if not self.next_is(TK_MINUS)
+        return self.parse_postfix()
+    end
+    var minus = self.take()
+    self.nesting += 1
+    if self.nesting > DEEPEST_NESTING
+        self.fail("This expression is nested too deeply.", "")
+        return -1
+    end
+    var inner = self.parse_unary()
+    if self.stopped
+        return -1
+    end
+    self.nesting -= 1
+    var left = self.ex(inner)
+    var place = self.program.new_expr(EX_NEGATE, minus.line, minus.column, length_to(minus.line, minus.column, minus.length, left.line, left.column, left.length))
+    var e = self.ex(place)
+    e.left = inner
+    e.depth = left.depth + 1
+    return place
+end
+
+# What can follow a value: text[i], items.add(1)
+func Parser.parse_postfix(): int
+    var value = self.parse_primary()
+    if self.stopped
+        return -1
+    end
+    while self.next_is(TK_LEFT_BRACKET) or self.next_is(TK_DOT)
+        if self.next_is(TK_DOT)
+            value = self.parse_after_dot(value)
+            if self.stopped
+                return -1
+            end
+            continue
+        end
+        self.take()
+        var right = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        var closing = self.expect(TK_RIGHT_BRACKET, "This needs a closing ].", "")
+        if self.stopped
+            return -1
+        end
+        var v = self.ex(value)
+        var depth = v.depth
+        if self.ex(right).depth > depth
+            depth = self.ex(right).depth
+        end
+        depth += 1
+        if depth > TALLEST_EXPRESSION
+            self.fail_at(v.line, v.column, v.length, "This expression is too long.", "Split it across a few variables.")
+            return -1
+        end
+        var place = self.program.new_expr(EX_INDEX, v.line, v.column, length_to(v.line, v.column, v.length, closing.line, closing.column, closing.length))
+        var e = self.ex(place)
+        e.right = right
+        e.depth = depth
+        e.left = value
+        value = place
+    end
+    return value
+end
+
+func Parser.parse_after_dot(value: int): int
+    self.take()
+    var name = self.expect(TK_NAME, "This needs a name after its dot.", "")
+    if self.stopped
+        return -1
+    end
+    var v = self.ex(value)
+    var place = self.program.new_expr(EX_FIELD, v.line, v.column, v.length)
+    var e = self.ex(place)
+    e.name = name.text
+    e.depth = v.depth + 1
+    if self.next_is(TK_LEFT_PAREN)
+        self.parse_call(place)
+        if self.stopped
+            return -1
+        end
+        e.kind = EX_METHOD_CALL
+    else
+        e.kind = EX_FIELD
+        e.length = length_to(e.line, e.column, e.length, name.line, name.column, name.length)
+    end
+    if v.depth + 1 > e.depth
+        e.depth = v.depth + 1
+    end
+    if e.depth > TALLEST_EXPRESSION
+        self.fail_at(v.line, v.column, v.length, "This expression is too long.", "Split it across a few variables.")
+        return -1
+    end
+    e.left = value
+    return place
+end
+
+func Parser.parse_struct_literal(place: int): int
+    self.take()
+    var e = self.ex(place)
+    e.kind = EX_STRUCT_LITERAL
+    while not self.next_is(TK_RIGHT_BRACE)
+        var field = self.expect_name("a field name, like health: 3")
+        if self.stopped
+            return -1
+        end
+        e.field_names.add(field.text)
+        e.field_lines.add(field.line)
+        e.field_columns.add(field.column)
+        e.field_lengths.add(field.length)
+        self.expect(TK_COLON, "A field needs : before its value.", "Like this: " + field.text + ": 3")
+        if self.stopped
+            return -1
+        end
+        var value = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        e.inputs.add(value)
+        if not self.next_is(TK_COMMA)
+            break
+        end
+        self.take()
+    end
+    var closing = self.expect(TK_RIGHT_BRACE, "This struct needs a closing }.", "")
+    if self.stopped
+        return -1
+    end
+    e.length = length_to(e.line, e.column, e.length, closing.line, closing.column, closing.length)
+    self.deepen(e)
+    return place
+end
+
+# A list's depth is one more than its deepest part
+func Parser.deepen(e: Expr)
+    for input in e.inputs
+        if self.ex(input).depth + 1 > e.depth
+            e.depth = self.ex(input).depth + 1
+        end
+    end
+end
+
+func Parser.parse_array_literal(place: int): int
+    self.take()
+    var e = self.ex(place)
+    while not self.next_is(TK_RIGHT_BRACKET)
+        var value = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        e.inputs.add(value)
+        if not self.next_is(TK_COMMA)
+            break
+        end
+        self.take()
+    end
+    var closing = self.expect(TK_RIGHT_BRACKET, "This array needs a closing ].", "")
+    if self.stopped
+        return -1
+    end
+    e.kind = EX_ARRAY_LITERAL
+    e.length = length_to(e.line, e.column, e.length, closing.line, closing.column, closing.length)
+    self.deepen(e)
+    return place
+end
+
+func Parser.parse_primary(): int
+    var token = self.peek()
+    var place = self.program.new_expr(EX_NUMBER, token.line, token.column, token.length)
+    var e = self.ex(place)
+    var kind = token.kind
+    if kind == TK_NUMBER
+        self.take()
+        e.number = token.number
+        return place
+    elif kind == TK_FLOAT
+        self.take()
+        e.kind = EX_FLOAT
+        e.real = token.real
+        return place
+    elif kind == TK_TRUE or kind == TK_FALSE
+        self.take()
+        e.kind = EX_BOOL
+        e.truth = kind == TK_TRUE
+        return place
+    elif kind == TK_STRING
+        self.take()
+        e.kind = EX_STRING
+        e.text = token.value
+        return place
+    elif kind == TK_LEFT_BRACKET
+        return self.parse_array_literal(place)
+    elif kind == TK_FSTRING_START
+        return self.parse_fstring(place)
+    elif kind == TK_NOT
+        self.fail("not can't go here without parentheses.", "Like this: x == (not y)")
+    elif kind == TK_RIGHT_BRACE
+        self.fail("This { } is empty.", "Put a value inside, like {score}.")
+    elif kind == TK_STRING_WORD
+        return self.parse_builtin(place, EX_CONVERT, TYPE_STRING)
+    elif kind == TK_INT
+        return self.parse_builtin(place, EX_CONVERT, TYPE_INT)
+    elif kind == TK_FLOAT_WORD
+        return self.parse_builtin(place, EX_CONVERT, TYPE_FLOAT)
+    elif kind == TK_LEN
+        return self.parse_builtin(place, EX_LENGTH, TYPE_NOTHING)
+    elif kind == TK_NAME
+        self.take()
+        e.name = token.text
+        if self.next_is(TK_LESS) and self.looks_like_type_args()
+            e.type_args = self.parse_type_args()
+            if self.stopped
+                return -1
+            end
+            if self.next_is(TK_LEFT_PAREN)
+                return self.parse_call(place)
+            end
+            return self.parse_struct_literal(place)
+        end
+        if self.next_is(TK_LEFT_PAREN)
+            return self.parse_call(place)
+        end
+        if self.next_is(TK_LEFT_BRACE)
+            return self.parse_struct_literal(place)
+        end
+        e.kind = EX_NAME
+        return place
+    elif kind == TK_LEFT_PAREN
+        self.take()
+        var inner = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        var closing = self.expect(TK_RIGHT_PAREN, "This needs a closing ).", "")
+        if self.stopped
+            return -1
+        end
+        var i = self.ex(inner)
+        i.column = token.column
+        i.line = token.line
+        i.length = length_to(token.line, token.column, token.length, closing.line, closing.column, closing.length)
+        return inner
+    elif kind == TK_PRINT
+        self.fail("print doesn't give back a value, so it can only be its own statement.", "")
+    elif kind == TK_NEWLINE or kind == TK_END_WORD or kind == TK_END
+        self.fail("This line stops before it's finished. It needs a value here.", "")
+    else
+        self.fail("This needs a value here, like a number, a name or a function call.", "")
+    end
+    return -1
+end
+
+# The lexer has already checked the f-string's text and that every { has a }
+func Parser.parse_fstring(place: int): int
+    self.take()
+    var e = self.ex(place)
+    e.kind = EX_FSTRING
+    while not self.next_is(TK_FSTRING_END)
+        if self.next_is(TK_FSTRING_TEXT)
+            var part = self.take()
+            var text = self.program.new_expr(EX_STRING, part.line, part.column, part.length)
+            self.ex(text).text = part.value
+            e.inputs.add(text)
+        else
+            self.expect(TK_LEFT_BRACE, "This f-string has something unexpected here.", "")
+            if self.stopped
+                return -1
+            end
+            var value = self.parse_expression()
+            if self.stopped
+                return -1
+            end
+            e.inputs.add(value)
+            self.expect(TK_RIGHT_BRACE, "This { needs a closing }.", "")
+            if self.stopped
+                return -1
+            end
+        end
+    end
+    var closing = self.take()
+    e.length = length_to(e.line, e.column, e.length, closing.line, closing.column, closing.length)
+    self.deepen(e)
+    return place
+end
+
+# len(x), string(x), int(x) and float(x): each takes exactly one value
+func Parser.parse_builtin(place: int, kind: int, convert_to: int): int
+    var word = self.take().text
+    var e = self.ex(place)
+    e.kind = kind
+    e.convert_to = convert_to
+    self.expect(TK_LEFT_PAREN, word + " needs ( after it.", "Like this: " + word + "(x)")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_RIGHT_PAREN)
+        self.fail(word + " needs one value.", "Like this: " + word + "(x)")
+        return -1
+    end
+    var left = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    e.left = left
+    if self.next_is(TK_COMMA)
+        self.fail(word + " takes one value.", "")
+        return -1
+    end
+    var closing = self.expect(TK_RIGHT_PAREN, word + " needs a closing ).", "")
+    if self.stopped
+        return -1
+    end
+    e.length = length_to(e.line, e.column, e.length, closing.line, closing.column, closing.length)
+    e.depth = self.ex(left).depth + 1
+    return place
+end
+
+func Parser.parse_call(place: int): int
+    var call = self.ex(place)
+    call.kind = EX_CALL
+    self.take()
+    if not self.next_is(TK_RIGHT_PAREN)
+        while true
+            var value = self.parse_expression()
+            if self.stopped
+                return -1
+            end
+            call.inputs.add(value)
+            if not self.next_is(TK_COMMA)
+                break
+            end
+            self.take()
+        end
+    end
+    var closing = self.expect(TK_RIGHT_PAREN, "This call needs a closing ).", "")
+    if self.stopped
+        return -1
+    end
+    call.length = length_to(call.line, call.column, call.length, closing.line, closing.column, closing.length)
+    self.deepen(call)
+    return place
+end

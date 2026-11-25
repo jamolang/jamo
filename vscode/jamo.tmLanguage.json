@@ -1,0 +1,75 @@
+{
+    "name": "Jamo",
+    "scopeName": "source.jamo",
+    "patterns": [
+        { "include": "#comment" },
+        { "include": "#fstring" },
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#declaration" },
+        { "include": "#keyword" },
+        { "include": "#call" }
+    ],
+    "repository": {
+        "comment": { "name": "comment.line.number-sign.jamo", "match": "#.*$" },
+        "escape": { "name": "constant.character.escape.jamo", "match": "\\\\[ntr\"\\\\]" },
+        "string": {
+            "name": "string.quoted.double.jamo",
+            "begin": "\"",
+            "end": "\"|$",
+            "patterns": [{ "include": "#escape" }]
+        },
+        "fstring": {
+            "name": "string.quoted.double.jamo",
+            "begin": "\\bf\"",
+            "end": "\"|$",
+            "patterns": [
+                { "include": "#escape" },
+                { "name": "constant.character.escape.jamo", "match": "\\{\\{|\\}\\}" },
+                {
+                    "name": "meta.embedded.expression.jamo",
+                    "begin": "\\{",
+                    "end": "\\}",
+                    "beginCaptures": { "0": { "name": "punctuation.section.embedded.jamo" } },
+                    "endCaptures": { "0": { "name": "punctuation.section.embedded.jamo" } },
+                    "patterns": [{ "include": "$self" }]
+                }
+            ]
+        },
+        "number": { "name": "constant.numeric.jamo", "match": "\\b[0-9]+(\\.[0-9]+)?\\b" },
+        "declaration": {
+            "patterns": [
+                {
+                    "match": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:(\\.)([A-Za-z_][A-Za-z0-9_]*))?",
+                    "captures": {
+                        "1": { "name": "keyword.declaration.jamo" },
+                        "2": { "name": "entity.name.function.jamo" },
+                        "4": { "name": "entity.name.function.jamo" }
+                    }
+                },
+                {
+                    "match": "\\b(struct|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.declaration.jamo" },
+                        "2": { "name": "entity.name.type.jamo" }
+                    }
+                }
+            ]
+        },
+        "keyword": {
+            "patterns": [
+                { "name": "keyword.control.jamo", "match": "\\b(if|elif|else|while|for|in|match|case|break|continue|return|end|use)\\b" },
+                { "name": "keyword.declaration.jamo", "match": "\\b(var|const|func|struct|enum|extern)\\b" },
+                { "name": "keyword.operator.word.jamo", "match": "\\b(and|or|not)\\b" },
+                { "name": "constant.language.jamo", "match": "\\b(true|false)\\b" },
+                { "name": "variable.language.jamo", "match": "\\bself\\b" },
+                { "name": "support.type.jamo", "match": "\\b(int|float|bool|string)\\b" },
+                { "name": "support.function.jamo", "match": "\\b(print|len|input|args|read_file|write_file|exists)\\b" }
+            ]
+        },
+        "call": {
+            "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+            "captures": { "1": { "name": "entity.name.function.jamo" } }
+        }
+    }
+}

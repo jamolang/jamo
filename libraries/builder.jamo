@@ -1,0 +1,67 @@
+# builder: builds big text quickly. use "builder.jamo"
+#
+# Joining text with + copies all of it each time, so building a big text piece by piece gets slow.
+# A TextBuilder keeps the pieces in one buffer that doubles when it's full, and makes the text once
+# at the end.
+
+struct TextBuilder
+    buffer: int
+    capacity: int
+    used: int
+end
+
+func new_builder(): TextBuilder
+    return TextBuilder{buffer: memory(256), capacity: 256, used: 0}
+end
+
+func TextBuilder.room(extra: int)
+    if self.used + extra <= self.capacity
+        return
+    end
+    var size = self.capacity
+    while self.used + extra > size
+        size = size * 2
+    end
+    var bigger = memory(size)
+    for i in 0..(self.used + 7) / 8
+        poke_i64(bigger, i * 8, peek_i64(self.buffer, i * 8))
+    end
+    self.buffer = bigger
+    self.capacity = size
+end
+
+func TextBuilder.add(text: string)
+    var count = len(text)
+    self.room(count)
+    for i in 0..count
+        poke_u8(self.buffer, self.used + i, byte(text, i))
+    end
+    self.used += count
+end
+
+# Adds the text, then a new line
+func TextBuilder.line(text: string)
+    self.add(text)
+    self.room(1)
+    poke_u8(self.buffer, self.used, 10)
+    self.used += 1
+end
+
+func TextBuilder.add_int(value: int)
+    self.add(string(value))
+end
+
+# How many bytes it holds so far
+func TextBuilder.length(): int
+    return self.used
+end
+
+# Everything added, as one text
+func TextBuilder.text(): string
+    return memory_text(self.buffer, self.used)
+end
+
+# Starts over, keeping its buffer
+func TextBuilder.clear()
+    self.used = 0
+end

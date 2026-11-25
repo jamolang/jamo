@@ -1,0 +1,4 @@
+float_plus_int.jamo line 2: This mixes an int and a float, which Jamo doesn't do by itself.
+        print(1 + 1.5)
+              ^^^^^^^
+Use float(x) or int(x) to make them match.

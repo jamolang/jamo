@@ -1,0 +1,4 @@
+struct_unknown_literal.jamo line 6: There's no struct called Enmy.
+        print(Enmy{health: 1})
+              ^^^^^^^^^^^^^^^
+Did you mean Enemy?

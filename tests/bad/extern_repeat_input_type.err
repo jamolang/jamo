@@ -1,0 +1,4 @@
+extern_repeat_input_type.jamo line 3: QueryPerformanceCounter is already declared in window.jamo (built in) line 13, and this one is different: its input 1 is i32 here but int there.
+    extern "kernel32.dll" func QueryPerformanceCounter(place: i32): bool
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+An extern can be declared again only if its DLL, inputs and answer are exactly the same.

@@ -1,0 +1,3 @@
+array_wrong_declared.jamo line 2: items is declared as a [int], but this value is a [string].
+        var items: [int] = ["a"]
+                           ^^^^^

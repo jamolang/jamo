@@ -1,0 +1,4 @@
+generic_contains_itself.jamo line 1: Loop<int> can't contain itself, since each one would need another one inside it, forever.
+    struct Loop<T>
+           ^^^^
+An array is fine, because it can be empty: [Loop<int>]

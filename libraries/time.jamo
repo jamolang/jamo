@@ -1,0 +1,118 @@
+# time: seconds since the program started, today's date and time, and waiting. use "time.jamo"
+#
+# Jamo has no program-wide variables, so the clock count when the program started is kept in bytes 24
+# to 47 of the .exe's DOS header in memory, which Windows never reads once the program is loaded (see
+# math.jamo, which uses 8 to 23). The first call works it out from when Windows made the process, so
+# it counts from the real start, and later calls only read the performance counter, with no memory.
+
+extern "kernel32.dll" func QueryPerformanceCounter(place: int): bool
+extern "kernel32.dll" func QueryPerformanceFrequency(place: int): bool
+extern "kernel32.dll" func Sleep(milliseconds: i32)
+extern "kernel32.dll" func GetModuleHandleW(name: int): int
+extern "kernel32.dll" func VirtualProtect(place: int, size: int, protect: i32, old: int): bool
+extern "kernel32.dll" func GetCurrentProcess(): int
+extern "kernel32.dll" func GetProcessTimes(process: int, created: int, ended: int, kernel: int, user: int): bool
+extern "kernel32.dll" func GetSystemTimePreciseAsFileTime(place: int)
+extern "kernel32.dll" func GetLocalTime(place: int)
+
+struct DateTime
+    year: int
+    month: int
+    day: int
+    weekday: int
+    hour: int
+    minute: int
+    second: int
+    millisecond: int
+end
+
+# --- Seconds ---
+
+# Works out the counter's value when the program started, on the first call. The counter's speed
+# never changes while Windows runs, so it's kept at 40, and 32 is room for the counter to write to
+func time_setup(header: int)
+    if not VirtualProtect(header, 64, 4, memory(8))
+        fail("time couldn't set up its clock.")
+    end
+    QueryPerformanceFrequency(header + 40)
+    var created = memory(8)
+    var unused = memory(8)
+    var clock = memory(8)
+    GetProcessTimes(GetCurrentProcess(), created, unused, unused, unused)
+    GetSystemTimePreciseAsFileTime(clock)
+    QueryPerformanceCounter(header + 32)
+    var ticks = peek_i64(clock, 0) - peek_i64(created, 0)
+    if ticks < 0
+        ticks = 0
+    end
+    poke_i64(header, 24, peek_i64(header, 32) - int(float(ticks) / 10000000.0 * float(peek_i64(header, 40))))
+end
+
+# Seconds since the program started, as a float with better than a microsecond's detail. It only goes up
+func seconds_since_start(): float
+    var header = GetModuleHandleW(0)
+    if peek_i64(header, 24) == 0
+        time_setup(header)
+    end
+    QueryPerformanceCounter(header + 32)
+    var seconds = float(peek_i64(header, 32) - peek_i64(header, 24)) / float(peek_i64(header, 40))
+    if seconds < 0.0
+        return 0.0
+    end
+    return seconds
+end
+
+# Waits this many seconds, to about a millisecond, without using the processor
+func sleep(seconds: float)
+    if not (seconds >= 0.0 and seconds <= 1000000000.0)
+        fail(f"sleep needs from 0.0 to 1000000000.0 seconds, not {seconds}.")
+    end
+    var left = int(seconds * 1000.0 + 0.5)
+    while left > 1000000000
+        Sleep(1000000000)
+        left = left - 1000000000
+    end
+    Sleep(left)
+end
+
+# Waits this many milliseconds
+func sleep_ms(milliseconds: int)
+    sleep(float(milliseconds) / 1000.0)
+end
+
+# Whole milliseconds since the program started
+func time_ms(): int
+    return int(seconds_since_start() * 1000.0)
+end
+
+# --- The date and time of day ---
+
+# The PC's date and time now, in its own time zone. weekday is 0 for Sunday up to 6 for Saturday
+func now(): DateTime
+    var place = memory(16)
+    GetLocalTime(place)
+    return DateTime{year: peek_u16(place, 0), month: peek_u16(place, 2), weekday: peek_u16(place, 4), day: peek_u16(place, 6), hour: peek_u16(place, 8), minute: peek_u16(place, 10), second: peek_u16(place, 12), millisecond: peek_u16(place, 14)}
+end
+
+func time_two_digits(number: int): string
+    if number < 10
+        return f"0{number}"
+    end
+    return string(number)
+end
+
+# Like 2026-11-03
+func DateTime.date_text(): string
+    return f"{self.year}-{time_two_digits(self.month)}-{time_two_digits(self.day)}"
+end
+
+# Like 09:05:30, on a 24-hour clock
+func DateTime.time_text(): string
+    return f"{time_two_digits(self.hour)}:{time_two_digits(self.minute)}:{time_two_digits(self.second)}"
+end
+
+# Like Tuesday
+func DateTime.weekday_name(): string
+    var names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    return names[self.weekday]
+end

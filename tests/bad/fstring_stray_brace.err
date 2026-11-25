@@ -1,0 +1,4 @@
+fstring_stray_brace.jamo line 2: This } has no { before it.
+        print(f"a}b")
+                 ^
+To show a } in an f-string, write }}.

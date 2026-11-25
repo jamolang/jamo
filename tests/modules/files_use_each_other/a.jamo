@@ -1,0 +1,10 @@
+use "b.jamo"
+use "main.jamo"
+use "a.jamo"
+
+func from_a(n: int): int
+    if n == 0
+        return 0
+    end
+    return from_b(n - 1) + 1
+end

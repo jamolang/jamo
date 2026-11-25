@@ -1,0 +1,3 @@
+callback_not_a_function.jamo line 2: There's no Jamo function called nope.
+        print(callback(nope))
+                       ^^^^

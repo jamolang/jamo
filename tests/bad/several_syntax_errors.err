@@ -1,0 +1,18 @@
+several_syntax_errors.jamo line 2: This needs a variable name.
+        var = 1
+            ^
+several_syntax_errors.jamo line 5: Each statement goes on its own line, but there's more on this one.
+        var y = 2 3
+                  ^
+several_syntax_errors.jamo line 6: This line stops before it's finished. It needs a value here.
+        if
+          ^
+several_syntax_errors.jamo line 7: This needs a variable name.
+            var = 2
+                ^
+several_syntax_errors.jamo line 13: This needs an input name.
+    end
+    ^
+several_syntax_errors.jamo line 16: This line stops before it's finished. It needs a value here.
+        while
+             ^

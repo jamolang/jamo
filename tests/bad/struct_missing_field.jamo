@@ -1,0 +1,8 @@
+struct Enemy
+    health: int
+    speed: float
+end
+
+func main()
+    print(Enemy{health: 1})
+end

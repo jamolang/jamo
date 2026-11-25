@@ -1,0 +1,6 @@
+func takes(a: float)
+end
+
+func main()
+    print(callback(takes))
+end

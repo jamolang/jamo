@@ -1,0 +1,25 @@
+3
+a
+2.5
+none
+5
+hi
+Pair<int, string>{left: 5, right: "hi"}
+Pair<string, int>{left: "hi", right: 5}
+7
+3
+Box<int>{items: [7, 8, 8]}
+Sam
+Box<Pair<int, [string]>>{items: [Pair<int, [string]>{left: 1, right: ["x", "y"]}]}
+y
+3
+5
+[3, 2, 1]
+["a"]
+Color.GREEN
+Box<Point>{items: [Point{x: 10, y: 2}]}
+4
+given types
+true
+true
+false

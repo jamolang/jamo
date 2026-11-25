@@ -1,0 +1,39 @@
+# Fetch Page: downloads a web page and shows its status, size, title and first lines. Give it a web
+# address, or it asks a test server on this PC: jamo run fetch_page.jamo http://127.0.0.1:8000/
+
+use "net.jamo"
+use "text.jamo"
+
+func main()
+    var address = "http://127.0.0.1:8000/"
+    if len(args()) > 0
+        address = args()[0]
+    end
+    print(f"Fetching {address}")
+    var net = start_net()
+    net.set_timeout(10.0)
+    var page = net.get(address)
+    if page.error != ""
+        print(f"That didn't work: {page.error}")
+        return
+    end
+    print(f"Status {page.status}, {len(page.text)} bytes")
+    var start = find(page.text, "<title>")
+    var finish = find(page.text, "</title>")
+    if start >= 0 and finish > start
+        print(f"Title: {trim(slice(page.text, start + 7, finish))}")
+    end
+    var lines = split(page.text, "\n")
+    var shown = 0
+    for line in lines
+        var clean = trim(line)
+        if clean != "" and shown < 5
+            print(f"  {clean}")
+            shown += 1
+        end
+    end
+    if len(lines) > shown
+        print(f"  ... {len(lines)} lines in all")
+    end
+    net.close()
+end

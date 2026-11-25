@@ -1,0 +1,4 @@
+code_outside_functions.jamo line 1: Only functions, structs, enums, constants, variables, extern and use lines can go at the top level of a file.
+    print(1)
+    ^^^^^
+Put this code inside a function, like func main().

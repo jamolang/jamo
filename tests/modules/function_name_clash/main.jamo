@@ -1,0 +1,7 @@
+use "other.jamo"
+
+func shared()
+end
+
+func main()
+end

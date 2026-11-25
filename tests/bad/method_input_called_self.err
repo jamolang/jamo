@@ -1,0 +1,3 @@
+method_input_called_self.jamo line 5: There's already an input called self.
+    func Enemy.hit(self: int)
+                   ^^^^

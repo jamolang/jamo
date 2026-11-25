@@ -1,0 +1,4 @@
+generic_type_is_struct.jamo line 5: Foo is already a type, so it can't name a generic's type too.
+    func show<Foo>(item: Foo)
+              ^^^
+Use a different name, like T.

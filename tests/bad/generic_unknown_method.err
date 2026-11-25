@@ -1,0 +1,4 @@
+generic_unknown_method.jamo line 11: Box<int> has no function called gte.
+        print(b.gte())
+              ^^^^^^^
+Did you mean get?

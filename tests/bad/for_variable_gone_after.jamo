@@ -1,0 +1,6 @@
+func main()
+    for count in 0..3
+        print(count)
+    end
+    print(count)
+end

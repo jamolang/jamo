@@ -1,0 +1,3 @@
+write_file_wrong_count.jamo line 2: write_file takes 2 inputs, but this gives it 1.
+        write_file("a")
+        ^^^^^^^^^^^^^^^

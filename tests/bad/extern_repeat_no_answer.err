@@ -1,0 +1,4 @@
+extern_repeat_no_answer.jamo line 2: GetTickCount is already declared on line 1, and this one is different: it answers with nothing here but i32 there.
+    extern "kernel32.dll" func GetTickCount()
+                               ^^^^^^^^^^^^
+An extern can be declared again only if its DLL, inputs and answer are exactly the same.

@@ -1,0 +1,3 @@
+break_outside_loop.jamo line 2: break can only go inside a loop.
+        break
+        ^^^^^

@@ -1,0 +1,9 @@
+func f(n: int): int
+    match n
+        case 1
+            return 1
+    end
+end
+
+func main()
+end

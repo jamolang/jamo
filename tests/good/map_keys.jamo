@@ -1,0 +1,57 @@
+# Map with enum, bool and int keys, values that are structs and arrays, and growing past its first size
+use "map.jamo"
+
+enum Mood
+    CALM
+    ANGRY
+    SLEEPY
+end
+
+struct Spot
+    x: int
+    y: int
+end
+
+func main()
+    var moods = new_map<Mood, string>()
+    moods.set(Mood.CALM, "fine")
+    moods.set(Mood.SLEEPY, "zzz")
+    print(moods.get(Mood.SLEEPY))
+    print(moods.has(Mood.ANGRY))
+    print(moods.get_or(Mood.ANGRY, "unknown"))
+    var flags = new_map<bool, int>()
+    flags.set(true, 1)
+    flags.set(false, 0)
+    flags.set(true, 2)
+    print(flags.get(true))
+    print(flags.size())
+    var places = new_map<string, Spot>()
+    places.set("home", Spot{x: 1, y: 2})
+    places.get("home").x = 5
+    print(places.get("home"))
+    var lists = new_map<int, [string]>()
+    lists.set(1, ["a"])
+    lists.get(1).add("b")
+    print(lists.get(1))
+    var big = new_map<int, int>()
+    for i in 0..1000
+        big.set(i * 7, i)
+    end
+    var total = 0
+    for i in 0..1000
+        total += big.get(i * 7)
+    end
+    print(total)
+    print(big.size())
+    for i in 0..500
+        big.remove(i * 7)
+    end
+    print(big.size())
+    print(big.has(7))
+    print(big.get(3500))
+    print(big.remove(3500))
+    print(big.remove(3500))
+    print(hash_of(-1) >= 0)
+    print(hash_of(Mood.ANGRY) == hash_of(Mood.ANGRY))
+    print(hash_of("") >= 0)
+end

@@ -1,0 +1,3 @@
+main.jamo line 1: use needs a file that ends in .jamo.
+    use "notes.txt"
+        ^^^^^^^^^^^

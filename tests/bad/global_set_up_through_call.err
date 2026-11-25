@@ -1,0 +1,4 @@
+global_set_up_through_call.jamo line 1: count uses step, which isn't set up yet when this runs.
+    var total = count()
+                ^^^^^^^
+Variables outside functions are set up in order, top to bottom, so move step above total.

@@ -1,0 +1,4 @@
+no_percent_assign.jamo line 3: Jamo doesn't have %=.
+        x %= 2
+        ^
+Write it out: x = x % 2

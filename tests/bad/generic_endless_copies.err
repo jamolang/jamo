@@ -1,0 +1,4 @@
+generic_endless_copies.jamo line 2: This makes too many copies of generics, like a struct that holds a bigger copy of itself.
+        kids: [Node<[T]>]
+        ^^^^
+A program can use up to 500 different sets of types.

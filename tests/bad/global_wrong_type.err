@@ -1,0 +1,3 @@
+global_wrong_type.jamo line 1: a is declared as an int, but this value is a string.
+    var a: int = "one"
+                 ^^^^^

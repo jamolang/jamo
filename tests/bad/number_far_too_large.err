@@ -1,0 +1,4 @@
+number_far_too_large.jamo line 2: This number is too large for 64 bits.
+        print(99999999999999999999)
+              ^^^^^^^^^^^^^^^^^^^^
+The largest int is 9223372036854775807.

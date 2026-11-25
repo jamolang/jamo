@@ -1,0 +1,54 @@
+# A calculator. Type a sum like 3 + 4, or a blank line to stop.
+
+func split_words(text: string): [string]
+    var words: [string] = []
+    var word = ""
+    for i in 0..len(text)
+        if text[i] == " "
+            if word != ""
+                words.add(word)
+                word = ""
+            end
+        else
+            word = word + text[i]
+        end
+    end
+    if word != ""
+        words.add(word)
+    end
+    return words
+end
+
+func work_out(left: float, operator: string, right: float)
+    match operator
+        case "+"
+            print(left + right)
+        case "-"
+            print(left - right)
+        case "*"
+            print(left * right)
+        case "/"
+            if right == 0.0
+                print("You can't divide by zero.")
+            else
+                print(left / right)
+            end
+        else
+            print(f"I don't know the operator {operator}.")
+    end
+end
+
+func main()
+    print("Type a sum like 3 + 4, or a blank line to stop.")
+    var line = input()
+    while line != ""
+        var words = split_words(line)
+        if len(words) == 3
+            work_out(float(words[0]), words[1], float(words[2]))
+        else
+            print("Write it like 3 + 4, with spaces.")
+        end
+        line = input()
+    end
+    print("Bye!")
+end

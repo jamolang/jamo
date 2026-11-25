@@ -1,0 +1,5 @@
+var a: int = "one"
+
+func main()
+    print(1)
+end

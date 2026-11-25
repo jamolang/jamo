@@ -1,0 +1,17 @@
+0
+2
+["a", "b", "a"]
+2
+Space Race
+42
+Player{name: "Sam", lives: 2}
+3.25
+Mode.HARD
+99
+2
+Space Race!
+6
+the end
+[Player{name: "Sam", lives: 2}, Player{name: "Ava", lives: 1}]
+["a", "b", "a"]
+15

@@ -1,0 +1,4 @@
+self_change.jamo line 6: self can't be changed, but its fields can.
+        self = Enemy{health: 1}
+        ^^^^
+Like this: self.health = 1

@@ -1,0 +1,5 @@
+func main()
+    var d = 0
+    print("before")
+    print(5 % d)
+end

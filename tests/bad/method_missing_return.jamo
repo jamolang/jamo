@@ -1,0 +1,9 @@
+struct Enemy
+    health: int
+end
+
+func Enemy.hit(): int
+end
+
+func main()
+end

@@ -1,0 +1,26 @@
+# Builds a program into an .exe with the compiler written in Jamo, the same way as 'jamo build', so the
+# two can be compared. jamo run exe.jamo flags some_file.jamo writes out.exe
+# flags are the test flags: 1, 2 and 4 for the cleaner, 8 for no optimizing
+
+use "modules.jamo"
+use "checker.jamo"
+use "pe.jamo"
+
+func main()
+    var flags = int(args()[0])
+    var path = args()[1]
+    var errors = new_errors()
+    var program = new_program()
+    if not load_program(path, errors, program)
+        fail("I can't read a file called " + path + ".")
+    end
+    if not errors.any()
+        check_program(program, errors)
+    end
+    if errors.any()
+        fail(errors.text())
+    end
+    var parts = path_parts(path)
+    var g = generate_code(program, parts[len(parts) - 1], flags)
+    build_exe(g).save("out.exe")
+end

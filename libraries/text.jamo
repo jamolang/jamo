@@ -1,0 +1,461 @@
+# text: splitting, searching, cutting, changing and joining text, checking numbers, and sorting arrays. use "text.jamo"
+#
+# Places count bytes from 0, like text[i] and len. Results are built in memory and made into text with
+# memory_text in one go, so long text doesn't get joined a letter at a time.
+
+# --- Building text ---
+
+# Copies the bytes of text into memory at a place, and gives back the place after them
+func text_put(place: int, text: string): int
+    var count = len(text)
+    for i in 0..count
+        poke_u8(place, i, byte(text, i))
+    end
+    return place + count
+end
+
+# True if part is in text starting at that place. The place must leave room for part
+func text_matches_at(text: string, part: string, at: int): bool
+    for i in 0..len(part)
+        if byte(text, at + i) != byte(part, i)
+            return false
+        end
+    end
+    return true
+end
+
+# --- Searching ---
+
+# Where part first starts in text, or -1 if it isn't there. Empty part is found at 0
+func find(text: string, part: string): int
+    var size = len(part)
+    if size == 0
+        return 0
+    end
+    var first = byte(part, 0)
+    for at in 0..len(text) - size + 1
+        if byte(text, at) == first and text_matches_at(text, part, at)
+            return at
+        end
+    end
+    return -1
+end
+
+func contains(text: string, part: string): bool
+    return find(text, part) >= 0
+end
+
+func starts_with(text: string, part: string): bool
+    return len(part) <= len(text) and text_matches_at(text, part, 0)
+end
+
+func ends_with(text: string, part: string): bool
+    return len(part) <= len(text) and text_matches_at(text, part, len(text) - len(part))
+end
+
+# --- Cutting ---
+
+# The bytes from place from up to, but not including, place to. slice("hello", 1, 3) is "el"
+func slice(text: string, from: int, to: int): string
+    if from < 0 or to > len(text) or from > to
+        fail(f"slice needs 0 <= from <= to <= {len(text)}, the text's length, but from is {from} and to is {to}.")
+    end
+    var count = to - from
+    var place = memory(count + 1)
+    for i in 0..count
+        poke_u8(place, i, byte(text, from + i))
+    end
+    return memory_text(place, count)
+end
+
+# The pieces of text between each by. split("a,b,,c", ",") gives ["a", "b", "", "c"]
+func split(text: string, by: string): [string]
+    var size = len(by)
+    if size == 0
+        fail("split needs something to split by, but it was given empty text.")
+    end
+    var count = len(text)
+    var place = memory(count + 1)
+    text_put(place, text)
+    var parts: [string] = []
+    var start = 0
+    var at = 0
+    var first = byte(by, 0)
+    while at <= count - size
+        if byte(text, at) == first and text_matches_at(text, by, at)
+            parts.add(memory_text(place + start, at - start))
+            at += size
+            start = at
+        else
+            at += 1
+        end
+    end
+    parts.add(memory_text(place + start, count - start))
+    return parts
+end
+
+func text_is_space(code: int): bool
+    return code == 32 or code == 9 or code == 10 or code == 13
+end
+
+# Text without the spaces, tabs and line endings at its start and end
+func trim(text: string): string
+    var from = 0
+    var to = len(text)
+    while from < to and text_is_space(byte(text, from))
+        from += 1
+    end
+    while to > from and text_is_space(byte(text, to - 1))
+        to -= 1
+    end
+    if from == 0 and to == len(text)
+        return text
+    end
+    return slice(text, from, to)
+end
+
+# --- Changing ---
+
+# Text with every old changed to new, from left to right
+func replace(text: string, old: string, new: string): string
+    var size = len(old)
+    if size == 0
+        fail("replace needs some text to look for, but it was given empty text.")
+    end
+    var count = len(text)
+    var first = byte(old, 0)
+    var found = 0
+    var at = 0
+    while at <= count - size
+        if byte(text, at) == first and text_matches_at(text, old, at)
+            found += 1
+            at += size
+        else
+            at += 1
+        end
+    end
+    if found == 0
+        return text
+    end
+    var total = count + found * (len(new) - size)
+    var place = memory(total + 1)
+    var out = 0
+    at = 0
+    while at < count
+        if at <= count - size and byte(text, at) == first and text_matches_at(text, old, at)
+            out = text_put(place + out, new) - place
+            at += size
+        else
+            poke_u8(place, out, byte(text, at))
+            out += 1
+            at += 1
+        end
+    end
+    return memory_text(place, total)
+end
+
+# Text with a to z made into A to Z. Other letters stay as they are
+func upper(text: string): string
+    var count = len(text)
+    var place = memory(count + 1)
+    for i in 0..count
+        var code = byte(text, i)
+        if code >= 97 and code <= 122
+            code -= 32
+        end
+        poke_u8(place, i, code)
+    end
+    return memory_text(place, count)
+end
+
+# Text with A to Z made into a to z. Other letters stay as they are
+func lower(text: string): string
+    var count = len(text)
+    var place = memory(count + 1)
+    for i in 0..count
+        var code = byte(text, i)
+        if code >= 65 and code <= 90
+            code += 32
+        end
+        poke_u8(place, i, code)
+    end
+    return memory_text(place, count)
+end
+
+# --- Joining ---
+
+# The parts in order with between in each gap. join(["a", "b"], ", ") is "a, b"
+func join(parts: [string], between: string): string
+    var total = 0
+    for part in parts
+        total += len(part)
+    end
+    if len(parts) > 1
+        total += (len(parts) - 1) * len(between)
+    end
+    var place = memory(total + 1)
+    var at = place
+    for i in 0..len(parts)
+        if i > 0
+            at = text_put(at, between)
+        end
+        at = text_put(at, parts[i])
+    end
+    return memory_text(place, total)
+end
+
+# The text that many times over. repeat("ab", 3) is "ababab"
+func repeat(text: string, times: int): string
+    if times < 0
+        fail(f"repeat needs 0 or more times, not {times}.")
+    end
+    var count = len(text)
+    if count > 0 and times > 4611686018427387903 / count
+        fail(f"repeat would make text too long: {count} bytes {times} times.")
+    end
+    var total = count * times
+    var place = memory(total + 1)
+    var at = place
+    for i in 0..times
+        at = text_put(at, text)
+    end
+    return memory_text(place, total)
+end
+
+# --- Checking numbers ---
+
+# The same limits float() has. From here up, a decimal rounds past the largest float: 2^1024 - 2^970
+const TEXT_FLOAT_HIGH = "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792"
+# At or below this, a decimal that isn't 0 rounds to 0: 2^-1075, all 1075 digits after the dot
+const TEXT_FLOAT_LOW = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000024703282292062327208828439643411068618252990130716238221279284125033775363510437593264991818081799618989828234772285886546332835517796989819938739800539093906315035659515570226392290858392449105184435931802849936536152500319370457678249219365623669863658480757001585769269903706311928279558551332927834338409351978015531246597263579574622766465272827220056374006485499977096599470454020828166226237857393450736339007967761930577506740176324673600968951340535537458516661134223766678604162159680461914467291840300530057530849048765391711386591646239524912623653881879636239373280423891018672348497668235089863388587925628302755995657524455507255189313690836254779186948667994968324049705821028513185451396213837722826145437693412532098591327667236328125"
+
+func text_all_digits(text: string): bool
+    if len(text) == 0
+        return false
+    end
+    for i in 0..len(text)
+        var code = byte(text, i)
+        if code < 48 or code > 57
+            return false
+        end
+    end
+    return true
+end
+
+func text_without_leading_zeros(digits: string): string
+    var first = 0
+    while first < len(digits) and byte(digits, first) == 48
+        first += 1
+    end
+    return slice(digits, first, len(digits))
+end
+
+# Below 0 when the whole number a is smaller than b, with neither having leading zeros
+func text_compare_digits(a: string, b: string): int
+    if len(a) != len(b)
+        return len(a) - len(b)
+    end
+    for i in 0..len(a)
+        if byte(a, i) != byte(b, i)
+            return byte(a, i) - byte(b, i)
+        end
+    end
+    return 0
+end
+
+# True when int(text) would work: digits with an optional minus sign, small enough for 64 bits
+func is_int(text: string): bool
+    var digits = text
+    var largest = "9223372036854775807"
+    if starts_with(text, "-")
+        digits = slice(text, 1, len(text))
+        largest = "9223372036854775808"
+    end
+    if not text_all_digits(digits)
+        return false
+    end
+    return text_compare_digits(text_without_leading_zeros(digits), largest) <= 0
+end
+
+# True when float(text) would work: digits with an optional minus sign, then maybe a dot and more digits,
+# and not so large it rounds past the largest float or so small that a number that isn't 0 rounds to 0
+func is_float(text: string): bool
+    var number = text
+    if starts_with(text, "-")
+        number = slice(text, 1, len(text))
+    end
+    var whole = number
+    var parts = ""
+    var dot = find(number, ".")
+    if dot >= 0
+        whole = slice(number, 0, dot)
+        parts = slice(number, dot + 1, len(number))
+        if not text_all_digits(parts)
+            return false
+        end
+    end
+    if not text_all_digits(whole)
+        return false
+    end
+    whole = text_without_leading_zeros(whole)
+    if whole != ""
+        return text_compare_digits(whole, TEXT_FLOAT_HIGH) < 0
+    end
+    var last = len(parts)
+    while last > 0 and byte(parts, last - 1) == 48
+        last -= 1
+    end
+    if last == 0
+        return true
+    end
+    # Both have the dot in the same place, so the one with the first larger digit is larger
+    for i in 0..last
+        var mine = byte(parts, i)
+        var bound = 48
+        if i < len(TEXT_FLOAT_LOW)
+            bound = byte(TEXT_FLOAT_LOW, i)
+        end
+        if mine != bound
+            return mine > bound
+        end
+    end
+    return last > len(TEXT_FLOAT_LOW)
+end
+
+# --- Sorting and turning arrays around. These change the array itself ---
+
+# Sorts ints from smallest to largest
+func sort_ints(items: [int])
+    var count = len(items)
+    if count < 2
+        return
+    end
+    var from = items
+    var to: [int] = []
+    for item in items
+        to.add(item)
+    end
+    var flipped = false
+    var width = 1
+    while width < count
+        var left = 0
+        while left < count
+            var middle = left + width
+            if middle > count
+                middle = count
+            end
+            var right = middle + width
+            if right > count
+                right = count
+            end
+            var a = left
+            var b = middle
+            for place in left..right
+                if b >= right or (a < middle and from[a] <= from[b])
+                    to[place] = from[a]
+                    a += 1
+                else
+                    to[place] = from[b]
+                    b += 1
+                end
+            end
+            left = right
+        end
+        var spare = from
+        from = to
+        to = spare
+        flipped = not flipped
+        width *= 2
+    end
+    if flipped
+        for i in 0..count
+            items[i] = from[i]
+        end
+    end
+end
+
+# True if a comes before b, by comparing their bytes. All capitals come before small letters
+func text_before(a: string, b: string): bool
+    var a_size = len(a)
+    var b_size = len(b)
+    var shorter = a_size
+    if b_size < shorter
+        shorter = b_size
+    end
+    for i in 0..shorter
+        var x = byte(a, i)
+        var y = byte(b, i)
+        if x != y
+            return x < y
+        end
+    end
+    return a_size < b_size
+end
+
+# Sorts text by its bytes, so "Zoo" comes before "apple", and "app" before "apple"
+func sort_strings(items: [string])
+    var count = len(items)
+    if count < 2
+        return
+    end
+    var from = items
+    var to: [string] = []
+    for item in items
+        to.add(item)
+    end
+    var flipped = false
+    var width = 1
+    while width < count
+        var left = 0
+        while left < count
+            var middle = left + width
+            if middle > count
+                middle = count
+            end
+            var right = middle + width
+            if right > count
+                right = count
+            end
+            var a = left
+            var b = middle
+            for place in left..right
+                if b >= right or (a < middle and not text_before(from[b], from[a]))
+                    to[place] = from[a]
+                    a += 1
+                else
+                    to[place] = from[b]
+                    b += 1
+                end
+            end
+            left = right
+        end
+        var spare = from
+        from = to
+        to = spare
+        flipped = not flipped
+        width *= 2
+    end
+    if flipped
+        for i in 0..count
+            items[i] = from[i]
+        end
+    end
+end
+
+func reverse_ints(items: [int])
+    var last = len(items) - 1
+    for i in 0..len(items) / 2
+        var keep = items[i]
+        items[i] = items[last - i]
+        items[last - i] = keep
+    end
+end
+
+func reverse_strings(items: [string])
+    var last = len(items) - 1
+    for i in 0..len(items) / 2
+        var keep = items[i]
+        items[i] = items[last - i]
+        items[last - i] = keep
+    end
+end

@@ -1,0 +1,4 @@
+array_compare.jamo line 2: Arrays can't be compared with == or !=.
+        print([1] == [1])
+              ^^^^^^^^^^
+Compare their items in a loop.

@@ -1,0 +1,6 @@
+two_errors.jamo line 2: nothing has this name: aaa
+        print(aaa)
+              ^^^
+two_errors.jamo line 3: nothing has this name: bbb
+        print(bbb)
+              ^^^

@@ -1,0 +1,4 @@
+match_case_not_fixed.jamo line 4: A case needs a fixed value, like 1, "a" or Mood.CALM.
+            case x
+                 ^
+Use if and elif to compare with anything else.

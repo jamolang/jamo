@@ -1,0 +1,64 @@
+# test: checks for your own code, with a summary at the end. use "test.jamo"
+#
+#     var t = new_tests()
+#     t.equal_int("adding", add(2, 3), 5)
+#     t.check("is alive", enemy.is_alive())
+#     t.finish()
+#
+# finish shows how many passed, and ends the program with exit code 1 when any failed, so other tools can tell.
+
+extern "kernel32.dll" func ExitProcess(code: i32)
+
+struct Tests
+    passed: int
+    failed: int
+end
+
+func new_tests(): Tests
+    return Tests{passed: 0, failed: 0}
+end
+
+func Tests.pass_or_fail(name: string, ok: bool, problem: string)
+    if ok
+        self.passed += 1
+        return
+    end
+    self.failed += 1
+    print(f"FAIL {name}: {problem}")
+end
+
+func Tests.check(name: string, ok: bool)
+    self.pass_or_fail(name, ok, "it was false")
+end
+
+func Tests.equal_int(name: string, got: int, want: int)
+    self.pass_or_fail(name, got == want, f"got {got}, wanted {want}")
+end
+
+func Tests.equal_text(name: string, got: string, want: string)
+    self.pass_or_fail(name, got == want, f"got \"{got}\", wanted \"{want}\"")
+end
+
+func Tests.equal_bool(name: string, got: bool, want: bool)
+    self.pass_or_fail(name, got == want, f"got {got}, wanted {want}")
+end
+
+# Floats rarely come out exactly, so this passes when got is within close of want
+func Tests.equal_float(name: string, got: float, want: float, close: float)
+    var gap = got - want
+    if gap < 0.0
+        gap = 0.0 - gap
+    end
+    self.pass_or_fail(name, gap <= close, f"got {got}, wanted {want}")
+end
+
+# Shows the summary. When any check failed, the program ends with exit code 1
+func Tests.finish()
+    var total = self.passed + self.failed
+    if self.failed == 0
+        print(f"All {total} checks passed.")
+        return
+    end
+    print(f"{self.failed} of {total} checks failed.")
+    ExitProcess(1)
+end

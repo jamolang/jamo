@@ -1,0 +1,8 @@
+func main()
+    match 1
+        else
+            print(1)
+        case 2
+            print(2)
+    end
+end

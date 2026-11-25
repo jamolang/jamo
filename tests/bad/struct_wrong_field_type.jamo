@@ -1,0 +1,7 @@
+struct Enemy
+    health: int
+end
+
+func main()
+    print(Enemy{health: 1.5})
+end

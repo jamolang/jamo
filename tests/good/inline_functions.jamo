@@ -1,0 +1,162 @@
+# Small functions that can't stop with an error are written in place. This checks they give the same answers
+extern "msvcrt.dll" func sqrt(value: float): float
+
+struct Vec
+    x: float
+    y: float
+end
+
+struct Counter
+    count: int
+    name: string
+end
+
+func Vec.length(): float
+    return sqrt(self.x * self.x + self.y * self.y)
+end
+
+func Vec.scale(by: float)
+    self.x *= by
+    self.y = self.y * by
+end
+
+func Vec.add(other: Vec)
+    self.x += other.x
+    self.y += other.y
+end
+
+func Counter.bump(by: int): int
+    self.count += by
+    return self.count
+end
+
+func smaller(a: int, b: int): int
+    if a < b
+        return a
+    end
+    return b
+end
+
+func bigger(a: int, b: int): int
+    if a > b
+        return a
+    end
+    return b
+end
+
+func keep_between(value: int, low: int, high: int): int
+    return smaller(bigger(value, low), high)
+end
+
+func grade(score: int): string
+    if score >= 90
+        return "A"
+    elif score >= 80
+        return "B"
+    elif score >= 70
+        return "C"
+    else
+        return "F"
+    end
+end
+
+func sign(x: int): int
+    var result = 0
+    if x > 0
+        result = 1
+    elif x < 0
+        result = -1
+    end
+    return result
+end
+
+func double_then_add(n: int, extra: int): int
+    n = n * 2
+    n += extra
+    return n
+end
+
+func tenth(n: int): int
+    return n / 10 + n % 10
+end
+
+func is_word(text: string, word: string): bool
+    return text == word and len(text) > 0
+end
+
+func average(a: int, b: int): float
+    return float(a + b) / 2.0
+end
+
+func nothing_back(v: Vec)
+    v.x = v.x + 1.0
+end
+
+# Not written in place: it calls itself
+func countdown(n: int): int
+    if n <= 0
+        return 0
+    end
+    return n + countdown(n - 1)
+end
+
+# Not written in place: these call each other
+func is_even(n: int): bool
+    if n == 0
+        return true
+    end
+    return is_odd(n - 1)
+end
+
+func is_odd(n: int): bool
+    if n == 0
+        return false
+    end
+    return is_even(n - 1)
+end
+
+# Not written in place: dividing by a variable can stop with an error
+func share(total: int, people: int): int
+    return total / people
+end
+
+func main()
+    print(keep_between(150, 0, 100))
+    print(keep_between(-5, 0, 100))
+    print(keep_between(42, 0, 100))
+    print(smaller(bigger(3, 7), keep_between(9, smaller(2, 5), bigger(8, 1))))
+    for score in [95, 85, 75, 10]
+        print(grade(score))
+    end
+    print(sign(-7) + sign(0) * 10 + sign(3) * 100)
+    var n = 5
+    print(double_then_add(n, 1))
+    print(n)
+    print(tenth(1234))
+    print(is_word("hi", "hi"))
+    print(is_word("", ""))
+    print(average(3, 4))
+    var v = Vec{x: 3.0, y: 4.0}
+    print(v.length())
+    v.scale(2.0)
+    print(v)
+    v.add(Vec{x: 1.0, y: 1.0})
+    print(v)
+    nothing_back(v)
+    print(v.x)
+    var c = Counter{count: 0, name: "c"}
+    var total = 0
+    for i in 0..5
+        total += c.bump(i)
+    end
+    print(total)
+    print(c.count)
+    print(countdown(10))
+    print(is_even(10))
+    print(share(10, 3))
+    var sum = 0
+    for i in 0..1000
+        sum += keep_between(i, 100, 900) + sign(i - 500)
+    end
+    print(sum)
+end

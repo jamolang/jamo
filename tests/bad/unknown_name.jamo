@@ -1,0 +1,4 @@
+func main()
+    var score = 1
+    var total = scor + 1
+end

@@ -1,0 +1,3 @@
+float_no_digit_before_dot.jamo line 2: A decimal number needs a digit before its dot, like 0.5.
+        print(.5)
+              ^

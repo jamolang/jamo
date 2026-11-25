@@ -1,0 +1,21 @@
+func make(i: int): string
+    return "item " + string(i)
+end
+
+func main()
+    var kept = "start"
+    for i in 0..3000
+        var throwaway = make(i) + "!"
+        if i % 1000 == 0
+            kept = kept + "," + throwaway
+        end
+    end
+    print(kept)
+    var last = ""
+    for i in 0..1000
+        last = f"{i}: {make(i)} [{i * 2}]"
+    end
+    print(last)
+    var word = "abc"
+    print(word[0] + word[1] + word[2] + string(len(word)))
+end

@@ -1,0 +1,8 @@
+func make<T>(): [T]
+    var items: [T] = []
+    return items
+end
+
+func main()
+    var c = make()
+end

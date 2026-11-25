@@ -1,0 +1,4 @@
+float_equals_int.jamo line 2: == and != need both sides to be the same type, but this compares int and float.
+        print(1 == 1.0)
+              ^^^^^^^^
+Use float(x) or int(x) to make them match.

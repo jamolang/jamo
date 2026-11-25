@@ -1,0 +1,4 @@
+generic_cant_work_out.jamo line 7: Jamo can't work out T for make from its inputs.
+        var c = make()
+                ^^^^^^
+Give the types in < >, like make<int>(...)

@@ -1,0 +1,4 @@
+and_needs_bool.jamo line 2: and needs a bool, but this is an int.
+        print(1 and true)
+              ^
+Try comparing it, like x != 0.

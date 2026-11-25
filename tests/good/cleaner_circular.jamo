@@ -1,0 +1,52 @@
+struct Node
+    name: string
+    links: [Node]
+end
+
+func make_loop(size: int): Node
+    var first = Node{name: "n0", links: []}
+    var last = first
+    for i in 1..size
+        var next = Node{name: f"n{i}", links: []}
+        last.links.add(next)
+        last = next
+    end
+    last.links.add(first)
+    return first
+end
+
+func walk(start: Node, steps: int): string
+    var at = start
+    for i in 0..steps
+        at = at.links[0]
+    end
+    return at.name
+end
+
+func main()
+    var kept = make_loop(50)
+    for i in 0..50
+        make_loop(10)
+    end
+    print(walk(kept, 49))
+    print(walk(kept, 50))
+    var shared = [kept, kept]
+    shared[0].name = "renamed"
+    for i in 0..20
+        make_loop(5)
+    end
+    print(shared[1].name)
+    print(walk(shared[0], 100))
+    var me = Node{name: "me", links: []}
+    me.links.add(me)
+    print(me)
+    var holders: [[Node]] = []
+    holders.add(me.links)
+    holders.add(holders[0])
+    holders[1].add(kept)
+    for i in 0..20
+        make_loop(5)
+    end
+    print(len(me.links))
+    print(me.links[1].name)
+end

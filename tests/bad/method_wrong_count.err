@@ -1,0 +1,3 @@
+method_wrong_count.jamo line 10: hit takes 1 input, but this gives it 0.
+        e.hit()
+        ^^^^^^^

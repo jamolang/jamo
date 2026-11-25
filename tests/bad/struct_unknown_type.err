@@ -1,0 +1,4 @@
+struct_unknown_type.jamo line 6: There's no type called Enmy.
+        var items: [Enmy] = []
+            ^^^^^
+Did you mean Enemy?
