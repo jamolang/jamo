@@ -1069,6 +1069,10 @@ To pass the window, the screen or the sound to your own functions, you need thei
 | `net.connect`, and a listener's `new_links()` | `Link`, and `[Link]` |
 | `now` | `DateTime` |
 | `new_dict`, `new_text_dict`, `new_builder` and `new_bytes` | `Dict`, `TextDict`, `TextBuilder` and `Bytes` |
+| `new_map<K, V>` | `Map<K, V>` |
+| `vec2` and `vec2_from_angle` | `Vec2` |
+| `new_grid<T>`, and a grid's `neighbours` | `Grid<T>`, and `[Cell]` |
+| `new_timer` and `new_cooldown` | `Timer` and `Cooldown` |
 
 **Try it:** give the player three lives and show them as small squares in a corner.
 
@@ -1295,6 +1299,96 @@ A `Map` has the same `get`, `get_or`, `has`, `remove`, `size` and `key_list` as 
 One thing to watch: after a name, a `<` whose matching `>` comes straight before `(` reads as types. So `both(a < b, c > (d))` reads as a call to `a<b, c>`. Write `c > d` without the brackets, and it's a comparison again.
 
 Try it: write `func last_or<T>(items: [T], fallback: T): T` that gives the last item, or `fallback` when the array is empty, and call it with ints and with strings.
+
+## 27. Game helpers: points, grids and timers
+
+`use "vec.jamo"` gives `Vec2`, an x and a y, for places, speeds and directions. Each method gives back a new one:
+
+```jamo
+use "vec.jamo"
+
+func main()
+    var place = vec2(10.0, 20.0)
+    var speed = vec2(3.0, 4.0)
+    place = place.plus(speed.times(2.0))
+    print(place)
+    print(speed.length())
+    print(speed.normalized())
+    print(place.distance(vec2(10.0, 20.0)))
+end
+```
+
+```output
+Vec2{x: 16.0, y: 28.0}
+5.0
+Vec2{x: 0.6, y: 0.8}
+10.0
+```
+
+`minus`, `dot`, `angle`, `rotated`, `lerp_to` and `limited` (for a top speed) are there too, and `vec2_from_angle(angle, length)` makes a direction from an angle.
+
+`use "grid.jamo"` gives `Grid<T>`, a board of any type, for tile maps, mazes and puzzles. Places count from 0, with x going right and y going down:
+
+```jamo
+use "grid.jamo"
+
+enum Tile
+    FLOOR
+    WALL
+end
+
+func main()
+    var map = new_grid<Tile>(5, 3, Tile.FLOOR)
+    for x in 0..5
+        map.set(x, 0, Tile.WALL)
+    end
+    print(map.get(2, 0))
+    print(map.count(Tile.WALL))
+    print(map.inside(5, 1))
+    print(map.get_or(9, 9, Tile.WALL))
+    print(len(map.neighbours(0, 2, false)))
+end
+```
+
+```output
+Tile.WALL
+5
+false
+Tile.WALL
+2
+```
+
+`get` stops with an error that says the grid's size when a place is off the edge, so use `inside` or `get_or` when it might be. `neighbours(x, y, diagonals)` gives the `Cell`s next to a place, `fill` sets every cell, and `copy` makes a new grid.
+
+`use "timer.jamo"` gives a `Timer`, which fires every so many seconds, and a `Cooldown`, which needs a rest between uses:
+
+```jamo
+use "timer.jamo"
+
+func main()
+    var gun = new_cooldown(0.3)
+    print(gun.try_use_at(1.0))
+    print(gun.try_use_at(1.1))
+    print(gun.try_use_at(1.4))
+    var spawn = new_timer_at(2.0, 0.0)
+    print(spawn.ready_at(1.0))
+    print(spawn.ready_at(2.0))
+    print(spawn.ready_at(2.5))
+end
+```
+
+```output
+true
+false
+true
+false
+true
+false
+```
+
+The `_at` versions take the time, for a game with its own clock that can pause. Without `_at`, like `gun.try_use()` and `spawn.ready()`, they use the real time from `seconds_since_start()`.
+
+Try it: make a 10 by 10 `Grid<bool>`, set a few cells to `true`, and print how many of a cell's 8 neighbours are `true`, the first step of a Minesweeper.
 
 ## What Jamo can't do yet
 

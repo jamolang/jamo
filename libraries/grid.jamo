@@ -1,0 +1,101 @@
+# grid: a 2D board of any type, for tile maps, mazes, puzzles and board games. use "grid.jamo"
+#
+# Grid<T> holds width * height cells, each a T. Places count from 0, with x going right and y going down,
+# and the cells are kept row by row in one array. Going outside the grid stops with an error that says
+# its size, so use inside() or get_or() when a place might be off the edge.
+
+struct Grid<T>
+    width: int
+    height: int
+    cells: [T]
+end
+
+# A place on a grid
+struct Cell
+    x: int
+    y: int
+end
+
+func new_grid<T>(width: int, height: int, fill: T): Grid<T>
+    if width < 0 or height < 0
+        fail(f"A grid can't be {width} by {height}: neither can be below 0.")
+    end
+    var cells: [T] = []
+    for i in 0..width * height
+        cells.add(fill)
+    end
+    return Grid<T>{width: width, height: height, cells: cells}
+end
+
+func Grid<T>.inside(x: int, y: int): bool
+    return x >= 0 and y >= 0 and x < self.width and y < self.height
+end
+
+func Grid<T>.place(x: int, y: int): int
+    if not self.inside(x, y)
+        fail(f"This grid is {self.width} by {self.height}, so ({x}, {y}) is outside it.")
+    end
+    return y * self.width + x
+end
+
+func Grid<T>.get(x: int, y: int): T
+    return self.cells[self.place(x, y)]
+end
+
+func Grid<T>.set(x: int, y: int, value: T)
+    self.cells[self.place(x, y)] = value
+end
+
+# The cell's value, or fallback when the place is off the grid
+func Grid<T>.get_or(x: int, y: int, fallback: T): T
+    if not self.inside(x, y)
+        return fallback
+    end
+    return self.cells[y * self.width + x]
+end
+
+func Grid<T>.fill(value: T)
+    for i in 0..len(self.cells)
+        self.cells[i] = value
+    end
+end
+
+# How many cells hold this value. T must work with ==, like ints, strings, bools and enums
+func Grid<T>.count(value: T): int
+    var total = 0
+    for cell in self.cells
+        if cell == value
+            total += 1
+        end
+    end
+    return total
+end
+
+# A new grid with the same cells. Structs and arrays in it are shared, like any assignment
+func Grid<T>.copy(): Grid<T>
+    var cells: [T] = []
+    for cell in self.cells
+        cells.add(cell)
+    end
+    return Grid<T>{width: self.width, height: self.height, cells: cells}
+end
+
+# The places next to (x, y) that are on the grid: up, right, down and left, and with diagonals the four
+# corners after them
+func Grid<T>.neighbours(x: int, y: int, diagonals: bool): [Cell]
+    var out: [Cell] = []
+    var steps_x = [0, 1, 0, -1, 1, 1, -1, -1]
+    var steps_y = [-1, 0, 1, 0, -1, 1, 1, -1]
+    var count = 4
+    if diagonals
+        count = 8
+    end
+    for i in 0..count
+        var nx = x + steps_x[i]
+        var ny = y + steps_y[i]
+        if self.inside(nx, ny)
+            out.add(Cell{x: nx, y: ny})
+        end
+    end
+    return out
+end

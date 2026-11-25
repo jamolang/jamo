@@ -2156,6 +2156,108 @@ func Gfx.close()
     ReleaseDC(self.window.handle, self.dc)
 end
 )JAMOLIBRARY";
+    if (name == "grid.jamo") return R"JAMOLIBRARY(# grid: a 2D board of any type, for tile maps, mazes, puzzles and board games. use "grid.jamo"
+#
+# Grid<T> holds width * height cells, each a T. Places count from 0, with x going right and y going down,
+# and the cells are kept row by row in one array. Going outside the grid stops with an error that says
+# its size, so use inside() or get_or() when a place might be off the edge.
+
+struct Grid<T>
+    width: int
+    height: int
+    cells: [T]
+end
+
+# A place on a grid
+struct Cell
+    x: int
+    y: int
+end
+
+func new_grid<T>(width: int, height: int, fill: T): Grid<T>
+    if width < 0 or height < 0
+        fail(f"A grid can't be {width} by {height}: neither can be below 0.")
+    end
+    var cells: [T] = []
+    for i in 0..width * height
+        cells.add(fill)
+    end
+    return Grid<T>{width: width, height: height, cells: cells}
+end
+
+func Grid<T>.inside(x: int, y: int): bool
+    return x >= 0 and y >= 0 and x < self.width and y < self.height
+end
+
+func Grid<T>.place(x: int, y: int): int
+    if not self.inside(x, y)
+        fail(f"This grid is {self.width} by {self.height}, so ({x}, {y}) is outside it.")
+    end
+    return y * self.width + x
+end
+
+func Grid<T>.get(x: int, y: int): T
+    return self.cells[self.place(x, y)]
+end
+
+func Grid<T>.set(x: int, y: int, value: T)
+    self.cells[self.place(x, y)] = value
+end
+
+# The cell's value, or fallback when the place is off the grid
+func Grid<T>.get_or(x: int, y: int, fallback: T): T
+    if not self.inside(x, y)
+        return fallback
+    end
+    return self.cells[y * self.width + x]
+end
+
+func Grid<T>.fill(value: T)
+    for i in 0..len(self.cells)
+        self.cells[i] = value
+    end
+end
+
+# How many cells hold this value. T must work with ==, like ints, strings, bools and enums
+func Grid<T>.count(value: T): int
+    var total = 0
+    for cell in self.cells
+        if cell == value
+            total += 1
+        end
+    end
+    return total
+end
+
+# A new grid with the same cells. Structs and arrays in it are shared, like any assignment
+func Grid<T>.copy(): Grid<T>
+    var cells: [T] = []
+    for cell in self.cells
+        cells.add(cell)
+    end
+    return Grid<T>{width: self.width, height: self.height, cells: cells}
+end
+
+# The places next to (x, y) that are on the grid: up, right, down and left, and with diagonals the four
+# corners after them
+func Grid<T>.neighbours(x: int, y: int, diagonals: bool): [Cell]
+    var out: [Cell] = []
+    var steps_x = [0, 1, 0, -1, 1, 1, -1, -1]
+    var steps_y = [-1, 0, 1, 0, -1, 1, 1, -1]
+    var count = 4
+    if diagonals
+        count = 8
+    end
+    for i in 0..count
+        var nx = x + steps_x[i]
+        var ny = y + steps_y[i]
+        if self.inside(nx, ny)
+            out.add(Cell{x: nx, y: ny})
+        end
+    end
+    return out
+end
+)JAMOLIBRARY";
     if (name == "json.jamo") return R"JAMOLIBRARY(# json: reads and writes JSON, the text format most save files and web services use. use "json.jamo"
 #
 # A Json value is null, a bool, a number, text, a list or an object. Objects keep their keys in the order they
@@ -6090,6 +6192,125 @@ func DateTime.weekday_name(): string
     return names[self.weekday]
 end
 )JAMOLIBRARY";
+    if (name == "timer.jamo") return R"JAMOLIBRARY(# timer: things that happen every so often, and things that need a rest between uses. use "timer.jamo"
+#
+# A Timer fires again and again, every so many seconds, like spawning an enemy every 2 seconds.
+# A Cooldown can be used, then needs a rest, like a gun that fires at most every 0.3 seconds.
+# Each method has an _at version that takes the time in seconds, for a game that keeps its own clock
+# (one that pauses, or runs in slow motion). The plain ones use seconds_since_start().
+
+use "time.jamo"
+
+struct Timer
+    every: float
+    next: float
+end
+
+struct Cooldown
+    rest: float
+    until: float
+end
+
+# --- Timer ---
+
+func new_timer(seconds: float): Timer
+    return new_timer_at(seconds, seconds_since_start())
+end
+
+func new_timer_at(seconds: float, now: float): Timer
+    if not (seconds > 0.0)
+        fail(f"A timer needs more than 0 seconds between fires, but this is {seconds}.")
+    end
+    return Timer{every: seconds, next: now + seconds}
+end
+
+func Timer.ready(): bool
+    return self.ready_at(seconds_since_start())
+end
+
+# True once each time it's due. A game that falls far behind gets one fire, not a burst of them
+func Timer.ready_at(now: float): bool
+    if now < self.next
+        return false
+    end
+    self.next += self.every
+    if self.next <= now
+        self.next = now + self.every
+    end
+    return true
+end
+
+func Timer.left(): float
+    return self.left_at(seconds_since_start())
+end
+
+# Seconds until it's next due, never below 0
+func Timer.left_at(now: float): float
+    if self.next <= now
+        return 0.0
+    end
+    return self.next - now
+end
+
+# How far it is to the next fire, from 0.0 just after one to 1.0 when it's due, for bars and flashing
+func Timer.progress_at(now: float): float
+    var done = 1.0 - self.left_at(now) / self.every
+    if done < 0.0
+        return 0.0
+    end
+    return done
+end
+
+func Timer.restart()
+    self.restart_at(seconds_since_start())
+end
+
+func Timer.restart_at(now: float)
+    self.next = now + self.every
+end
+
+# --- Cooldown ---
+
+# A cooldown starts ready to use
+func new_cooldown(seconds: float): Cooldown
+    if seconds < 0.0
+        fail(f"A cooldown can't rest for less than 0 seconds, but this is {seconds}.")
+    end
+    return Cooldown{rest: seconds, until: 0.0 - 1.0}
+end
+
+func Cooldown.ready(): bool
+    return self.ready_at(seconds_since_start())
+end
+
+func Cooldown.ready_at(now: float): bool
+    return now >= self.until
+end
+
+func Cooldown.try_use(): bool
+    return self.try_use_at(seconds_since_start())
+end
+
+# Uses it if it's ready, starting its rest, and says whether it was
+func Cooldown.try_use_at(now: float): bool
+    if now < self.until
+        return false
+    end
+    self.until = now + self.rest
+    return true
+end
+
+func Cooldown.left_at(now: float): float
+    if self.until <= now
+        return 0.0
+    end
+    return self.until - now
+end
+
+func Cooldown.left(): float
+    return self.left_at(seconds_since_start())
+end
+)JAMOLIBRARY";
     if (name == "ui.jamo") return R"JAMOLIBRARY(# ui: labels, panels, buttons, checkboxes, sliders, lists and text boxes, drawn with gfx. use "ui.jamo"
 #
 # Controls are drawn fresh every frame between begin() and finish(), and each call answers with the
@@ -6685,6 +6906,86 @@ func Ui.caret_at(words: string, spot: float): int
         place += 1
     end
     return place
+end
+)JAMOLIBRARY";
+    if (name == "vec.jamo") return R"JAMOLIBRARY(# vec: 2D points and directions for games. use "vec.jamo"
+#
+# A Vec2 is an x and a y. Every method gives back a new Vec2 and leaves the one it's called on alone, so
+# p.plus(speed) doesn't change p. Angles are in radians, counting from the x axis toward the y axis, so
+# on a screen, where y goes down, a growing angle turns clockwise.
+
+use "math.jamo"
+
+struct Vec2
+    x: float
+    y: float
+end
+
+func vec2(x: float, y: float): Vec2
+    return Vec2{x: x, y: y}
+end
+
+# A direction of the given length, like vec2_from_angle(pi() / 2.0, 3.0) for 3 straight down a screen
+func vec2_from_angle(angle: float, length: float): Vec2
+    return Vec2{x: cos(angle) * length, y: sin(angle) * length}
+end
+
+func Vec2.plus(other: Vec2): Vec2
+    return Vec2{x: self.x + other.x, y: self.y + other.y}
+end
+
+func Vec2.minus(other: Vec2): Vec2
+    return Vec2{x: self.x - other.x, y: self.y - other.y}
+end
+
+func Vec2.times(amount: float): Vec2
+    return Vec2{x: self.x * amount, y: self.y * amount}
+end
+
+func Vec2.dot(other: Vec2): float
+    return self.x * other.x + self.y * other.y
+end
+
+func Vec2.length(): float
+    return sqrt(self.x * self.x + self.y * self.y)
+end
+
+func Vec2.distance(other: Vec2): float
+    return self.minus(other).length()
+end
+
+# The same direction with a length of 1. A Vec2 of length 0 has no direction, so it stays 0
+func Vec2.normalized(): Vec2
+    var size = self.length()
+    if size == 0.0
+        return Vec2{x: 0.0, y: 0.0}
+    end
+    return Vec2{x: self.x / size, y: self.y / size}
+end
+
+# The angle it points at, from -pi to pi
+func Vec2.angle(): float
+    return atan2(self.y, self.x)
+end
+
+func Vec2.rotated(angle: float): Vec2
+    var c = cos(angle)
+    var s = sin(angle)
+    return Vec2{x: self.x * c - self.y * s, y: self.x * s + self.y * c}
+end
+
+# Part of the way to other: 0.0 gives this one, 1.0 gives other
+func Vec2.lerp_to(other: Vec2, part: float): Vec2
+    return Vec2{x: lerp(self.x, other.x, part), y: lerp(self.y, other.y, part)}
+end
+
+# At most this long, keeping its direction, for things like a top speed
+func Vec2.limited(longest: float): Vec2
+    var size = self.length()
+    if size <= longest or size == 0.0
+        return Vec2{x: self.x, y: self.y}
+    end
+    return self.times(longest / size)
 end
 )JAMOLIBRARY";
     if (name == "window.jamo") return R"JAMOLIBRARY(# window: opens a window, and reads the keyboard, mouse and frame timing. use "window.jamo"

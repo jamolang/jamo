@@ -4,6 +4,13 @@ What changed in each version of Jamo.
 
 ## Not released yet
 
+### Game helpers
+
+- `vec.jamo`: `Vec2` for places, speeds and directions, with `plus`, `minus`, `times`, `dot`, `length`, `distance`, `normalized`, `angle`, `rotated`, `lerp_to` and `limited`, and `vec2_from_angle`.
+- `grid.jamo`: `Grid<T>`, a board of any type, with `get`, `set`, `inside`, `get_or`, `fill`, `count`, `copy` and `neighbours`. Going off the edge stops with an error that says the grid's size.
+- `timer.jamo`: `Timer`, which fires every so many seconds, and `Cooldown`, which needs a rest between uses. Each has an `_at` version for a game's own clock.
+- The guide has a new section 27 on them, and the README is rewritten for people new to programming.
+
 ### Variables outside functions
 
 - `var score = 0` at the top level of a file makes a variable every function in the program can use and change. Any value works, including function calls.

@@ -1,0 +1,24 @@
+# vec.jamo, checked against Python's math
+use "vec.jamo"
+
+func main()
+    var a = vec2(3.0, 4.0)
+    var b = vec2(-1.0, 2.5)
+    print(a.plus(b))
+    print(a.minus(b))
+    print(a.times(0.5))
+    print(a.dot(b))
+    print(a.length())
+    print(a.distance(b))
+    print(a.normalized())
+    print(vec2(0.0, 0.0).normalized())
+    print(a.angle())
+    print(b.angle())
+    print(vec2(1.0, 0.0).rotated(pi() / 2.0))
+    print(b.rotated(1.0))
+    print(vec2_from_angle(pi() / 3.0, 2.0))
+    print(a.lerp_to(b, 0.25))
+    print(a.limited(2.0))
+    print(a.limited(10.0))
+    print(a)
+end

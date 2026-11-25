@@ -1,0 +1,49 @@
+# grid.jamo with ints, strings, enums and structs
+use "grid.jamo"
+
+enum Tile
+    FLOOR
+    WALL
+end
+
+struct Item
+    name: string
+end
+
+func main()
+    var board = new_grid<int>(4, 3, 0)
+    board.set(1, 2, 7)
+    board.set(3, 0, 5)
+    print(board.get(1, 2))
+    print(board.get(0, 0))
+    print(board.cells)
+    print(board.inside(3, 2))
+    print(board.inside(4, 0))
+    print(board.inside(0, -1))
+    print(board.get_or(9, 9, -1))
+    print(board.get_or(3, 0, -1))
+    print(board.count(0))
+    var copy = board.copy()
+    copy.set(0, 0, 9)
+    print(board.get(0, 0))
+    print(copy.get(0, 0))
+    print(board.neighbours(0, 0, false))
+    print(len(board.neighbours(1, 1, true)))
+    print(board.neighbours(3, 2, true))
+    var map = new_grid<Tile>(3, 3, Tile.FLOOR)
+    for i in 0..3
+        map.set(i, 1, Tile.WALL)
+    end
+    print(map.count(Tile.WALL))
+    print(map.get(2, 1))
+    map.fill(Tile.FLOOR)
+    print(map.count(Tile.WALL))
+    var words = new_grid<string>(2, 2, ".")
+    words.set(1, 1, "x")
+    print(words.cells)
+    var shelf = new_grid<Item>(2, 1, Item{name: "cup"})
+    shelf.get(0, 0).name = "mug"
+    print(shelf.get(1, 0))
+    var empty = new_grid<int>(0, 5, 1)
+    print(len(empty.cells))
+end
