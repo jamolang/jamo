@@ -1,0 +1,4 @@
+func_value_generic.jamo line 6: first is generic, so it can't be used as a value.
+        var f = first
+                ^^^^^
+Write a function for the types you need that calls it, and use that.

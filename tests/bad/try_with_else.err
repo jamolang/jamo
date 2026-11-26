@@ -1,0 +1,4 @@
+try_with_else.jamo line 4: A try can't have an else.
+        else
+        ^^^^
+Use catch for what to do when something goes wrong.

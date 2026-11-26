@@ -286,7 +286,21 @@ different:
     ! out.lea_rax_string(text.file_names[0]);
     ret
 
-@ run_error rax = the message. Shows the file and line, then stops with exit code 1
+@ run_error rax = the message. With a try open, goes back to that try's rbp and rsp and jumps to its catch with the message still in rax, making the try around it the newest. Otherwise shows the file and line, then stops with exit code 1
+    ! out.lea_data(RCX, DataRef::TryFrame);
+    mov rdx, qword ptr [rcx]
+    test rdx, rdx
+    je not_caught
+    mov r8, qword ptr [rdx]
+    mov qword ptr [rcx], r8
+    mov rbp, qword ptr [rdx+8]
+    mov rsp, qword ptr [rdx+16]
+    push qword ptr [rdx+24]
+    ret
+not_caught:
+    jmp stop_with_error
+
+@ stop_with_error rax = the message. Shows the file and line, then stops with exit code 1, even with a try open
     mov rbx, rax
     ! out.load_rax_data(DataRef::CurrentLine);
     mov r12, rax
@@ -318,9 +332,9 @@ different:
     ! out.lea_rax_string(text.divide_by_zero);
     jmp run_error
 
-@ out_of_memory
+@ out_of_memory Can't be caught, since it can happen half way through the memory cleaner's work
     ! out.lea_rax_string(text.out_of_memory);
-    jmp run_error
+    jmp stop_with_error
 
 @ format_float rax = the float, rdi = where the text must end. Answers with its start in rdx, building it backward. Rounds exactly, like %.6f, using whole numbers only
     mov r8, rax
@@ -698,6 +712,19 @@ has_room:
     ret
 
 @ index_error rax = the index, rcx = the size, rdx = the words after the index, r8 = the words after the size
+    cmp rcx, 1
+    jne words_chosen
+    ! out.lea_string(R9, text.items_word);
+    cmp r8, r9
+    jne not_items
+    ! out.lea_string(R8, text.item_word);
+    jmp words_chosen
+not_items:
+    ! out.lea_string(R9, text.bytes_word);
+    cmp r8, r9
+    jne words_chosen
+    ! out.lea_string(R8, text.byte_word);
+words_chosen:
     mov rbx, rax
     mov rsi, rcx
     mov r12, rdx

@@ -363,9 +363,28 @@ void write_file_name_of(Assembler& out, const Runtime& runtime, const RuntimeTex
     out.bytes({0xC3});  // ret
 }
 
-// rax = the message. Shows the file and line, then stops with exit code 1
+// rax = the message. With a try open, goes back to that try's rbp and rsp and jumps to its catch with the message still in rax, making the try around it the newest. Otherwise shows the file and line, then stops with exit code 1
 void write_run_error(Assembler& out, const Runtime& runtime, const RuntimeText& text) {
+    (void)text;
+    const Label not_caught = out.new_label();
     out.place(runtime.run_error);
+    out.lea_data(RCX, DataRef::TryFrame);
+    out.bytes({0x48, 0x8B, 0x11});  // mov rdx, qword ptr [rcx]
+    out.bytes({0x48, 0x85, 0xD2});  // test rdx, rdx
+    out.jump_if_equal(not_caught);
+    out.bytes({0x4C, 0x8B, 0x02});  // mov r8, qword ptr [rdx]
+    out.bytes({0x4C, 0x89, 0x01});  // mov qword ptr [rcx], r8
+    out.bytes({0x48, 0x8B, 0x6A, 0x08});  // mov rbp, qword ptr [rdx+8]
+    out.bytes({0x48, 0x8B, 0x62, 0x10});  // mov rsp, qword ptr [rdx+16]
+    out.bytes({0xFF, 0x72, 0x18});  // push qword ptr [rdx+24]
+    out.bytes({0xC3});  // ret
+    out.place(not_caught);
+    out.jump(runtime.stop_with_error);
+}
+
+// rax = the message. Shows the file and line, then stops with exit code 1, even with a try open
+void write_stop_with_error(Assembler& out, const Runtime& runtime, const RuntimeText& text) {
+    out.place(runtime.stop_with_error);
     out.bytes({0x48, 0x89, 0xC3});  // mov rbx, rax
     out.load_rax_data(DataRef::CurrentLine);
     out.bytes({0x49, 0x89, 0xC4});  // mov r12, rax
@@ -400,10 +419,11 @@ void write_divide_by_zero(Assembler& out, const Runtime& runtime, const RuntimeT
     out.jump(runtime.run_error);
 }
 
+// Can't be caught, since it can happen half way through the memory cleaner's work
 void write_out_of_memory(Assembler& out, const Runtime& runtime, const RuntimeText& text) {
     out.place(runtime.out_of_memory);
     out.lea_rax_string(text.out_of_memory);
-    out.jump(runtime.run_error);
+    out.jump(runtime.stop_with_error);
 }
 
 // rax = the float, rdi = where the text must end. Answers with its start in rdx, building it backward. Rounds exactly, like %.6f, using whole numbers only
@@ -853,7 +873,22 @@ void write_builder_add_int(Assembler& out, const Runtime& runtime, const Runtime
 
 // rax = the index, rcx = the size, rdx = the words after the index, r8 = the words after the size
 void write_index_error(Assembler& out, const Runtime& runtime, const RuntimeText& text) {
+    const Label not_items = out.new_label();
+    const Label words_chosen = out.new_label();
     out.place(runtime.index_error);
+    out.bytes({0x48, 0x83, 0xF9, 0x01});  // cmp rcx, 1
+    out.jump_if_not_equal(words_chosen);
+    out.lea_string(R9, text.items_word);
+    out.bytes({0x4D, 0x39, 0xC8});  // cmp r8, r9
+    out.jump_if_not_equal(not_items);
+    out.lea_string(R8, text.item_word);
+    out.jump(words_chosen);
+    out.place(not_items);
+    out.lea_string(R9, text.bytes_word);
+    out.bytes({0x4D, 0x39, 0xC8});  // cmp r8, r9
+    out.jump_if_not_equal(words_chosen);
+    out.lea_string(R8, text.byte_word);
+    out.place(words_chosen);
     out.bytes({0x48, 0x89, 0xC3});  // mov rbx, rax
     out.bytes({0x48, 0x89, 0xCE});  // mov rsi, rcx
     out.bytes({0x49, 0x89, 0xD4});  // mov r12, rdx
@@ -2890,7 +2925,7 @@ void write_show_calls(Assembler& out, const Runtime& runtime, const RuntimeText&
 
 Runtime make_runtime_labels(Assembler& out) {
     Runtime runtime;
-    for (Label* label : {&runtime.exit, &runtime.write, &runtime.raw_alloc, &runtime.format_int, &runtime.make_string, &runtime.print_int, &runtime.int_to_string, &runtime.bool_to_string, &runtime.print_bool, &runtime.print_string, &runtime.join_strings, &runtime.join_many, &runtime.strings_equal, &runtime.error_text, &runtime.file_name_of, &runtime.run_error, &runtime.divide_by_zero, &runtime.out_of_memory, &runtime.format_float, &runtime.print_float, &runtime.float_to_string, &runtime.float_to_int, &runtime.float_mod, &runtime.builder_start, &runtime.builder_add, &runtime.builder_add_string, &runtime.builder_to_string, &runtime.builder_add_int, &runtime.index_error, &runtime.string_at, &runtime.new_array, &runtime.array_add, &runtime.array_pop, &runtime.array_address, &runtime.array_at, &runtime.builder_add_float, &runtime.builder_add_bool, &runtime.builder_add_quoted, &runtime.builder_print, &runtime.show_enter, &runtime.show_leave, &runtime.text_error, &runtime.string_to_int, &runtime.big_times_ten, &runtime.big_double, &runtime.big_compare, &runtime.big_subtract, &runtime.string_to_float, &runtime.string_to_float_body, &runtime.big_subtract_clear, &runtime.to_wide, &runtime.to_wide_body, &runtime.read_whole_file, &runtime.read_whole_file_body, &runtime.write_whole_file, &runtime.write_whole_file_body, &runtime.file_exists, &runtime.stdin_refill, &runtime.read_line, &runtime.builder_add_byte, &runtime.builder_add_letter, &runtime.get_args, &runtime.get_args_body, &runtime.add_backslash_run, &runtime.raw_free, &runtime.alloc, &runtime.alloc_text, &runtime.alloc_block, &runtime.alloc_again, &runtime.alloc_take, &runtime.alloc_slow, &runtime.cleaner_start, &runtime.cleaner_verify, &runtime.cleaner_add_to_table, &runtime.cleaner_mark_word, &runtime.cleaner_clean, &runtime.show_calls}) *label = out.new_label();
+    for (Label* label : {&runtime.exit, &runtime.write, &runtime.raw_alloc, &runtime.format_int, &runtime.make_string, &runtime.print_int, &runtime.int_to_string, &runtime.bool_to_string, &runtime.print_bool, &runtime.print_string, &runtime.join_strings, &runtime.join_many, &runtime.strings_equal, &runtime.error_text, &runtime.file_name_of, &runtime.run_error, &runtime.stop_with_error, &runtime.divide_by_zero, &runtime.out_of_memory, &runtime.format_float, &runtime.print_float, &runtime.float_to_string, &runtime.float_to_int, &runtime.float_mod, &runtime.builder_start, &runtime.builder_add, &runtime.builder_add_string, &runtime.builder_to_string, &runtime.builder_add_int, &runtime.index_error, &runtime.string_at, &runtime.new_array, &runtime.array_add, &runtime.array_pop, &runtime.array_address, &runtime.array_at, &runtime.builder_add_float, &runtime.builder_add_bool, &runtime.builder_add_quoted, &runtime.builder_print, &runtime.show_enter, &runtime.show_leave, &runtime.text_error, &runtime.string_to_int, &runtime.big_times_ten, &runtime.big_double, &runtime.big_compare, &runtime.big_subtract, &runtime.string_to_float, &runtime.string_to_float_body, &runtime.big_subtract_clear, &runtime.to_wide, &runtime.to_wide_body, &runtime.read_whole_file, &runtime.read_whole_file_body, &runtime.write_whole_file, &runtime.write_whole_file_body, &runtime.file_exists, &runtime.stdin_refill, &runtime.read_line, &runtime.builder_add_byte, &runtime.builder_add_letter, &runtime.get_args, &runtime.get_args_body, &runtime.add_backslash_run, &runtime.raw_free, &runtime.alloc, &runtime.alloc_text, &runtime.alloc_block, &runtime.alloc_again, &runtime.alloc_take, &runtime.alloc_slow, &runtime.cleaner_start, &runtime.cleaner_verify, &runtime.cleaner_add_to_table, &runtime.cleaner_mark_word, &runtime.cleaner_clean, &runtime.show_calls}) *label = out.new_label();
     return runtime;
 }
 
@@ -2911,6 +2946,7 @@ void write_runtime(Assembler& out, const Runtime& runtime, const RuntimeText& te
     write_error_text(out, runtime, text);
     write_file_name_of(out, runtime, text);
     write_run_error(out, runtime, text);
+    write_stop_with_error(out, runtime, text);
     write_divide_by_zero(out, runtime, text);
     write_out_of_memory(out, runtime, text);
     write_format_float(out, runtime, text);

@@ -1,0 +1,30 @@
+# text.jamo with letters beyond English: upper, lower, letter_count, letters, reverse_letters, and term.jamo's padding.
+# The expected upper and lower come from Python's str.upper and str.lower
+use "text.jamo"
+use "term.jamo"
+
+func main()
+    var words = ["héllo wörld çà", "Łódź", "Şahin ÿes", "αλφα βητα ωμεγα", "ΣΟΦΟΣ", "привет мир", "ЁЖИК", "Ångström Ærø", "plain ASCII 123"]
+    for w in words
+        print(upper(w))
+        print(lower(w))
+        print(f"{len(w)} {letter_count(w)}")
+    end
+    # ß has no two-byte capital, so it stays
+    print(upper("straße"))
+    # Final sigma becomes the same capital as the other sigma
+    print(upper("σοφος"))
+    print(letters("añ€😀b"))
+    print(len(letters("")))
+    print(reverse_letters("añ€😀b"))
+    print(pad_right("é", 3) + "|")
+    print(pad_left("жж", 4) + "|")
+    print(table([["name", "city"], ["Zoë", "Kraków"], ["Bo", "Oslo"]]))
+    # Broken UTF-8 bytes pass through unchanged
+    var place = memory(3)
+    poke_u8(place, 0, 195)
+    poke_u8(place, 1, 65)
+    poke_u8(place, 2, 97)
+    var broken = memory_text(place, 3)
+    print(byte(upper(broken), 0) == 195 and byte(upper(broken), 1) == 65 and byte(upper(broken), 2) == 65)
+end

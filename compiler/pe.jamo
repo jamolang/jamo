@@ -23,7 +23,7 @@ const CLEANER_SIZE = 432
 const LETTER_SIZE = 16
 # A window program's run error, kept for its message box: the length, then the text
 const ERROR_TEXT_SIZE = 4104
-const DATA_PLACES = 26
+const DATA_PLACES = 27
 
 func round_up(value: int, step: int): int
     return (value + step - 1) / step * step
@@ -152,6 +152,8 @@ func build_data_section(rva: int, g: Generator): DataSection
     next += VALUE_SIZE + call_count * VALUE_SIZE
     var globals_at = next
     next += VALUE_SIZE
+    var try_frame_at = next
+    next += VALUE_SIZE
 
     var out = section.bytes
     for l in 0..len(libraries)
@@ -222,6 +224,7 @@ func build_data_section(rva: int, g: Generator): DataSection
     fill_to(out, call_table_at)
     section.places[DATA_CALL_TABLE] = rva + call_table_at
     section.places[DATA_GLOBALS] = rva + globals_at
+    section.places[DATA_TRY_FRAME] = rva + try_frame_at
     out.add_u64(call_count)
     for i in 0..call_count
         out.add_u32(TEXT_RVA + g.out.call_offsets[i])

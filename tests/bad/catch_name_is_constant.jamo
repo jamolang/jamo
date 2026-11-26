@@ -1,0 +1,9 @@
+const LIMIT = 3
+
+func main()
+    try
+        print(1)
+    catch LIMIT
+        print(2)
+    end
+end

@@ -70,6 +70,9 @@ const TK_LESS = 61
 const TK_GREATER = 62
 const TK_LESS_EQUAL = 63
 const TK_GREATER_EQUAL = 64
+# Keywords added after the rest, so the numbers above stay the same
+const TK_TRY = 65
+const TK_CATCH = 66
 
 const MOST_ERRORS = 20
 const TEXT_CLOSED = 0
@@ -119,7 +122,7 @@ end
 
 # These can't be inside brackets, so one starting a line means a closing bracket was forgotten
 func starts_a_statement(kind: int): bool
-    return kind == TK_FUNC or kind == TK_STRUCT or kind == TK_ENUM or kind == TK_USE or kind == TK_END_WORD or kind == TK_VAR or kind == TK_IF or kind == TK_ELIF or kind == TK_ELSE or kind == TK_WHILE or kind == TK_FOR or kind == TK_MATCH or kind == TK_CASE or kind == TK_BREAK or kind == TK_CONTINUE or kind == TK_RETURN or kind == TK_PRINT
+    return kind == TK_FUNC or kind == TK_STRUCT or kind == TK_ENUM or kind == TK_USE or kind == TK_END_WORD or kind == TK_VAR or kind == TK_IF or kind == TK_ELIF or kind == TK_ELSE or kind == TK_WHILE or kind == TK_FOR or kind == TK_MATCH or kind == TK_CASE or kind == TK_BREAK or kind == TK_CONTINUE or kind == TK_RETURN or kind == TK_PRINT or kind == TK_TRY or kind == TK_CATCH
 end
 
 # A line that ends with one of these carries on to the next line
@@ -189,6 +192,10 @@ func kind_of_word(word: string): int
             return TK_STRING_WORD
         case "len"
             return TK_LEN
+        case "try"
+            return TK_TRY
+        case "catch"
+            return TK_CATCH
     end
     return TK_NAME
 end

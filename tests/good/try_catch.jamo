@@ -1,0 +1,243 @@
+# try and catch: run errors and fail() jump to the newest open catch, with the error's words
+use "text.jamo"
+
+struct Box
+    items: [int]
+end
+
+func deep(n: int): int
+    if n == 0
+        var empty: [int] = []
+        return empty[3]
+    end
+    return deep(n - 1) + 1
+end
+
+func checked_half(n: int): int
+    if n % 2 == 1
+        fail(f"{n} is odd")
+    end
+    return n / 2
+end
+
+# Returns from inside a try, so the try must be closed on the way out
+func first_even(items: [int]): int
+    for item in items
+        try
+            return checked_half(item) * 2
+        catch
+            continue
+        end
+    end
+    return -1
+end
+
+# Keeps its busy variables in registers, then stops with an error half way, leaving them changed
+func crunch(a: int, b: int): int
+    var sum = 0
+    var k = 0
+    while k < 50
+        sum += k * a
+        k += 1
+    end
+    var part = sum / b
+    return part - sum / b + a / b
+end
+
+func safe_divide(a: int, b: int): int
+    try
+        return crunch(a, b)
+    catch problem
+        print(f"  caught: {problem}")
+        return 0
+    end
+end
+
+# Uses lots of variables in a busy loop, so they live in registers, and calls code that catches errors deep down
+func busy(rounds: int): int
+    var total = 0
+    var odd = 0
+    var even = 0
+    var last = 0
+    for i in 0..rounds
+        if i % 2 == 0
+            even += i
+        else
+            odd += i
+        end
+        total += safe_divide(i, i % 3)
+        last = i
+    end
+    return total + odd * 1000 + even * 1000000 + last
+end
+
+# A function with a try keeps its own variables out of registers, or the catch would put back old values
+func counted(): int
+    var count = 0
+    var i = 0
+    while i < 20
+        try
+            count += 1
+            count += crunch(i, i % 4) * 0
+        catch
+            count += 100
+        end
+        i += 1
+    end
+    return count
+end
+
+# The same, with the try inside an elif
+func counted_elif(): int
+    var count = 0
+    var i = 0
+    while i < 20
+        if i < 0
+            count -= 1
+        elif i >= 0
+            try
+                count += 1
+                count += crunch(i, i % 4) * 0
+            catch
+                count += 100
+            end
+        end
+        i += 1
+    end
+    return count
+end
+
+func parse_or(text: string, fallback: int): int
+    try
+        return int(text)
+    catch
+        return fallback
+    end
+end
+
+func pick<T>(items: [T], at: int, fallback: T): T
+    try
+        return items[at]
+    catch
+        return fallback
+    end
+end
+
+func Box.get(at: int): int
+    try
+        return self.items[at]
+    catch problem
+        print("  Box.get: " + problem)
+        return -1
+    end
+end
+
+func main()
+    print("1. an index error, caught")
+    try
+        var items = [1, 2, 3]
+        print(items[5])
+        print("never shown")
+    catch problem
+        print("  " + problem)
+    end
+
+    print("2. from deep inside calls")
+    try
+        print(deep(50))
+    catch problem
+        print("  " + problem)
+    end
+
+    print("3. fail() is caught too")
+    try
+        print(checked_half(8))
+        print(checked_half(7))
+    catch problem
+        print("  " + problem)
+    end
+
+    print("4. no error: the catch is skipped")
+    try
+        print("  fine")
+    catch problem
+        print("  never " + problem)
+    end
+
+    print("5. nested: the inner catch first, then an error in it goes to the outer one")
+    try
+        try
+            print(int("12x"))
+        catch inner
+            print("  inner: " + inner)
+            var none: [string] = []
+            print(none[0])
+        end
+    catch outer
+        print("  outer: " + outer)
+    end
+
+    print("6. return, break and continue from inside a try")
+    print(first_even([3, 5, 7, 10, 9]))
+    print(first_even([1]))
+    var found = 0
+    for i in 0..10
+        try
+            if i == 4
+                break
+            end
+            found += 1
+        catch
+            print("never")
+        end
+    end
+    print(found)
+    # The trys above are all closed, so this error goes to this catch, not to a stale one
+    try
+        print(1 / (found - 4))
+    catch problem
+        print("  " + problem)
+    end
+
+    print("7. registers kept")
+    print(busy(30))
+
+    print(counted())
+    print(counted_elif())
+
+    print("8. in a loop many times")
+    var bad = 0
+    for i in 0..3000
+        try
+            var x = [i][i % 2]
+            bad += x * 0
+        catch
+            bad += 1
+        end
+    end
+    print(bad)
+
+    print("9. helpers")
+    print(parse_or("42", 0))
+    print(parse_or("forty", -1))
+    print(pick(["a", "b"], 1, "none"))
+    print(pick(["a", "b"], 9, "none"))
+    print(pick([1.5], 0, 0.0))
+    var box = Box{items: [7, 8]}
+    print(box.get(1))
+    print(box.get(2))
+
+    print("10. the catch's words are text like any other")
+    try
+        var m = new_text_map()
+        print(m)
+    catch problem
+        print(len(problem) > 0)
+    end
+    print("done")
+end
+
+func new_text_map(): int
+    var parts = split("a,b", ",")
+    return int(parts[0])
+end

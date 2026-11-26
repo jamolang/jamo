@@ -34,7 +34,7 @@ public:
     // A type written by name. The checker finds out later what it is, if it's anything
     Type named(const std::string& name) {
         for (size_t i = 0; i < entries.size(); i++) {
-            if (!entries[i].is_array && entries[i].name == name) return custom(i);
+            if (!entries[i].is_array && !entries[i].is_function && entries[i].name == name) return custom(i);
         }
         Entry entry;
         entry.name = name;
@@ -60,6 +60,22 @@ public:
         return custom(entries.size() - 1);
     }
 
+    // A function type, like func(int, int): bool. Its inputs are kept as args and its answer as element
+    Type function_of(const std::vector<Type>& inputs, Type answer) {
+        for (size_t i = 0; i < entries.size(); i++) {
+            if (entries[i].is_function && entries[i].args == inputs && entries[i].element == answer) return custom(i);
+        }
+        Entry entry;
+        entry.is_function = true;
+        entry.args = inputs;
+        entry.element = answer;
+        entries.push_back(entry);
+        return custom(entries.size() - 1);
+    }
+    bool is_function(Type type) const { return is_custom(type) && entry(type).is_function; }
+    const std::vector<Type>& inputs_of(Type function) const { return entry(function).args; }
+    Type answer_of(Type function) const { return entry(function).element; }
+
     bool is_generic(Type type) const { return is_custom(type) && entry(type).is_generic; }
     const std::string& base_of(Type type) const { return entry(type).base; }
     const std::vector<Type>& args_of(Type type) const { return entry(type).args; }
@@ -71,6 +87,12 @@ public:
     bool is_enum(Type type) const { return is_custom(type) && entry(type).is_enum; }
     bool is_known(Type type) const {
         if (!is_custom(type)) return true;
+        if (entry(type).is_function) {
+            for (Type input : entry(type).args) {
+                if (!is_known(input)) return false;
+            }
+            return is_known(entry(type).element);
+        }
         return entry(type).is_array ? is_known(entry(type).element) : entry(type).is_struct || entry(type).is_enum;
     }
     Type element_of(Type array) const { return entry(array).element; }
@@ -97,7 +119,15 @@ public:
             case Type::Bool: return "bool";
             case Type::String: return "string";
             case Type::Nothing: case Type::Unknown: return "nothing";
-            default: return entry(type).is_array ? "[" + name(entry(type).element) + "]" : entry(type).name;
+            default:
+                if (entry(type).is_function) {
+                    std::string words = "func(";
+                    for (size_t i = 0; i < entry(type).args.size(); i++) words += (i > 0 ? ", " : "") + name(entry(type).args[i]);
+                    words += ")";
+                    if (entry(type).element != Type::Nothing) words += ": " + name(entry(type).element);
+                    return words;
+                }
+                return entry(type).is_array ? "[" + name(entry(type).element) + "]" : entry(type).name;
         }
     }
 
@@ -107,6 +137,7 @@ private:
         bool is_struct = false;
         bool is_enum = false;
         bool is_generic = false;      // A generic struct given its types
+        bool is_function = false;     // A function type, with its inputs in args and its answer in element
         Type element = Type::Nothing;
         std::string name;
         std::string base;             // A generic one's struct, like Pair
@@ -127,7 +158,11 @@ private:
 const int FIRST_GLOBAL_SLOT = -2;
 inline const std::string SETUP_NAME = "(setup)";
 
-enum class ExprKind { Number, Float, Bool, String, Name, Negate, Binary, Call, Length, Convert, FString, Not, Index, ArrayLiteral, MethodCall, Field, StructLiteral, EnumValue, BuiltinCall };
+// A try keeps this many slots: the try around it, rbp, rsp, where its catch is, and r12 to r15
+const int TRY_SLOTS = 8;
+
+// FunctionValue is a function's name used as a value (its name in text). CallValue calls the function value in left with inputs
+enum class ExprKind { Number, Float, Bool, String, Name, Negate, Binary, Call, Length, Convert, FString, Not, Index, ArrayLiteral, MethodCall, Field, StructLiteral, EnumValue, BuiltinCall, FunctionValue, CallValue };
 enum class BinaryOp { Add, Subtract, Multiply, Divide, Remainder, Equal, NotEqual, Less, Greater, LessEqual, GreaterEqual, And, Or };
 
 struct Expr {
@@ -156,7 +191,7 @@ struct Expr {
 
 using ExprPtr = std::unique_ptr<Expr>;
 
-enum class StmtKind { Var, Assign, If, While, For, Match, Break, Continue, Return, Call, Print };
+enum class StmtKind { Var, Assign, If, While, For, Match, Break, Continue, Return, Call, Print, Try };
 
 struct Stmt;
 using Block = std::vector<std::unique_ptr<Stmt>>;
@@ -183,15 +218,15 @@ struct Stmt {
     ExprPtr target;                   // Assign to anything but a plain variable, like items[0]
     ExprPtr value;                    // Var, Assign, Return, Call, Print. Also the condition of If and While, and where a For starts
     ExprPtr range_end;                // For. Without one, a For goes through the array in value
-    Block body;                       // If, While, For
+    Block body;                       // If, While, For, and the try part of a Try
     std::vector<ElifPart> elifs;      // If
     std::vector<CasePart> cases;      // Match
-    Block other_body;                 // The else part of an If or Match
+    Block other_body;                 // The else part of an If or Match, and the catch part of a Try
     bool has_else = false;
 
     // Filled in by the checker
-    int slot = -1;                    // Var, Assign, For
-    int end_slot = -1;                // For: keeps the end, worked out once before the loop, or the place in an array
+    int slot = -1;                    // Var, Assign, For, and a Try's catch variable
+    int end_slot = -1;                // For: keeps the end, worked out once before the loop, or the place in an array. Try: the first of its 8 slots, where it keeps what's needed to jump to its catch
     int array_slot = -1;              // For: keeps the array
     bool covers_all = false;          // Match: some case always runs
 };

@@ -1,0 +1,4 @@
+func_type_needs_parens.jamo line 2: A function type needs ( ) with its inputs' types.
+        var f: func int
+                    ^^^
+Like this: func(int, int): bool

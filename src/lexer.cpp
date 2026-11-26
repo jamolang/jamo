@@ -14,7 +14,7 @@ bool starts_a_statement(TokenKind kind) {
         case TokenKind::Func: case TokenKind::Struct: case TokenKind::Enum: case TokenKind::Use: case TokenKind::EndWord:
         case TokenKind::Var: case TokenKind::If: case TokenKind::Elif: case TokenKind::Else: case TokenKind::While:
         case TokenKind::For: case TokenKind::Match: case TokenKind::Case: case TokenKind::Break: case TokenKind::Continue:
-        case TokenKind::Return: case TokenKind::Print:
+        case TokenKind::Return: case TokenKind::Print: case TokenKind::Try: case TokenKind::Catch:
             return true;
         default:
             return false;
@@ -75,6 +75,8 @@ TokenKind kind_of_word(const std::string& word) {
     if (word == "bool") return TokenKind::Bool;
     if (word == "string") return TokenKind::StringWord;
     if (word == "len") return TokenKind::Len;
+    if (word == "try") return TokenKind::Try;
+    if (word == "catch") return TokenKind::Catch;
     return TokenKind::Name;
 }
 

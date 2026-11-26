@@ -1,0 +1,36 @@
+# sound.jamo's silence and Clip.mix, read back sample by sample. Needs no speakers. Expected values worked out by hand
+use "sound.jamo"
+
+func samples(clip: Clip, first_frame: int, frames: int): string
+    var out = ""
+    for i in first_frame * 2..(first_frame + frames) * 2
+        out = out + string(peek_u16(clip.samples, i * 2) - 32768) + " "
+    end
+    return out
+end
+
+func main()
+    var song = silence(0.001)
+    print(song.frames)
+    print(samples(song, 0, 2))
+
+    # A 4-frame stereo clip made by hand
+    var notes = Clip{samples: memory(16), frames: 4}
+    var values = [20000, -20000, 1000, -1000, 30000, 30000, -6, 6]
+    for i in 0..8
+        poke_u16(notes.samples, i * 2, values[i] + 32768)
+    end
+
+    song.mix(notes, 0.0, 1.0)
+    print(samples(song, 0, 5))
+    # Mixed twice, the loud parts stop at the 16-bit edges instead of wrapping around
+    song.mix(notes, 0.0, 1.0)
+    print(samples(song, 0, 4))
+    # Half volume, 10 frames in
+    song.mix(notes, 10.0 / 44100.0, 0.5)
+    print(samples(song, 9, 6))
+    # Two frames from the end: the rest is left off
+    song.mix(notes, 42.0 / 44100.0, 1.0)
+    print(samples(song, 41, 3))
+    print(song.seconds() > 0.0009)
+end

@@ -33,6 +33,9 @@ const EX_FIELD = 15
 const EX_STRUCT_LITERAL = 16
 const EX_ENUM_VALUE = 17
 const EX_BUILTIN_CALL = 18
+# A function's name used as a value (its name in text), and a call through a function value in left
+const EX_FUNCTION_VALUE = 19
+const EX_CALL_VALUE = 20
 
 # Operators, numbered like BinaryOp
 const OP_ADD = 0
@@ -61,6 +64,10 @@ const ST_CONTINUE = 7
 const ST_RETURN = 8
 const ST_CALL = 9
 const ST_PRINT = 10
+const ST_TRY = 11
+
+# A try keeps this many slots: the try around it, rbp, rsp, where its catch is, and r12 to r15
+const TRY_SLOTS = 8
 
 struct StructField
     name: string
@@ -72,6 +79,7 @@ end
 
 struct TypeEntry
     is_array: bool
+    is_function: bool      # A function type, with its inputs in args and its answer in element
     is_struct: bool
     is_enum: bool
     is_generic: bool
@@ -265,18 +273,18 @@ func TypeTable.array_of(element: int): int
             return TYPE_FIRST_CUSTOM + i
         end
     end
-    self.entries.add(TypeEntry{is_array: true, is_struct: false, is_enum: false, is_generic: false, element: element, name: "", base: "", args: [], fields: [], members: []})
+    self.entries.add(TypeEntry{is_array: true, is_function: false, is_struct: false, is_enum: false, is_generic: false, element: element, name: "", base: "", args: [], fields: [], members: []})
     return TYPE_FIRST_CUSTOM + len(self.entries) - 1
 end
 
 # A type written by name. The checker finds out later what it is, if it's anything
 func TypeTable.named(name: string): int
     for i in 0..len(self.entries)
-        if not self.entries[i].is_array and self.entries[i].name == name
+        if not self.entries[i].is_array and not self.entries[i].is_function and self.entries[i].name == name
             return TYPE_FIRST_CUSTOM + i
         end
     end
-    self.entries.add(TypeEntry{is_array: false, is_struct: false, is_enum: false, is_generic: false, element: TYPE_NOTHING, name: name, base: "", args: [], fields: [], members: []})
+    self.entries.add(TypeEntry{is_array: false, is_function: false, is_struct: false, is_enum: false, is_generic: false, element: TYPE_NOTHING, name: name, base: "", args: [], fields: [], members: []})
     return TYPE_FIRST_CUSTOM + len(self.entries) - 1
 end
 
@@ -300,8 +308,36 @@ func TypeTable.generic(base: string, args: [int]): int
     for arg in args
         kept.add(arg)
     end
-    self.entries.add(TypeEntry{is_array: false, is_struct: false, is_enum: false, is_generic: true, element: TYPE_NOTHING, name: full, base: base, args: kept, fields: [], members: []})
+    self.entries.add(TypeEntry{is_array: false, is_function: false, is_struct: false, is_enum: false, is_generic: true, element: TYPE_NOTHING, name: full, base: base, args: kept, fields: [], members: []})
     return TYPE_FIRST_CUSTOM + len(self.entries) - 1
+end
+
+# A function type, like func(int, int): bool. Its inputs are kept as args and its answer as element
+func TypeTable.function_of(inputs: [int], answer: int): int
+    for i in 0..len(self.entries)
+        var entry = self.entries[i]
+        if entry.is_function and entry.element == answer and len(entry.args) == len(inputs)
+            var same = true
+            for k in 0..len(inputs)
+                if entry.args[k] != inputs[k]
+                    same = false
+                end
+            end
+            if same
+                return TYPE_FIRST_CUSTOM + i
+            end
+        end
+    end
+    var kept: [int] = []
+    for input in inputs
+        kept.add(input)
+    end
+    self.entries.add(TypeEntry{is_array: false, is_function: true, is_struct: false, is_enum: false, is_generic: false, element: answer, name: "", base: "", args: kept, fields: [], members: []})
+    return TYPE_FIRST_CUSTOM + len(self.entries) - 1
+end
+
+func TypeTable.is_function(type: int): bool
+    return type_is_custom(type) and self.entry(type).is_function
 end
 
 func TypeTable.is_generic(type: int): bool
@@ -325,6 +361,20 @@ func TypeTable.name(type: int): string
         return "nothing"
     end
     var found = self.entry(type)
+    if found.is_function
+        var words = "func("
+        for i in 0..len(found.args)
+            if i > 0
+                words = words + ", "
+            end
+            words = words + self.name(found.args[i])
+        end
+        words = words + ")"
+        if found.element != TYPE_NOTHING
+            words = words + ": " + self.name(found.element)
+        end
+        return words
+    end
     if found.is_array
         return "[" + self.name(found.element) + "]"
     end

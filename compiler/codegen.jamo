@@ -59,6 +59,8 @@ struct Generator
     current_function: string
     loop_nexts: [int]
     loop_ends: [int]
+    loop_tries: [int]      # How many trys were open when each loop started, so break and continue close the ones inside it
+    tries_open: [int]      # The first slot of each try being written, outermost first
     show_labels: Dict
     shows_to_write: [int]
     strings: [string]
@@ -111,13 +113,13 @@ end
 # --- Starting ---
 
 func new_runtime_text(): RuntimeText
-    return RuntimeText{file_names: [], true_word: 0, false_word: 0, line_word: 0, error_word: 0, divide_by_zero: 0, out_of_memory: 0, float_too_large: 0, index_word: 0, outside_string: 0, bytes_word: 0, pop_empty: 0, outside_array: 0, items_word: 0, quote: 0, new_line: 0, cant_turn: 0, into_int: 0, into_float: 0, cant_read: 0, cant_write: 0, period: 0, cleaner_bad_header: 0, cleaner_freed_changed: 0, cleaner_freed_reference: 0, cleaner_double_free: 0, more_calls: 0, user32_dll: 0, message_box: 0, error_title: 0}
+    return RuntimeText{file_names: [], true_word: 0, false_word: 0, line_word: 0, error_word: 0, divide_by_zero: 0, out_of_memory: 0, float_too_large: 0, index_word: 0, outside_string: 0, bytes_word: 0, pop_empty: 0, outside_array: 0, items_word: 0, item_word: 0, byte_word: 0, quote: 0, new_line: 0, cant_turn: 0, into_int: 0, into_float: 0, cant_read: 0, cant_write: 0, period: 0, cleaner_bad_header: 0, cleaner_freed_changed: 0, cleaner_freed_reference: 0, cleaner_double_free: 0, more_calls: 0, user32_dll: 0, message_box: 0, error_title: 0}
 end
 
 # file_name appears in run errors. test_flags: 1 cleans at every allocation, 2 adds cleaner checks, 4 turns
 # the cleaner off, 8 turns off optimizing. The machine code, strings and imports are left in the Generator
 func generate_code(program: Program, file_name: string, test_flags: int): Generator
-    var g = Generator{program: program, file_name: file_name, cleaner_mode: test_flags % 8 + test_flags / WINDOW_PROGRAM % 2 * WINDOW_PROGRAM, optimizing: test_flags / 8 % 2 == 0, out: new_assembler(), rt: [], text: new_runtime_text(), function_labels: new_dict(), function_named: new_dict(), functions_in_use: new_dict(), callback_labels: new_dict(), slot_registers: [], saved_count: 0, import_dlls: [], import_names: [], import_numbers: new_dict(), opengl_lookup: -1, current_function: "", loop_nexts: [], loop_ends: [], show_labels: new_dict(), shows_to_write: [], strings: [], string_numbers: new_dict(), input_count: 0, bits: 0, scratch: memory(8), inline_ok: new_dict(), inline_count: 0, slot_shift: -1, inline_end: -1, inline_top: 0}
+    var g = Generator{program: program, file_name: file_name, cleaner_mode: test_flags % 8 + test_flags / WINDOW_PROGRAM % 2 * WINDOW_PROGRAM, optimizing: test_flags / 8 % 2 == 0, out: new_assembler(), rt: [], text: new_runtime_text(), function_labels: new_dict(), function_named: new_dict(), functions_in_use: new_dict(), callback_labels: new_dict(), slot_registers: [], saved_count: 0, import_dlls: [], import_names: [], import_numbers: new_dict(), opengl_lookup: -1, current_function: "", loop_nexts: [], loop_ends: [], loop_tries: [], tries_open: [], show_labels: new_dict(), shows_to_write: [], strings: [], string_numbers: new_dict(), input_count: 0, bits: 0, scratch: memory(8), inline_ok: new_dict(), inline_count: 0, slot_shift: -1, inline_end: -1, inline_top: 0}
     g.generate()
     return g
 end
@@ -157,6 +159,8 @@ func Generator.generate()
     t.pop_empty = self.string_number("pop needs an item, but this array is empty")
     t.outside_array = self.string_number(" is outside this array, which has ")
     t.items_word = self.string_number(" items")
+    t.item_word = self.string_number(" item")
+    t.byte_word = self.string_number(" byte")
     t.quote = self.string_number("\"")
     t.new_line = self.string_number("\n")
     t.cant_turn = self.string_number("can't turn \"")
@@ -320,6 +324,9 @@ func Generator.find_calls(place: int, called: [string])
         called.add(e.name)
     end
     if e.kind == EX_BUILTIN_CALL and e.name == "callback"
+        called.add(e.text)
+    end
+    if e.kind == EX_FUNCTION_VALUE
         called.add(e.text)
     end
     if e.kind == EX_METHOD_CALL and self.is_struct(self.ex(e.left).type)
@@ -1077,7 +1084,9 @@ end
 func Generator.choose_registers(function: Function)
     self.slot_registers = []
     self.saved_count = 0
-    if not self.optimizing
+    # A catch can't know what a function's own variables held in registers, so a function with a try keeps
+    # them all in memory
+    if not self.optimizing or self.has_try(function.body)
         return
     end
     var uses: [int] = []
@@ -1224,8 +1233,16 @@ func Generator.write_statement(place: int)
     elif kind == ST_MATCH
         self.write_match(s)
     elif kind == ST_BREAK
+        var loop_tries = self.loop_tries[len(self.loop_tries) - 1]
+        if len(self.tries_open) > loop_tries
+            self.close_tries_from(loop_tries)
+        end
         out.jump(self.loop_ends[len(self.loop_ends) - 1])
     elif kind == ST_CONTINUE
+        var loop_tries = self.loop_tries[len(self.loop_tries) - 1]
+        if len(self.tries_open) > loop_tries
+            self.close_tries_from(loop_tries)
+        end
         out.jump(self.loop_nexts[len(self.loop_nexts) - 1])
     elif kind == ST_RETURN
         if s.value >= 0
@@ -1234,8 +1251,15 @@ func Generator.write_statement(place: int)
         if self.inline_end >= 0
             out.jump(self.inline_end)
         else
+            if len(self.tries_open) > 0
+                out.push_rax()
+                self.close_tries_from(0)
+                out.pop_rax()
+            end
             self.write_return()
         end
+    elif kind == ST_TRY
+        self.write_try(s)
     elif kind == ST_CALL
         self.write_expression(s.value)
     elif kind == ST_PRINT
@@ -1494,6 +1518,80 @@ func Generator.write_match(s: Stmt)
     out.place(finished)
 end
 
+# --- try and catch ---
+# A try fills in 8 slots, as a record the runtime can follow: [0] the try around this one, [8] rbp, [16] rsp,
+# [24] where the catch is, then r12 to r15. The newest try's record is kept in the data section. A run error
+# with a try open goes back to that try's rbp and rsp and jumps to its catch with the error's words in rax,
+# and the catch puts r12 to r15 back, since the functions in between may have changed them
+
+# The frame offset of one field of a try's record
+func Generator.try_field(first_slot: int, field: int): int
+    return self.frame_offset(first_slot + TRY_SLOTS - 1 - field)
+end
+
+# Makes the try around the ones from this place on the newest again, as when leaving them
+func Generator.close_tries_from(place: int)
+    self.out.load_rax_from_frame(self.try_field(self.tries_open[place], 0))
+    self.out.store_rax_data(DATA_TRY_FRAME)
+end
+
+func Generator.write_try(s: Stmt)
+    var out = self.out
+    var first = s.end_slot
+    var catcher = out.new_label()
+    var finished = out.new_label()
+    out.load_rax_data(DATA_TRY_FRAME)
+    out.store_rax_to_frame(self.try_field(first, 0))
+    out.mov_rax_rbp()
+    out.store_rax_to_frame(self.try_field(first, 1))
+    out.mov_rax_rsp()
+    out.store_rax_to_frame(self.try_field(first, 2))
+    out.lea_rax_label(catcher)
+    out.store_rax_to_frame(self.try_field(first, 3))
+    for reg in 0..VARIABLE_REGISTERS
+        out.store_reg_to_frame(reg, self.try_field(first, 4 + reg))
+    end
+    out.lea_rax_frame(self.try_field(first, 0))
+    out.store_rax_data(DATA_TRY_FRAME)
+    self.tries_open.add(first)
+    self.write_block(s.body)
+    self.tries_open.pop()
+    if not self.always_leaves(s.body)
+        out.load_rax_from_frame(self.try_field(first, 0))
+        out.store_rax_data(DATA_TRY_FRAME)
+        out.jump(finished)
+    end
+    out.place(catcher)
+    for reg in 0..VARIABLE_REGISTERS
+        out.load_reg_from_frame(reg, self.try_field(first, 4 + reg))
+    end
+    if s.slot >= 0
+        self.store_slot_rax(s.slot)
+    end
+    self.write_block(s.other_body)
+    out.place(finished)
+end
+
+func Generator.has_try(block: [int]): bool
+    for place in block
+        var s = self.st(place)
+        if s.kind == ST_TRY or self.has_try(s.body) or self.has_try(s.other_body)
+            return true
+        end
+        for part in s.elifs
+            if self.has_try(part.body)
+                return true
+            end
+        end
+        for part in s.cases
+            if self.has_try(part.body)
+                return true
+            end
+        end
+    end
+    return false
+end
+
 func Generator.write_while(s: Stmt)
     var out = self.out
     if self.optimizing
@@ -1502,6 +1600,7 @@ func Generator.write_while(s: Stmt)
         var check = out.new_label()
         var done = out.new_label()
         self.loop_nexts.add(check)
+        self.loop_tries.add(len(self.tries_open))
         self.loop_ends.add(done)
         out.jump(check)
         out.place(body)
@@ -1511,11 +1610,13 @@ func Generator.write_while(s: Stmt)
         out.place(done)
         self.loop_nexts.pop()
         self.loop_ends.pop()
+        self.loop_tries.pop()
         return
     end
     var start = out.new_label()
     var finished = out.new_label()
     self.loop_nexts.add(start)
+    self.loop_tries.add(len(self.tries_open))
     self.loop_ends.add(finished)
     out.place(start)
     self.write_jump(s.value, false, finished)
@@ -1524,6 +1625,7 @@ func Generator.write_while(s: Stmt)
     out.place(finished)
     self.loop_nexts.pop()
     self.loop_ends.pop()
+    self.loop_tries.pop()
 end
 
 # Looks at the array's length every round, since the loop's body can grow it
@@ -1537,6 +1639,7 @@ func Generator.write_for_array(s: Stmt)
     out.zero_eax()
     self.store_slot_rax(s.end_slot)
     self.loop_nexts.add(next)
+    self.loop_tries.add(len(self.tries_open))
     self.loop_ends.add(finished)
     if self.optimizing
         # The check sits after the body, so each round takes one jump instead of two
@@ -1567,6 +1670,7 @@ func Generator.write_for_array(s: Stmt)
         out.place(finished)
         self.loop_nexts.pop()
         self.loop_ends.pop()
+        self.loop_tries.pop()
         return
     end
     out.place(start)
@@ -1589,6 +1693,7 @@ func Generator.write_for_array(s: Stmt)
     out.place(finished)
     self.loop_nexts.pop()
     self.loop_ends.pop()
+    self.loop_tries.pop()
 end
 
 # The variable stays below the end, so adding one to it can't overflow
@@ -1606,6 +1711,7 @@ func Generator.write_for(s: Stmt)
     self.write_expression(s.range_end)
     self.store_slot_rax(s.end_slot)
     self.loop_nexts.add(next)
+    self.loop_tries.add(len(self.tries_open))
     self.loop_ends.add(finished)
     if self.optimizing
         # The check sits after the body, and a variable in a register is counted and compared where it is
@@ -1635,6 +1741,7 @@ func Generator.write_for(s: Stmt)
         out.place(finished)
         self.loop_nexts.pop()
         self.loop_ends.pop()
+        self.loop_tries.pop()
         return
     end
     out.place(start)
@@ -1651,6 +1758,7 @@ func Generator.write_for(s: Stmt)
     out.place(finished)
     self.loop_nexts.pop()
     self.loop_ends.pop()
+    self.loop_tries.pop()
 end
 
 # --- Expressions ---
@@ -1742,6 +1850,21 @@ func Generator.write_expression(place: int)
             out.push_rax()
         end
         out.call(self.function_labels.get(e.name))
+        self.note_call_site(e)
+        if len(e.inputs) > 0
+            out.add_rsp(len(e.inputs) * WORD_SIZE)
+        end
+    elif kind == EX_FUNCTION_VALUE
+        out.lea_rax_label(self.function_labels.get(e.text))
+    elif kind == EX_CALL_VALUE
+        # The same as a call by name, but to the address the value holds. r11 holds nothing in Jamo code
+        for input in e.inputs
+            self.write_expression(input)
+            out.push_rax()
+        end
+        self.write_expression(e.left)
+        out.mov_r11_rax()
+        out.call_r11()
         self.note_call_site(e)
         if len(e.inputs) > 0
             out.add_rsp(len(e.inputs) * WORD_SIZE)
@@ -1900,6 +2023,11 @@ func Generator.write_callback(function: Function, label: int)
     out.hex("535657")
     out.hex("4154415541564157")
     out.hex("4883ec08")
+    # A try open outside doesn't reach in here: a run error must never jump back across Windows' own code
+    out.load_rax_data(DATA_TRY_FRAME)
+    out.hex("488945c0")
+    out.zero_eax()
+    out.store_rax_data(DATA_TRY_FRAME)
     var pushes = ["51", "52", "4150", "4151"]
     for i in 0..len(function.inputs)
         out.hex(pushes[i])
@@ -1908,6 +2036,8 @@ func Generator.write_callback(function: Function, label: int)
     if len(function.inputs) > 0
         out.add_rsp(len(function.inputs) * WORD_SIZE)
     end
+    out.hex("488b4dc0")
+    out.store_rcx_data(DATA_TRY_FRAME)
     out.hex("488d65c8")
     out.hex("415f415e415d415c5f5e5b5dc3")
 end
@@ -2178,6 +2308,13 @@ end
 func Generator.write_show_function(type: int)
     if self.is_enum(type)
         self.write_show_enum(type)
+        return
+    end
+    if self.program.types.is_function(type)
+        # A function value shows as its type, like func(int): bool
+        self.out.place(self.show_labels.get(string(type)))
+        self.out.lea_rax_string(self.string_number(self.type_name(type)))
+        self.out.jump(self.rt[R_BUILDER_ADD_STRING])
         return
     end
     var out = self.out

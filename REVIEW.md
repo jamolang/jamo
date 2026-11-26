@@ -204,3 +204,28 @@ A look at the compiler's own code, after a day that added generics, variables ou
 - A generic that's never used isn't checked, so a typo in one only shows when something uses it, like in C++.
 - `f(a < b, c > (d))` reads as a call with types. It's documented, and the error gives a hint, but it can surprise.
 
+
+# Jamo review, third pass
+
+Written on 2026-11-26, after a day of work aimed at what the first pass said held Jamo back for real use. The same honesty rules apply: Claude wrote this code too, so this isn't a new user's view.
+
+## What the first passes asked for, and where it stands
+
+| Gap | Now |
+|---|---|
+| No way to handle errors | `try` and `catch`, in both compilers. Errors at any depth of calls reach the catch, `return`, `break` and `continue` close the trys they leave, and a catch restores the registers that functions in between changed. 11 bugs planted in a copy of the compiler were all caught by the new tests, and the random-program and broken-program fuzzers found no problems (600 and 800 runs) |
+| Only int and string arrays could be sorted | `sort_by`, `sort_by_float` and `sort_by_text` sort any array by keys, keeping ties in order, checked against Python's `sorted` |
+| Text tools only knew English letters | `upper` and `lower` handle accented, Greek and Cyrillic letters, and `letter_count`, `letters` and `reverse_letters` count whole letters. Checked against Python's `str.upper` and `str.lower` |
+| No packages | `jamo get someone/project` fetches a shared library from GitHub, refusing file names that could leave its folder and saving nothing unless every file arrives |
+| Hard to see what Jamo can do | Two new examples with GIFs at the top of the README: Sky Hopper, a platformer, and Beat Run, a rhythm game whose music is mixed in code. Both were proven beatable by solvers, and Beat Run's timing windows measured: at least 50 ms either side of every jump, most 142 ms |
+| Speed claims weren't easy to check | `bench/run_bench.py` times five programs in Jamo, C and Python, checks all three print the same, and draws the chart in the README. Jamo is 4 to 76 times faster than Python, and 1.2 to 4 times slower than C at number crunching |
+| Trying Jamo meant setting up an editor | Jamo Playground, a small editor with Run, typed input, clickable errors and the examples one click away. The VS Code extension gained hover, go to definition (into the built-in libraries too), an outline and suggestions |
+| Small wording | Index errors say "1 item" and "1 byte" |
+
+## Still open
+
+- Functions can be passed as values now (added the same day, with `sort_with`, `filtered` and `mapped`), but they can't remember the variables around them: there are no closures.
+- The console can still show non-English text garbled, though files get it right. Fixing it means writing through `WriteConsoleW`.
+- Running out of memory, and errors inside functions Windows calls back, can't be caught. Both are on purpose, and documented.
+- `jamo get` has no versions: it takes whatever is on the project's main branch.
+- The repo is still private, so none of this has met a real new user. That's the next real test.

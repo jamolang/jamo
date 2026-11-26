@@ -1,0 +1,4 @@
+catch_outside_try.jamo line 3: A catch can only go inside a try.
+        catch problem
+        ^^^^^
+Like this: try, then what to do, then catch problem, then what to do if it goes wrong, then end

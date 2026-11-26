@@ -20,68 +20,69 @@ const R_STRINGS_EQUAL = 12
 const R_ERROR_TEXT = 13
 const R_FILE_NAME_OF = 14
 const R_RUN_ERROR = 15
-const R_DIVIDE_BY_ZERO = 16
-const R_OUT_OF_MEMORY = 17
-const R_FORMAT_FLOAT = 18
-const R_PRINT_FLOAT = 19
-const R_FLOAT_TO_STRING = 20
-const R_FLOAT_TO_INT = 21
-const R_FLOAT_MOD = 22
-const R_BUILDER_START = 23
-const R_BUILDER_ADD = 24
-const R_BUILDER_ADD_STRING = 25
-const R_BUILDER_TO_STRING = 26
-const R_BUILDER_ADD_INT = 27
-const R_INDEX_ERROR = 28
-const R_STRING_AT = 29
-const R_NEW_ARRAY = 30
-const R_ARRAY_ADD = 31
-const R_ARRAY_POP = 32
-const R_ARRAY_ADDRESS = 33
-const R_ARRAY_AT = 34
-const R_BUILDER_ADD_FLOAT = 35
-const R_BUILDER_ADD_BOOL = 36
-const R_BUILDER_ADD_QUOTED = 37
-const R_BUILDER_PRINT = 38
-const R_SHOW_ENTER = 39
-const R_SHOW_LEAVE = 40
-const R_TEXT_ERROR = 41
-const R_STRING_TO_INT = 42
-const R_BIG_TIMES_TEN = 43
-const R_BIG_DOUBLE = 44
-const R_BIG_COMPARE = 45
-const R_BIG_SUBTRACT = 46
-const R_STRING_TO_FLOAT = 47
-const R_STRING_TO_FLOAT_BODY = 48
-const R_BIG_SUBTRACT_CLEAR = 49
-const R_TO_WIDE = 50
-const R_TO_WIDE_BODY = 51
-const R_READ_WHOLE_FILE = 52
-const R_READ_WHOLE_FILE_BODY = 53
-const R_WRITE_WHOLE_FILE = 54
-const R_WRITE_WHOLE_FILE_BODY = 55
-const R_FILE_EXISTS = 56
-const R_STDIN_REFILL = 57
-const R_READ_LINE = 58
-const R_BUILDER_ADD_BYTE = 59
-const R_BUILDER_ADD_LETTER = 60
-const R_GET_ARGS = 61
-const R_GET_ARGS_BODY = 62
-const R_ADD_BACKSLASH_RUN = 63
-const R_RAW_FREE = 64
-const R_ALLOC = 65
-const R_ALLOC_TEXT = 66
-const R_ALLOC_BLOCK = 67
-const R_ALLOC_AGAIN = 68
-const R_ALLOC_TAKE = 69
-const R_ALLOC_SLOW = 70
-const R_CLEANER_START = 71
-const R_CLEANER_VERIFY = 72
-const R_CLEANER_ADD_TO_TABLE = 73
-const R_CLEANER_MARK_WORD = 74
-const R_CLEANER_CLEAN = 75
-const R_SHOW_CALLS = 76
-const RUNTIME_ROUTINES = 77
+const R_STOP_WITH_ERROR = 16
+const R_DIVIDE_BY_ZERO = 17
+const R_OUT_OF_MEMORY = 18
+const R_FORMAT_FLOAT = 19
+const R_PRINT_FLOAT = 20
+const R_FLOAT_TO_STRING = 21
+const R_FLOAT_TO_INT = 22
+const R_FLOAT_MOD = 23
+const R_BUILDER_START = 24
+const R_BUILDER_ADD = 25
+const R_BUILDER_ADD_STRING = 26
+const R_BUILDER_TO_STRING = 27
+const R_BUILDER_ADD_INT = 28
+const R_INDEX_ERROR = 29
+const R_STRING_AT = 30
+const R_NEW_ARRAY = 31
+const R_ARRAY_ADD = 32
+const R_ARRAY_POP = 33
+const R_ARRAY_ADDRESS = 34
+const R_ARRAY_AT = 35
+const R_BUILDER_ADD_FLOAT = 36
+const R_BUILDER_ADD_BOOL = 37
+const R_BUILDER_ADD_QUOTED = 38
+const R_BUILDER_PRINT = 39
+const R_SHOW_ENTER = 40
+const R_SHOW_LEAVE = 41
+const R_TEXT_ERROR = 42
+const R_STRING_TO_INT = 43
+const R_BIG_TIMES_TEN = 44
+const R_BIG_DOUBLE = 45
+const R_BIG_COMPARE = 46
+const R_BIG_SUBTRACT = 47
+const R_STRING_TO_FLOAT = 48
+const R_STRING_TO_FLOAT_BODY = 49
+const R_BIG_SUBTRACT_CLEAR = 50
+const R_TO_WIDE = 51
+const R_TO_WIDE_BODY = 52
+const R_READ_WHOLE_FILE = 53
+const R_READ_WHOLE_FILE_BODY = 54
+const R_WRITE_WHOLE_FILE = 55
+const R_WRITE_WHOLE_FILE_BODY = 56
+const R_FILE_EXISTS = 57
+const R_STDIN_REFILL = 58
+const R_READ_LINE = 59
+const R_BUILDER_ADD_BYTE = 60
+const R_BUILDER_ADD_LETTER = 61
+const R_GET_ARGS = 62
+const R_GET_ARGS_BODY = 63
+const R_ADD_BACKSLASH_RUN = 64
+const R_RAW_FREE = 65
+const R_ALLOC = 66
+const R_ALLOC_TEXT = 67
+const R_ALLOC_BLOCK = 68
+const R_ALLOC_AGAIN = 69
+const R_ALLOC_TAKE = 70
+const R_ALLOC_SLOW = 71
+const R_CLEANER_START = 72
+const R_CLEANER_VERIFY = 73
+const R_CLEANER_ADD_TO_TABLE = 74
+const R_CLEANER_MARK_WORD = 75
+const R_CLEANER_CLEAN = 76
+const R_SHOW_CALLS = 77
+const RUNTIME_ROUTINES = 78
 
 # rcx = exit code. A window program that collected a run error shows it in a message box first, since it has no console
 func write_rt_exit(out: Assembler, rt: [int], text: RuntimeText)
@@ -429,9 +430,27 @@ func write_rt_file_name_of(out: Assembler, rt: [int], text: RuntimeText)
     out.hex("c3")  # ret
 end
 
-# rax = the message. Shows the file and line, then stops with exit code 1
+# rax = the message. With a try open, goes back to that try's rbp and rsp and jumps to its catch with the message still in rax, making the try around it the newest. Otherwise shows the file and line, then stops with exit code 1
 func write_rt_run_error(out: Assembler, rt: [int], text: RuntimeText)
+    var at_not_caught = out.new_label()
     out.place(rt[R_RUN_ERROR])
+    out.lea_data(REG_RCX, DATA_TRY_FRAME, 0)
+    out.hex("488b11")  # mov rdx, qword ptr [rcx]
+    out.hex("4885d2")  # test rdx, rdx
+    out.jump_if_equal(at_not_caught)
+    out.hex("4c8b02")  # mov r8, qword ptr [rdx]
+    out.hex("4c8901")  # mov qword ptr [rcx], r8
+    out.hex("488b6a08")  # mov rbp, qword ptr [rdx+8]
+    out.hex("488b6210")  # mov rsp, qword ptr [rdx+16]
+    out.hex("ff7218")  # push qword ptr [rdx+24]
+    out.hex("c3")  # ret
+    out.place(at_not_caught)
+    out.jump(rt[R_STOP_WITH_ERROR])
+end
+
+# rax = the message. Shows the file and line, then stops with exit code 1, even with a try open
+func write_rt_stop_with_error(out: Assembler, rt: [int], text: RuntimeText)
+    out.place(rt[R_STOP_WITH_ERROR])
     out.hex("4889c3")  # mov rbx, rax
     out.load_rax_data(DATA_CURRENT_LINE)
     out.hex("4989c4")  # mov r12, rax
@@ -466,10 +485,11 @@ func write_rt_divide_by_zero(out: Assembler, rt: [int], text: RuntimeText)
     out.jump(rt[R_RUN_ERROR])
 end
 
+# Can't be caught, since it can happen half way through the memory cleaner's work
 func write_rt_out_of_memory(out: Assembler, rt: [int], text: RuntimeText)
     out.place(rt[R_OUT_OF_MEMORY])
     out.lea_rax_string(text.out_of_memory)
-    out.jump(rt[R_RUN_ERROR])
+    out.jump(rt[R_STOP_WITH_ERROR])
 end
 
 # rax = the float, rdi = where the text must end. Answers with its start in rdx, building it backward. Rounds exactly, like %.6f, using whole numbers only
@@ -910,7 +930,22 @@ end
 
 # rax = the index, rcx = the size, rdx = the words after the index, r8 = the words after the size
 func write_rt_index_error(out: Assembler, rt: [int], text: RuntimeText)
+    var at_not_items = out.new_label()
+    var at_words_chosen = out.new_label()
     out.place(rt[R_INDEX_ERROR])
+    out.hex("4883f901")  # cmp rcx, 1
+    out.jump_if_not_equal(at_words_chosen)
+    out.lea_string(REG_R9, text.items_word)
+    out.hex("4d39c8")  # cmp r8, r9
+    out.jump_if_not_equal(at_not_items)
+    out.lea_string(REG_R8, text.item_word)
+    out.jump(at_words_chosen)
+    out.place(at_not_items)
+    out.lea_string(REG_R9, text.bytes_word)
+    out.hex("4d39c8")  # cmp r8, r9
+    out.jump_if_not_equal(at_words_chosen)
+    out.lea_string(REG_R8, text.byte_word)
+    out.place(at_words_chosen)
     out.hex("4889c3")  # mov rbx, rax
     out.hex("4889ce")  # mov rsi, rcx
     out.hex("4989d4")  # mov r12, rdx
@@ -2935,6 +2970,7 @@ func write_runtime(out: Assembler, rt: [int], text: RuntimeText)
     write_rt_error_text(out, rt, text)
     write_rt_file_name_of(out, rt, text)
     write_rt_run_error(out, rt, text)
+    write_rt_stop_with_error(out, rt, text)
     write_rt_divide_by_zero(out, rt, text)
     write_rt_out_of_memory(out, rt, text)
     write_rt_format_float(out, rt, text)

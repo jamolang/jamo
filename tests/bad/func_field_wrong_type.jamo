@@ -1,0 +1,8 @@
+struct B
+    on: func(int): int
+end
+
+func main()
+    var b = B{on: main}
+    print(b.on(1))
+end

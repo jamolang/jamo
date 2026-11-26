@@ -1,0 +1,4 @@
+func main()
+    var f: func int
+    print(1)
+end

@@ -1,0 +1,3 @@
+func_value_wrong_input.jamo line 7: Input 1 of f must be an int, but this is a string.
+        print(f("two"))
+                ^^^^^

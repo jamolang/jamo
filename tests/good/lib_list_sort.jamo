@@ -1,0 +1,92 @@
+# list.jamo's sort_by, sort_by_float, sort_by_text and sort_floats. The answers come from Python's sorted()
+use "list.jamo"
+
+struct Player
+    name: string
+    score: int
+end
+
+var seed = 12345
+
+func next_number(top: int): int
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return (seed / 65536) % top
+end
+
+func names_of(players: [Player]): string
+    var out = ""
+    for p in players
+        out = out + p.name + " "
+    end
+    return out
+end
+
+func main()
+    # The example from the library's notes
+    var names = ["Ana", "Bo", "Cy"]
+    var scores = [30, 10, 20]
+    sort_by(names, scores)
+    print(names)
+    print(scores)
+
+    # Structs sorted by score, with lots of equal scores so the order of ties shows
+    var players: [Player] = []
+    var keys: [int] = []
+    for i in 0..40
+        var score = next_number(8) - 3
+        players.add(Player{name: f"p{i}", score: score})
+        keys.add(score)
+    end
+    sort_by(players, keys)
+    print(names_of(players))
+    print(keys)
+
+    # Float keys, including negatives and halves
+    var labels: [string] = []
+    var heights: [float] = []
+    for i in 0..25
+        labels.add(f"h{i}")
+        heights.add(float(next_number(21) - 10) / 2.0)
+    end
+    sort_by_float(labels, heights)
+    print(labels)
+    print(heights)
+
+    # Text keys sort by bytes, so capitals come first
+    var ids = [1, 2, 3, 4, 5, 6]
+    var words = ["pear", "Apple", "apple", "app", "Zoo", "pear"]
+    sort_by_text(ids, words)
+    print(ids)
+    print(words)
+
+    # sort_floats
+    var floats = [2.5, -1.0, 0.25, 2.5, -7.75, 100.0]
+    sort_floats(floats)
+    print(floats)
+
+    # A big array: sorted keys must come out in order
+    var big: [int] = []
+    var places: [int] = []
+    for i in 0..5000
+        big.add(next_number(1000))
+        places.add(i)
+    end
+    sort_by(places, big)
+    var good = true
+    for i in 1..5000
+        if big[i - 1] > big[i] or (big[i - 1] == big[i] and places[i - 1] > places[i])
+            good = false
+        end
+    end
+    print(good)
+
+    # Empty and single arrays are fine
+    var none: [string] = []
+    var no_keys: [int] = []
+    sort_by(none, no_keys)
+    print(len(none))
+    var one = ["solo"]
+    var one_key = [7]
+    sort_by(one, one_key)
+    print(one)
+end

@@ -14,6 +14,7 @@ enum class DataRef {
     LoadLibraryA, GetProcAddress,
     HeapHandle, CurrentLine, Builder, VisitHead, Stdin, Cleaner, Letters, ErrorText, CallTable, String, Import,
     Globals,  // Where the variables outside functions are, set at startup
+    TryFrame,  // The newest open try's record, or 0
 };
 
 // A 4-byte gap in the code, to be filled with the distance from the end of the gap to the thing
@@ -211,6 +212,20 @@ public:
     }
     void load_reg_from_frame(int reg, int offset) {                                           // mov r12+reg, [rbp+offset]
         bytes({0x4C, 0x8B, static_cast<uint8_t>(0xA5 + reg * 8)});
+        int32(offset);
+    }
+    void store_reg_to_frame(int reg, int offset) {                                            // mov [rbp+offset], r12+reg
+        bytes({0x4C, 0x89, static_cast<uint8_t>(0xA5 + reg * 8)});
+        int32(offset);
+    }
+    void mov_rax_rbp() { bytes({0x48, 0x89, 0xE8}); }
+    void store_rcx_data(DataRef target) {                                                     // mov [rip+target], rcx
+        bytes({0x48, 0x89, 0x0D});
+        data_gap(target);
+    }
+    void mov_rax_rsp() { bytes({0x48, 0x89, 0xE0}); }
+    void lea_rax_frame(int offset) {                                                          // lea rax, [rbp+offset]
+        bytes({0x48, 0x8D, 0x85});
         int32(offset);
     }
     void mov_rcx_rax() { bytes({0x48, 0x89, 0xC1}); }

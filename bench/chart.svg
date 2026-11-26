@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="790" height="500" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="16" y="26" font-size="16" font-weight="600" fill="#1b1b1b">Seconds (shorter is faster, log scale)</text>
+<rect x="230" y="38" width="12" height="12" fill="#d9480f"/>
+<text x="248" y="49" fill="#1b1b1b">Jamo</text>
+<rect x="360" y="38" width="12" height="12" fill="#5c6c7c"/>
+<text x="378" y="49" fill="#1b1b1b">C (gcc -O2)</text>
+<rect x="490" y="38" width="12" height="12" fill="#2f6fb0"/>
+<text x="508" y="49" fill="#1b1b1b">Python</text>
+<line x1="230.0" y1="60" x2="230.0" y2="466" stroke="#d0d4d8"/>
+<text x="230.0" y="484" text-anchor="middle" fill="#4a4f55">0.001</text>
+<line x1="347.5" y1="60" x2="347.5" y2="466" stroke="#d0d4d8"/>
+<text x="347.5" y="484" text-anchor="middle" fill="#4a4f55">0.01</text>
+<line x1="465.0" y1="60" x2="465.0" y2="466" stroke="#d0d4d8"/>
+<text x="465.0" y="484" text-anchor="middle" fill="#4a4f55">0.1</text>
+<line x1="582.5" y1="60" x2="582.5" y2="466" stroke="#d0d4d8"/>
+<text x="582.5" y="484" text-anchor="middle" fill="#4a4f55">1</text>
+<line x1="700.0" y1="60" x2="700.0" y2="466" stroke="#d0d4d8"/>
+<text x="700.0" y="484" text-anchor="middle" fill="#4a4f55">10</text>
+<text x="218" y="100" text-anchor="end" fill="#1b1b1b">Recursion (fib 35)</text>
+<rect x="230" y="66" width="193.3" height="16" rx="2" fill="#d9480f"/>
+<text x="429.3" y="79" fill="#1b1b1b">0.04</text>
+<rect x="230" y="86" width="128.7" height="16" rx="2" fill="#5c6c7c"/>
+<text x="364.7" y="99" fill="#1b1b1b">0.01</text>
+<rect x="230" y="106" width="345.5" height="16" rx="2" fill="#2f6fb0"/>
+<text x="581.5" y="119" fill="#1b1b1b">0.87</text>
+<text x="218" y="180" text-anchor="end" fill="#1b1b1b">Loops (100 million)</text>
+<rect x="230" y="146" width="213.7" height="16" rx="2" fill="#d9480f"/>
+<text x="449.7" y="159" fill="#1b1b1b">0.07</text>
+<rect x="230" y="166" width="204.4" height="16" rx="2" fill="#5c6c7c"/>
+<text x="440.4" y="179" fill="#1b1b1b">0.05</text>
+<rect x="230" y="186" width="435.0" height="16" rx="2" fill="#2f6fb0"/>
+<text x="671.0" y="199" fill="#1b1b1b">5.04</text>
+<text x="218" y="260" text-anchor="end" fill="#1b1b1b">Array math (20 million)</text>
+<rect x="230" y="226" width="181.5" height="16" rx="2" fill="#d9480f"/>
+<text x="417.5" y="239" fill="#1b1b1b">0.04</text>
+<rect x="230" y="246" width="106.0" height="16" rx="2" fill="#5c6c7c"/>
+<text x="342.0" y="259" fill="#1b1b1b">0.01</text>
+<rect x="230" y="266" width="395.6" height="16" rx="2" fill="#2f6fb0"/>
+<text x="631.6" y="279" fill="#1b1b1b">2.33</text>
+<text x="218" y="340" text-anchor="end" fill="#1b1b1b">Game particles (5,000 x 1,000)</text>
+<rect x="230" y="306" width="174.4" height="16" rx="2" fill="#d9480f"/>
+<text x="410.4" y="319" fill="#1b1b1b">0.03</text>
+<rect x="230" y="326" width="115.9" height="16" rx="2" fill="#5c6c7c"/>
+<text x="351.9" y="339" fill="#1b1b1b">0.01</text>
+<rect x="230" y="346" width="347.3" height="16" rx="2" fill="#2f6fb0"/>
+<text x="583.3" y="359" fill="#1b1b1b">0.90</text>
+<text x="218" y="420" text-anchor="end" fill="#1b1b1b">Text joining (3 million)</text>
+<rect x="230" y="386" width="249.9" height="16" rx="2" fill="#d9480f"/>
+<text x="485.9" y="399" fill="#1b1b1b">0.13</text>
+<rect x="230" y="406" width="267.2" height="16" rx="2" fill="#5c6c7c"/>
+<text x="503.2" y="419" fill="#1b1b1b">0.19</text>
+<rect x="230" y="426" width="325.0" height="16" rx="2" fill="#2f6fb0"/>
+<text x="561.0" y="439" fill="#1b1b1b">0.58</text>
+</svg>

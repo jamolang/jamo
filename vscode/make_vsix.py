@@ -33,6 +33,7 @@ def make_vsix(out_path):
   <Default Extension=".json" ContentType="application/json"/>
   <Default Extension=".js" ContentType="application/javascript"/>
   <Default Extension=".vsixmanifest" ContentType="text/xml"/>
+  <Default Extension=".jamo" ContentType="text/plain"/>
 </Types>
 """
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -42,6 +43,9 @@ def make_vsix(out_path):
         add("[Content_Types].xml", content_types)
         for name in FILES:
             add(f"extension/{name}", (HERE / name).read_bytes())
+        # The built-in libraries, so hover and go to definition work on them without jamo.exe's copies
+        for library in sorted((HERE.parent / "libraries").glob("*.jamo")):
+            add(f"extension/libraries/{library.name}", library.read_bytes())
 
 
 if __name__ == "__main__":

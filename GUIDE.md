@@ -639,6 +639,8 @@ end
 
 `tone(frequency, seconds, wave)` makes a sound from a `"sine"`, `"square"`, `"saw"`, `"triangle"` or `"noise"` wave. `load_sound("boom.wav")` reads a WAV file. `play` gives back the playing sound, which you can `stop()` or `set_volume(0.5)`, and `set_volume` on the speakers changes everything. Call `update()` once a frame, or the sound runs out and stops for a moment. Up to 64 sounds play at once. A PC with no speakers shows a note and the program carries on without sound.
 
+To make music in code, start with `silence(seconds)` and mix clips into it with `song.mix(clip, at, volume)`, where `at` is the time in seconds. Each note lands on the exact sample, so a song played as one clip keeps perfect time, and `voice.place` tells how far the mixer has got through it, in 44,100ths of a second. The Beat Run example makes its whole song this way.
+
 ## 16. Buttons, sliders and text boxes
 
 `use "ui.jamo"` draws controls with gfx. Each control is one call, made every frame, that gives back its value.
@@ -891,7 +893,7 @@ ababab
 [30, 20, 10]
 ```
 
-The text tools are `split(text, by)`, `find(text, part)`, which gives -1 when it isn't there, `contains`, `starts_with`, `ends_with`, `slice(text, from, to)`, which goes up to but not including `to`, `replace(text, old, new)`, `trim`, which takes spaces, tabs and line endings off both ends, `upper` and `lower`, which change English letters only, `join(parts, between)`, `repeat(text, times)`, and `is_int(text)` and `is_float(text)`, which say whether `int(text)` and `float(text)` would work. Places count bytes from 0, like `text[i]`. Each gives back new text, and a place outside the text stops the program with a message saying why.
+The text tools are `split(text, by)`, `find(text, part)`, which gives -1 when it isn't there, `contains`, `starts_with`, `ends_with`, `slice(text, from, to)`, which goes up to but not including `to`, `replace(text, old, new)`, `trim`, which takes spaces, tabs and line endings off both ends, `upper` and `lower`, which change English, accented, Greek and Cyrillic letters, `letter_count(text)` and `letters(text)`, which count and split whole letters instead of bytes, `reverse_letters`, `join(parts, between)`, `repeat(text, times)`, and `is_int(text)` and `is_float(text)`, which say whether `int(text)` and `float(text)` would work. Places count bytes from 0, like `text[i]`. Each gives back new text, and a place outside the text stops the program with a message saying why.
 
 `sort_ints`, `sort_strings`, `reverse_ints` and `reverse_strings` change the array you give them, instead of making a new one. Text sorts by its bytes, so capitals come before small letters: `"Zoo"` before `"apple"`.
 
@@ -1110,6 +1112,20 @@ A Jamo program is one `.exe` that runs on any 64-bit Windows 10 or 11 PC, with n
 
 When someone downloads an `.exe` from the internet, Windows may show "Windows protected your PC", because it doesn't know who made it. That happens to any program that isn't signed with a paid certificate, not just Jamo ones. They can click "More info", then "Run anyway". It's worth telling friends that up front, so it doesn't worry them.
 
+### Sharing a library, and using other people's
+
+`jamo get someone/project` downloads a library from a public GitHub project into a `packages` folder beside where you run it, and says the `use` line to write:
+
+```
+jamo get sam/shapes
+Got 2 files from sam/shapes into packages/shapes
+Use it with: use "packages/shapes/shapes.jamo"
+```
+
+To share a library of your own, put its `.jamo` files in a public GitHub project and add a file called `jamo-package.txt` that lists them, one name per line (lines starting with `#` are notes). The first file listed is the one people `use`. A project with just one file can skip the list if the file has the project's name, like `shapes.jamo` in `shapes`. The files can `use` each other by name, since they land in the same folder.
+
+`jamo get` only saves plain `.jamo` file names into the package's own folder, and saves nothing unless every file downloads. Read code before you run it, the same as any code from the internet.
+
 ## 25. Lists, files, JSON, the console, logs and tests
 
 These come with Jamo too. Each is one `use` line away.
@@ -1172,6 +1188,35 @@ true
 ```
 
 `swap_items(items, a, b)` swaps two places too.
+
+To sort an array of anything, give each item a key: a second array the same length. `sort_by` sorts both arrays by int keys, `sort_by_float` by float keys and `sort_by_text` by text keys, from smallest to largest. Items with equal keys stay in the order they were in. `sort_floats` sorts an array of floats.
+
+```jamo
+use "list.jamo"
+
+struct Racer
+    name: string
+    time: float
+end
+
+func main()
+    var racers = [Racer{name: "Mo", time: 12.5}, Racer{name: "Liv", time: 11.25}, Racer{name: "Sam", time: 12.5}]
+    var times: [float] = []
+    for r in racers
+        times.add(r.time)
+    end
+    sort_by_float(racers, times)
+    for r in racers
+        print(f"{r.name} {r.time}")
+    end
+end
+```
+
+```output
+Liv 11.25
+Mo 12.5
+Sam 12.5
+```
 
 `files.jamo` works with folders: `make_folder`, `list_files`, `is_folder`, `file_size`, `copy_file`, `move_file`, `delete_file` and `delete_folder`, and paths: `path_join`, `path_name`, `path_folder`, `path_ending` and `current_folder`. The ones that change things answer `true` when they worked, so a program can carry on when one doesn't:
 
@@ -1452,17 +1497,139 @@ The `_at` versions take the time, for a game with its own clock that can pause. 
 
 Try it: make a 10 by 10 `Grid<bool>`, set a few cells to `true`, and print how many of a cell's 8 neighbours are `true`, the first step of a Minesweeper.
 
+## 28. When things go wrong: try and catch
+
+A run error, like a bad number, a missing file or going past the end of an array, stops the program. Put the code that might go wrong inside `try`, and say what to do instead after `catch`:
+
+```jamo
+func main()
+    var typed = ["12", "twelve", "7"]
+    var total = 0
+    for text in typed
+        try
+            total += int(text)
+        catch problem
+            print("Skipped: " + problem)
+        end
+    end
+    print(total)
+end
+```
+
+```output
+Skipped: can't turn "twelve" into an int
+19
+```
+
+- The name after `catch` holds the error's words as a string. Leave it out, with just `catch`, when you don't need them.
+- An error anywhere inside the `try`, even deep inside functions it calls, jumps straight to the `catch`. The rest of the `try` is skipped. With no error, the `catch` is skipped.
+- `fail("words")` makes your own error, and a `try` catches it like any other. That's how a function says "I can't do this" and lets the code that called it decide what to do.
+- `try` can go inside `try`. An error goes to the nearest `catch`, and an error inside a `catch` goes to the next one out.
+- `return`, `break` and `continue` work inside both parts.
+- Running out of memory can't be caught, and neither can an error inside a function Windows calls back, like a window's message handler. Those still stop the program.
+
+```jamo
+func safe_divide(a: int, b: int): int
+    try
+        return a / b
+    catch
+        return 0
+    end
+end
+
+func check_age(age: int): int
+    if age < 0
+        fail(f"an age can't be {age}")
+    end
+    return age
+end
+
+func main()
+    print(safe_divide(10, 2))
+    print(safe_divide(10, 0))
+    try
+        print(check_age(30))
+        print(check_age(-4))
+    catch problem
+        print(problem)
+    end
+end
+```
+
+```output
+5
+0
+30
+an age can't be -4
+```
+
+Try it: ask for numbers with `input()` until one is typed correctly, using `try` around `int(input())`.
+
+## 29. Functions as values
+
+A function's name without `( )` is the function itself, as a value. It can go in a variable, an array or a struct, and be passed to another function, which calls it like any function. Its type is written `func(int, int): bool`: the inputs' types in `( )`, then `:` and the answer's type, or nothing after the `)` when it gives back nothing.
+
+```jamo
+use "list.jamo"
+
+struct Player
+    name: string
+    score: int
+end
+
+func by_score(a: Player, b: Player): bool
+    return a.score > b.score
+end
+
+func double(n: int): int
+    return n * 2
+end
+
+func apply(change: func(int): int, x: int): int
+    return change(x)
+end
+
+func main()
+    var players = [Player{name: "Ana", score: 30}, Player{name: "Bo", score: 70}, Player{name: "Cy", score: 50}]
+    sort_with(players, by_score)
+    for p in players
+        print(p.name)
+    end
+    print(apply(double, 21))
+    var steps: [func(int): int] = [double, double]
+    var n = 5
+    for step in steps
+        n = step(n)
+    end
+    print(n)
+end
+```
+
+```output
+Bo
+Cy
+Ana
+42
+20
+```
+
+- `sort_with(items, before)` sorts any array with your own rule: `before(a, b)` says whether `a` comes first. `filtered(items, keep)` keeps the items where `keep` is true, and `mapped(items, change)` gives a new array of `change(item)` for each. All three are in `list.jamo`.
+- A struct can hold a function, and calling it looks like calling a method: with `on_click: func(int): int` in a `Button`, `button.on_click(3)` calls whatever function is in it. That's handy for buttons and game events.
+- A generic function can take functions too, like `func best<T>(items: [T], better: func(T, T): bool): T`, and its types are worked out from them.
+- Only named Jamo functions can be values. Methods, generic functions and `extern` Windows functions can't, so write a small function that calls one, and use that. Function values can't be compared with `==`, and printing one shows its type.
+- A function value can't remember the variables around where it was made, the way some languages' closures do. Pass what it needs as inputs, or keep it in a struct.
+
+Try it: make an array of three functions that each change a number, and run a number through all of them in a loop.
+
 ## What Jamo can't do yet
 
 Jamo is young, so it's better to know this up front:
 
 - It only runs on Windows.
-- There's no way to handle errors yourself yet. A bad number or a missing file stops the program, so check with `exists`, `is_int` or `is_float` first, or use `int_or`, `float_or`, `read_file_or` and `try_write_file` (section 11).
-- Only arrays of ints and strings can be sorted, searched and changed with `list.jamo` and `text.jamo`. Arrays of other things need a loop of your own.
-- The text tools treat text as bytes, and only change English letters to capitals and back.
+- Function values can't remember the variables around them (there are no closures), so pass what they need as inputs.
+- `len` and `text[i]` count bytes. `letter_count` and `letters` count whole letters, and `upper` and `lower` change English, accented, Greek and Cyrillic letters, but not every language's.
 - Non-English text can look garbled in a console window, though files get it exactly right.
-- There are no library packages to download.
 
 ## Where to go next
 
-The `examples` folder has thirteen small programs to read and change. In the console: a guessing game, a calculator, a to-do list, a text adventure, a word counter, a prime finder and a lunar lander game. In a window: bouncing balls with sound, Breakout, Snake, a sign-up form and a spinning 3D scene. And `fetch_page.jamo` downloads a web page. `LANGUAGE.md` has the exact rules of the language.
+The `examples` folder has fifteen small programs to read and change. In the console: a guessing game, a calculator, a to-do list, a text adventure, a word counter, a prime finder and a lunar lander game. In a window: Sky Hopper (a platformer), Beat Run (a rhythm game with music made in code), bouncing balls with sound, Breakout, Snake, a sign-up form and a spinning 3D scene. And `fetch_page.jamo` downloads a web page. `LANGUAGE.md` has the exact rules of the language.

@@ -98,6 +98,14 @@ Next, the **[guide](GUIDE.md)** teaches the whole language from zero, one small 
 
 ## Make a game
 
+![Sky Hopper, the platformer example, played through all three levels](assets/sky_hopper.gif)
+
+*Sky Hopper, from [examples/platformer.jamo](examples/platformer.jamo): under 500 lines of Jamo, a 93 KB `.exe` that needs nothing else.*
+
+![Beat Run, the rhythm game example](assets/beat_run.gif)
+
+*Beat Run, from [examples/beat_run.jamo](examples/beat_run.jamo): a one-button rhythm game whose music is made in code and mixed into one clip, so the game follows the song's own clock.*
+
 This is a whole game. Move with the arrow keys and catch the coins:
 
 ```jamo check-only
@@ -145,11 +153,11 @@ end
 
 ## What's in the box
 
-The [examples](examples) folder has thirteen programs to play with and change:
+The [examples](examples) folder has fifteen programs to play with and change:
 
 | In the console | In a window |
 |---|---|
-| Guessing game, calculator, to-do list | Breakout (with sound) and Snake |
+| Guessing game, calculator, to-do list | Sky Hopper (a platformer), Beat Run (a rhythm game), Breakout and Snake |
 | Text adventure, word counter, prime finder | Bouncing balls |
 | Lunar lander, web page fetcher | A sign-up form, a spinning 3D scene |
 
@@ -158,13 +166,13 @@ And these libraries come built in. Write `use "name.jamo"` at the top of a file 
 | Library | What it's for |
 |---|---|
 | `window`, `gfx` | Windows, the keyboard and mouse, and 2D drawing: shapes, text and images |
-| `sound` | Sounds and music, made in code or loaded from files |
+| `sound` | Sounds and whole songs, made in code or loaded from files |
 | `ui` | Buttons, sliders, checkboxes and text boxes |
 | `g3d` | 3D scenes with lights, shapes and models |
 | `vec`, `grid`, `timer` | Game helpers: 2D points and directions, boards and tile maps, cooldowns and repeating timers |
 | `net` | Web requests, and links between programs for multiplayer |
 | `math`, `time` | Square roots, angles, random numbers, the clock and waiting |
-| `map`, `dict`, `list` | Looking things up by key, and arrays: finding, counting, reversing, shuffling and picking items of any type |
+| `map`, `dict`, `list` | Looking things up by key, and arrays: finding, counting, sorting, reversing, shuffling and picking items of any type |
 | `text`, `builder`, `json`, `bytes` | Working with text, JSON files and binary data |
 | `files`, `term`, `log`, `test` | Folders and files (with `read_file_or` that never stops the program), colors in the console, log files, and checking your own code |
 | `png` | Saving images |
@@ -184,16 +192,19 @@ The exact rules are in [LANGUAGE.md](LANGUAGE.md).
 
 ## How fast is it?
 
-Jamo writes real machine code, the same kind a C compiler makes. Timed on one PC (a Ryzen 5 7600), best of 3:
+Jamo writes real machine code, the same kind a C compiler makes. The same five programs in Jamo, C and Python, timed on one PC (a Ryzen 5 7600), best of 5:
 
-| Test | Jamo | Python | Jamo is... |
-|---|---|---|---|
-| Recursion (Fibonacci) | 0.044 s | 0.90 s | 20x faster |
-| A loop 100 million times | 0.067 s | 5.2 s | 77x faster |
-| Array math | 0.036 s | 2.6 s | 71x faster |
-| A game-like test (5,000 particles) | 0.031 s | 0.95 s | 31x faster |
+![Jamo, C and Python times for five programs](bench/chart.svg)
 
-C++ is still faster, about 1.3 to 3.5 times, since its compiler does many more tricks.
+| Test | Jamo | C (gcc -O2) | Python | Jamo vs Python |
+|---|---|---|---|---|
+| Recursion (Fibonacci 35) | 0.044 s | 0.012 s | 0.87 s | 20x faster |
+| A loop 100 million times | 0.066 s | 0.055 s | 5.04 s | 76x faster |
+| Array math | 0.035 s | 0.008 s | 2.33 s | 66x faster |
+| A game-like test (5,000 particles) | 0.031 s | 0.010 s | 0.90 s | 29x faster |
+| Joining text 3 million times | 0.134 s | 0.188 s | 0.58 s | 4x faster |
+
+C is still faster at number crunching, about 1.2 to 4 times, since its compiler does many more tricks. Jamo wins at joining text because it hands out small blocks of memory itself. Run `python bench/run_bench.py` to time it on your PC: it checks that all three languages print the same answers, and redraws the chart.
 
 ## How it works
 
@@ -218,18 +229,21 @@ The compiler is written in Jamo too. A second copy written in C++ lives in [src]
 | `jamo build --window file.jamo` | Writes a window program with no console, for sharing games |
 | `jamo check file.jamo` | Finds mistakes without making an `.exe` |
 | `jamo new name` | Makes a folder with a program to start from (`--game` for a small game) |
+| `jamo get someone/project` | Downloads a library someone shared on GitHub into `packages`, and says the `use` line for it |
 | `jamo version`, `jamo help` | What they say |
+
+## Playground
+
+`playground/jamo_playground.pyw` is a small editor for trying Jamo without setting anything up: type code, press **Run** (or Ctrl+Enter) and see what it prints. It colors the code, marks the line of a mistake (click the error to jump there), lets you type answers when a program asks for input, opens every example from one menu, and stops a program that runs forever. It needs Python 3 and finds `jamo.exe` beside it or on the PATH.
 
 ## VS Code
 
-The extension colors Jamo code and underlines mistakes in red as you type. Download `jamo.vsix` from the **Releases** page, then in VS Code open the Extensions panel, click the `...` menu at its top, and choose **Install from VSIX**. Its source is in the [vscode](vscode) folder, and `python vscode/make_vsix.py` builds it.
+The extension colors Jamo code and underlines mistakes in red as you type. Hover over a name to see what it is and the comment above it, Ctrl+click (or F12) to jump to where it's made, even inside the built-in libraries, see every function and struct in the Outline panel, and get suggestions as you type, including fields and methods after a dot. Download `jamo.vsix` from the **Releases** page, then in VS Code open the Extensions panel, click the `...` menu at its top, and choose **Install from VSIX**. Its source is in the [vscode](vscode) folder, and `python vscode/make_vsix.py` builds it.
 
 ## What Jamo can't do yet
 
 - It only runs on Windows.
-- Functions can't be passed around as values yet.
-- There's no way to catch an error yourself yet. For the common cases, `read_file_or`, `try_write_file`, `int_or` and `float_or` give a fallback instead of stopping.
-- There are no add-on packages to download yet.
+- Function values can't remember the variables around them yet (no closures).
 
 The end of the [guide](GUIDE.md#what-jamo-cant-do-yet) has the full list.
 

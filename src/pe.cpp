@@ -158,6 +158,8 @@ DataSection build_data_section(uint32_t rva, const std::vector<std::string>& str
     next += VALUE_SIZE + static_cast<uint32_t>(call_sites.size()) * VALUE_SIZE;
     const uint32_t globals_at = next;
     next += VALUE_SIZE;
+    const uint32_t try_frame_at = next;
+    next += VALUE_SIZE;
 
     Writer out;
     for (size_t l = 0; l < libraries.size(); l++) {
@@ -220,6 +222,7 @@ DataSection build_data_section(uint32_t rva, const std::vector<std::string>& str
     out.pad_to(call_table_at);
     section.places[DataRef::CallTable] = rva + call_table_at;
     section.places[DataRef::Globals] = rva + globals_at;
+    section.places[DataRef::TryFrame] = rva + try_frame_at;
     out.u64(call_sites.size());
     for (const CallSite& site : call_sites) {
         out.u32(TEXT_RVA + static_cast<uint32_t>(site.offset));

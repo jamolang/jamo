@@ -1,0 +1,3 @@
+func_value_wrong_type.jamo line 6: f is declared as a func(int): string, but this value is a func(int): int.
+        var f: func(int): string = double
+                                   ^^^^^^

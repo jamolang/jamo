@@ -1,0 +1,485 @@
+# Sky Hopper: run and jump through three levels, grab the coins and reach the flag. Arrow keys or A and D to run,
+# Space, Up or W to jump (hold it to jump higher). Spikes send you back to the start of the level. R restarts it.
+#
+# The levels are drawn as text below, one character per tile. The player gets a little help that good platformers
+# give: a short moment to still jump after running off an edge, and a jump pressed just before landing still counts.
+
+use "gfx.jamo"
+use "sound.jamo"
+use "math.jamo"
+
+const TILE = 32
+const WIDTH = 800
+const HEIGHT = 480
+const STEP = 0.0166666666666667         # the game moves in steps of 1/60 of a second, however fast the PC is
+
+const RUN_SPEED = 230.0
+const RUN_ACCEL = 1800.0
+const AIR_ACCEL = 1100.0
+const GRAVITY = 1700.0
+const JUMP_SPEED = 560.0
+const SPRING_SPEED = 860.0
+const LOW_JUMP_GRAVITY = 3200.0       # extra pull when the jump key is let go early, so short taps make short jumps
+const FALL_LIMIT = 900.0
+const COYOTE_TIME = 0.1               # can still jump this long after leaving the ground
+const JUMP_BUFFER = 0.12              # a jump pressed this long before landing still happens
+const PLAYER_W = 20.0
+const PLAYER_H = 26.0
+const SKY = 128.0                     # the levels are 11 tiles tall, so they're drawn this far down
+
+# Tiles: # ground, ^ spikes, o coin, S spring, F flag, P where the player starts
+func level_1(): [string]
+    return [
+        "..........................................................",
+        "..........................................................",
+        "..........................................................",
+        "..........................ooo.............................",
+        ".........................#####...................o.o......",
+        "...................o.................ooo.........#####....",
+        ".................#####..............#####..............F..",
+        ".....o.o.......................................#.......##.",
+        "P...........##.......^^^....###...^^^....###...#.......##.",
+        "##########################################################",
+        "##########################################################"
+    ]
+end
+
+func level_2(): [string]
+    return [
+        ".........................................................",
+        ".........................................................",
+        "..................................oooo...................",
+        "..................oooo...........######..................",
+        ".................######..................................",
+        ".........................................o...............",
+        ".........................................##......oo......",
+        ".....oo.....................oo...................##......",
+        ".P......^^^....S.^^^^^^^^^^....S^^^^^^^^^^^^^....##...F..",
+        "#########################################################",
+        "#########################################################"
+    ]
+end
+
+func level_3(): [string]
+    return [
+        ".........................................................",
+        ".........................ooooo...........................",
+        "........................#######..........................",
+        "...........................................ooo...........",
+        "..................................o........###...........",
+        "............oo...................###...o.................",
+        "......ooo...##.........................##........##......",
+        ".P....###........##...S................................F.",
+        "#####^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^####",
+        "#########################################################",
+        "#########################################################"
+    ]
+end
+
+struct Spark
+    x: float
+    y: float
+    vx: float
+    vy: float
+    life: float
+    color: Color
+end
+
+struct Game
+    level: int
+    rows: [string]
+    coins: [bool]             # one per tile, true while a coin is still there
+    x: float
+    y: float
+    vx: float
+    vy: float
+    on_ground: bool
+    since_ground: float
+    since_jump_press: float
+    facing: float
+    squash: float
+    camera: float
+    start_x: float
+    start_y: float
+    got: int
+    total_coins: int
+    deaths: int
+    time: float
+    flash: float
+    won: bool
+    sparks: [Spark]
+end
+
+func level_rows(level: int): [string]
+    if level == 1
+        return level_1()
+    elif level == 2
+        return level_2()
+    end
+    return level_3()
+end
+
+func load_level(game: Game, level: int)
+    game.level = level
+    game.rows = level_rows(level)
+    game.coins = []
+    game.total_coins = 0
+    for row in 0..len(game.rows)
+        for column in 0..len(game.rows[row])
+            var here = byte(game.rows[row], column)
+            game.coins.add(here == 111)                       # o
+            if here == 111
+                game.total_coins += 1
+            end
+            if here == 80                                     # P
+                game.start_x = float(column * TILE) + 6.0
+                game.start_y = float(row * TILE + TILE) - PLAYER_H
+            end
+        end
+    end
+    game.got = 0
+    respawn(game)
+    game.camera = 0.0
+end
+
+func respawn(game: Game)
+    game.x = game.start_x
+    game.y = game.start_y
+    game.vx = 0.0
+    game.vy = 0.0
+    game.on_ground = false
+    game.since_ground = 1.0
+    game.since_jump_press = 1.0
+    game.facing = 1.0
+end
+
+func new_game(): Game
+    var game = Game{level: 1, rows: [], coins: [], x: 0.0, y: 0.0, vx: 0.0, vy: 0.0, on_ground: false, since_ground: 1.0, since_jump_press: 1.0, facing: 1.0, squash: 0.0, camera: 0.0, start_x: 0.0, start_y: 0.0, got: 0, total_coins: 0, deaths: 0, time: 0.0, flash: 0.0, won: false, sparks: []}
+    load_level(game, 1)
+    return game
+end
+
+# --- The level ---
+
+# The tile character at a column and row as a byte. Outside the level is solid at the sides and empty above
+func tile_at(game: Game, column: int, row: int): int
+    if row < 0
+        return 46
+    end
+    if row >= len(game.rows) or column < 0 or column >= len(game.rows[0])
+        return 35
+    end
+    return byte(game.rows[row], column)
+end
+
+func solid(game: Game, column: int, row: int): bool
+    var here = tile_at(game, column, row)
+    return here == 35 or here == 83                          # # and S
+end
+
+# Whether the player's box at x, y touches any solid tile
+func hits_wall(game: Game, x: float, y: float): bool
+    var left = floor(x / float(TILE))
+    var right = floor((x + PLAYER_W - 0.01) / float(TILE))
+    var top = floor(y / float(TILE))
+    var bottom = floor((y + PLAYER_H - 0.01) / float(TILE))
+    for row in top..bottom + 1
+        for column in left..right + 1
+            if solid(game, column, row)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+func level_width(game: Game): float
+    return float(len(game.rows[0]) * TILE)
+end
+
+# --- Sparks ---
+
+func burst(game: Game, x: float, y: float, count: int, color: Color, speed: float)
+    for i in 0..count
+        var angle = random_float() * pi() * 2.0
+        var power = speed * (0.4 + random_float() * 0.6)
+        game.sparks.add(Spark{x: x, y: y, vx: cos(angle) * power, vy: sin(angle) * power - speed * 0.3, life: 0.4 + random_float() * 0.3, color: color})
+    end
+end
+
+func move_sparks(game: Game)
+    var kept: [Spark] = []
+    for s in game.sparks
+        s.life -= STEP
+        s.vy += 900.0 * STEP
+        s.x += s.vx * STEP
+        s.y += s.vy * STEP
+        if s.life > 0.0
+            kept.add(s)
+        end
+    end
+    game.sparks = kept
+end
+
+# --- One step of the game ---
+
+func step(game: Game, left: bool, right: bool, jump_pressed: bool, jump_held: bool, sounds: [Clip], speakers: Sound)
+    game.time += STEP
+    game.flash = max(0.0, game.flash - STEP)
+    game.squash = game.squash * 0.85
+    move_sparks(game)
+
+    # Running: speed up toward the wanted speed, a bit slower in the air
+    var wanted = 0.0
+    if left
+        wanted -= RUN_SPEED
+    end
+    if right
+        wanted += RUN_SPEED
+    end
+    if wanted != 0.0
+        game.facing = wanted / RUN_SPEED
+    end
+    var accel = AIR_ACCEL
+    if game.on_ground
+        accel = RUN_ACCEL
+    end
+    if game.vx < wanted
+        game.vx = min(game.vx + accel * STEP, wanted)
+    elif game.vx > wanted
+        game.vx = max(game.vx - accel * STEP, wanted)
+    end
+
+    # Jumping, with coyote time and a jump buffer
+    game.since_ground += STEP
+    game.since_jump_press += STEP
+    if jump_pressed
+        game.since_jump_press = 0.0
+    end
+    if game.since_jump_press < JUMP_BUFFER and game.since_ground < COYOTE_TIME
+        game.vy = 0.0 - JUMP_SPEED
+        game.since_ground = 1.0
+        game.since_jump_press = 1.0
+        game.squash = -0.35
+        burst(game, game.x + PLAYER_W / 2.0, game.y + PLAYER_H, 6, rgb(230, 225, 210), 120.0)
+        speakers.play(sounds[0]).set_volume(0.25)
+    end
+
+    # Falling, faster when the jump key is let go on the way up
+    var pull = GRAVITY
+    if game.vy < 0.0 and not jump_held
+        pull = LOW_JUMP_GRAVITY
+    end
+    game.vy = min(game.vy + pull * STEP, FALL_LIMIT)
+
+    # Move one axis at a time, stepping back to the wall's edge on a hit
+    var nx = game.x + game.vx * STEP
+    if hits_wall(game, nx, game.y)
+        if game.vx > 0.0
+            nx = float(floor((nx + PLAYER_W) / float(TILE)) * TILE) - PLAYER_W - 0.01
+        else
+            nx = float((floor(nx / float(TILE)) + 1) * TILE)
+        end
+        game.vx = 0.0
+    end
+    game.x = clamp(nx, 0.0, level_width(game) - PLAYER_W)
+
+    var was_on_ground = game.on_ground
+    game.on_ground = false
+    var ny = game.y + game.vy * STEP
+    if hits_wall(game, game.x, ny)
+        if game.vy > 0.0
+            ny = float(floor((ny + PLAYER_H) / float(TILE)) * TILE) - PLAYER_H - 0.01
+            game.on_ground = true
+            game.since_ground = 0.0
+            if not was_on_ground and game.vy > 300.0
+                game.squash = 0.3
+                burst(game, game.x + PLAYER_W / 2.0, ny + PLAYER_H, 5, rgb(200, 195, 180), 90.0)
+            end
+            # Springs throw the player up high
+            var below = tile_at(game, floor((game.x + PLAYER_W / 2.0) / float(TILE)), floor((ny + PLAYER_H + 2.0) / float(TILE)))
+            if below == 83
+                game.vy = 0.0 - SPRING_SPEED
+                game.on_ground = false
+                game.since_ground = 1.0
+                game.squash = -0.5
+                burst(game, game.x + PLAYER_W / 2.0, ny + PLAYER_H, 10, rgb(120, 220, 255), 200.0)
+                speakers.play(sounds[3]).set_volume(0.3)
+            else
+                game.vy = 0.0
+            end
+        else
+            ny = float((floor(ny / float(TILE)) + 1) * TILE)
+            game.vy = 0.0
+        end
+    end
+    game.y = ny
+
+    # Coins, spikes and the flag, checked for each tile the player touches
+    var left_col = floor(game.x / float(TILE))
+    var right_col = floor((game.x + PLAYER_W) / float(TILE))
+    var top_row = floor(game.y / float(TILE))
+    var bottom_row = floor((game.y + PLAYER_H) / float(TILE))
+    for row in top_row..bottom_row + 1
+        for column in left_col..right_col + 1
+            var here = tile_at(game, column, row)
+            var place = row * len(game.rows[0]) + column
+            if here == 111 and row >= 0 and row < len(game.rows) and game.coins[place]
+                game.coins[place] = false
+                game.got += 1
+                burst(game, float(column * TILE + TILE / 2), float(row * TILE + TILE / 2), 10, rgb(255, 214, 90), 160.0)
+                speakers.play(sounds[1]).set_volume(0.25)
+            elif here == 94 and game.y + PLAYER_H > float(row * TILE) + 14.0
+                game.deaths += 1
+                game.flash = 0.25
+                burst(game, game.x + PLAYER_W / 2.0, game.y + PLAYER_H / 2.0, 18, rgb(255, 90, 90), 260.0)
+                speakers.play(sounds[2]).set_volume(0.3)
+                respawn(game)
+                return
+            elif here == 70
+                if game.level < 3
+                    load_level(game, game.level + 1)
+                    burst(game, game.x, game.y, 20, rgb(140, 255, 160), 220.0)
+                else
+                    game.won = true
+                end
+                speakers.play(sounds[4]).set_volume(0.3)
+                return
+            end
+        end
+    end
+
+    # The camera follows smoothly, a little ahead of where the player faces
+    var target = clamp(game.x + game.facing * 60.0 - float(WIDTH) / 2.0, 0.0, level_width(game) - float(WIDTH))
+    game.camera = lerp(game.camera, target, 0.08)
+end
+
+# --- Drawing ---
+
+func draw_hills(screen: Gfx, camera: float, speed: float, base: float, height: float, color: Color)
+    var x = 0.0 - (camera * speed) % 160.0
+    while x < float(WIDTH) + 160.0
+        screen.circle(x, base, height, color)
+        x += 160.0
+    end
+    screen.rect(0.0, base, float(WIDTH), float(HEIGHT) - base, color)
+end
+
+func draw(screen: Gfx, game: Game)
+    screen.clear(rgb(120, 190, 240))
+    for k in 0..6
+        var cx = float(k) * 190.0 + 60.0 - (game.camera * 0.1) % 190.0
+        var cy = 70.0 + float((k * 37) % 50)
+        screen.circle(cx, cy, 22.0, rgb(240, 248, 255))
+        screen.circle(cx + 24.0, cy - 8.0, 26.0, rgb(240, 248, 255))
+        screen.circle(cx + 50.0, cy, 20.0, rgb(240, 248, 255))
+        screen.rect(cx, cy, 50.0, 20.0, rgb(240, 248, 255))
+    end
+    draw_hills(screen, game.camera, 0.2, 330.0, 110.0, rgb(150, 205, 235))
+    draw_hills(screen, game.camera, 0.45, 380.0, 80.0, rgb(110, 175, 130))
+
+    var first = max_int(0, floor(game.camera / float(TILE)))
+    var last = min_int(len(game.rows[0]), first + WIDTH / TILE + 2)
+    for row in 0..len(game.rows)
+        for column in first..last
+            var here = byte(game.rows[row], column)
+            var x = float(column * TILE) - game.camera
+            var y = float(row * TILE) + SKY
+            if here == 35
+                screen.rect(x, y, float(TILE), float(TILE), rgb(120, 84, 60))
+                if tile_at(game, column, row - 1) != 35
+                    screen.rect(x, y, float(TILE), 8.0, rgb(96, 190, 90))
+                end
+            elif here == 94
+                for k in 0..3
+                    var sx = x + float(k) * 10.0 + 1.0
+                    screen.rect(sx, y + 26.0, 10.0, 6.0, rgb(200, 205, 215))
+                    screen.rect(sx + 2.0, y + 20.0, 6.0, 6.0, rgb(220, 225, 235))
+                    screen.rect(sx + 4.0, y + 14.0, 2.0, 6.0, rgb(240, 242, 248))
+                end
+            elif here == 83
+                screen.rect(x + 2.0, y + 20.0, float(TILE) - 4.0, 12.0, rgb(70, 80, 100))
+                screen.rect(x + 4.0, y + 12.0, float(TILE) - 8.0, 8.0, rgb(90, 200, 250))
+            elif here == 70
+                screen.rect(x + 6.0, y - 32.0, 4.0, 64.0, rgb(240, 240, 240))
+                for k in 0..6
+                    var wave = sin(game.time * 6.0 - float(k) * 0.7) * 2.0
+                    screen.rect(x + 10.0 + float(k) * 4.0, y - 32.0 + wave + float(k), 4.0, 20.0 - float(k) * 2.0, rgb(255, 90, 110))
+                end
+            elif here == 111 and game.coins[row * len(game.rows[0]) + column]
+                var bob = sin(game.time * 4.0 + float(column)) * 3.0
+                var thin = abs(sin(game.time * 3.0 + float(column) * 0.5))
+                screen.rect(x + 16.0 - 8.0 * thin, y + 8.0 + bob, 16.0 * thin + 2.0, 16.0, rgb(255, 205, 60))
+                screen.rect(x + 16.0 - 4.0 * thin, y + 11.0 + bob, 8.0 * thin + 1.0, 10.0, rgb(255, 240, 160))
+            end
+        end
+    end
+
+    for s in game.sparks
+        var size = 2.0 + s.life * 6.0
+        screen.rect(s.x - game.camera - size / 2.0, s.y + SKY - size / 2.0, size, size, s.color)
+    end
+
+    # The player stretches when jumping and squashes when landing
+    var w = PLAYER_W * (1.0 + game.squash)
+    var h = PLAYER_H * (1.0 - game.squash)
+    var px = game.x - game.camera + (PLAYER_W - w) / 2.0
+    var py = game.y + SKY + PLAYER_H - h
+    screen.rect(px, py, w, h, rgb(255, 120, 60))
+    screen.rect(px, py, w, 6.0, rgb(255, 170, 110))
+    var eye = px + w / 2.0 + game.facing * 4.0
+    screen.rect(eye - 2.0, py + 8.0, 4.0, 6.0, rgb(30, 30, 40))
+
+    screen.rect(0.0, 0.0, float(WIDTH), 40.0, rgba(20, 30, 50, 170))
+    screen.text(f"Level {game.level} of 3", 16.0, 8.0, 22.0, rgb(240, 245, 250))
+    screen.text(f"Coins {game.got} / {game.total_coins}", 200.0, 8.0, 22.0, rgb(255, 220, 120))
+    screen.text(f"Falls {game.deaths}", 400.0, 8.0, 22.0, rgb(240, 245, 250))
+    screen.text(f"{floor(game.time)} s", 560.0, 8.0, 22.0, rgb(240, 245, 250))
+    if game.flash > 0.0
+        screen.rect(0.0, 0.0, float(WIDTH), float(HEIGHT), rgba(255, 60, 60, floor(game.flash * 400.0)))
+    end
+    if game.won
+        screen.rect(150.0, 170.0, 500.0, 140.0, rgba(20, 30, 50, 220))
+        screen.text("You made it!", 290.0, 190.0, 36.0, rgb(255, 220, 120))
+        screen.text(f"{game.deaths} falls in {floor(game.time)} seconds", 260.0, 240.0, 22.0, rgb(240, 245, 250))
+        screen.text("Press Space to play again", 270.0, 275.0, 20.0, rgb(190, 205, 220))
+    end
+    screen.show()
+end
+
+func main()
+    var window = open_window("Sky Hopper", WIDTH, HEIGHT)
+    var screen = start_gfx(window)
+    var speakers = start_sound()
+    var sounds = [tone(520.0, 0.08, "square"), tone(1320.0, 0.07, "triangle"), tone(110.0, 0.3, "saw"), tone(700.0, 0.15, "sine"), tone(990.0, 0.4, "triangle")]
+    random_seed(1)
+    var game = new_game()
+    var waiting = 0.0
+    var jump_waiting = false
+    while window.is_open()
+        if window.key_pressed("space") or window.key_pressed("up") or window.key_pressed("w")
+            jump_waiting = true
+        end
+        var jump_held = window.key_down("space") or window.key_down("up") or window.key_down("w")
+        var left = window.key_down("left") or window.key_down("a")
+        var right = window.key_down("right") or window.key_down("d")
+        if game.won
+            if window.key_pressed("space")
+                game = new_game()
+            end
+        else
+            if window.key_pressed("r")
+                load_level(game, game.level)
+            end
+            # Catch up in fixed steps, so the jumps feel the same on every PC
+            waiting += min(window.frame_time(), 0.1)
+            while waiting >= STEP
+                step(game, left, right, jump_waiting, jump_held, sounds, speakers)
+                jump_waiting = false
+                waiting -= STEP
+            end
+        end
+        draw(screen, game)
+        window.wait_frame(60)
+    end
+end

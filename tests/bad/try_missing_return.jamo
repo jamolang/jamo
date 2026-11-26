@@ -1,0 +1,11 @@
+func f(): int
+    try
+        return 1
+    catch
+        print(2)
+    end
+end
+
+func main()
+    print(f())
+end

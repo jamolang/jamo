@@ -390,6 +390,58 @@ def test_warnings_and_calls(work):
 
 
 # --- The VS Code extension, without VS Code ---
+# --- jamo get, from a stand-in for GitHub on 127.0.0.1 ---
+def test_get_command(work):
+    site = work / "package site"
+    def put(path, text):
+        (site / path).parent.mkdir(parents=True, exist_ok=True)
+        (site / path).write_text(text, encoding="utf-8", newline="")
+    put("sam/shapes/HEAD/jamo-package.txt", "# shapes: a two-file package\nshapes.jamo\n\narea.jamo\n")
+    put("sam/shapes/HEAD/shapes.jamo", 'use "area.jamo"\n\nfunc square_area(side: int): int\n    return area(side, side)\nend\n')
+    put("sam/shapes/HEAD/area.jamo", "func area(w: int, h: int): int\n    return w * h\nend\n")
+    put("sam/greet/HEAD/greet.jamo", 'func greet(name: string): string\n    return "Hi " + name\nend\n')
+    put("sam/sneaky/HEAD/jamo-package.txt", "ok.jamo\n../evil.jamo\n")
+    put("sam/sneaky/HEAD/ok.jamo", "func ok(): int\n    return 1\nend\n")
+    put("sam/halfway/HEAD/jamo-package.txt", "here.jamo\nmissing.jamo\n")
+    put("sam/halfway/HEAD/here.jamo", "func here(): int\n    return 1\nend\n")
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(site), **kwargs)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        env = {**os.environ, "JAMO_PACKAGE_SITE": f"http://127.0.0.1:{server.server_address[1]}"}
+        folder = work / "get test"
+        folder.mkdir()
+        got = run([str(JAMO), "get", "sam/shapes"], cwd=folder, env=env)
+        saved = sorted(p.name for p in (folder / "packages" / "shapes").glob("*")) if (folder / "packages" / "shapes").exists() else []
+        report("jamo get fetches every file a package lists", got.returncode == 0 and saved == ["area.jamo", "shapes.jamo"] and 'use "packages/shapes/shapes.jamo"' in got.stdout, f"{got.returncode} {got.stdout} {got.stderr} {saved}")
+        (folder / "main.jamo").write_text('use "packages/shapes/shapes.jamo"\nuse "packages/greet/greet.jamo"\n\nfunc main()\n    print(square_area(7))\n    print(greet("Jo"))\nend\n', encoding="utf-8")
+        got = run([str(JAMO), "get", "sam/greet"], cwd=folder, env=env)
+        report("jamo get fetches project.jamo when there's no list", got.returncode == 0 and (folder / "packages" / "greet" / "greet.jamo").exists() and "Got 1 file " in got.stdout, f"{got.returncode} {got.stdout} {got.stderr}")
+        ran = run([str(JAMO), "run", str(folder / "main.jamo")], cwd=folder)
+        report("a program uses packages it got, and their own files find each other", ran.returncode == 0 and clean(ran.stdout) == "49\nHi Jo\n", f"{ran.returncode} {ran.stdout} {ran.stderr}")
+        got = run([str(JAMO), "get", "sam/sneaky"], cwd=folder, env=env)
+        report("jamo get refuses a list that names a file outside its folder, and saves nothing", got.returncode == 1 and "../evil.jamo" in got.stderr and not (folder / "packages" / "sneaky").exists() and not (folder / "packages" / "evil.jamo").exists(), f"{got.returncode} {got.stderr}")
+        got = run([str(JAMO), "get", "sam/halfway"], cwd=folder, env=env)
+        report("jamo get saves nothing when one listed file is missing", got.returncode == 1 and "missing.jamo" in got.stderr and "404" in got.stderr and not (folder / "packages" / "halfway").exists(), f"{got.returncode} {got.stderr}")
+        got = run([str(JAMO), "get", "sam/nowhere"], cwd=folder, env=env)
+        report("jamo get says when a project isn't there", got.returncode == 1 and "nowhere" in got.stderr and "404" in got.stderr, f"{got.returncode} {got.stderr}")
+        for spec in ("shapes", "sam/shapes/extra", "../x/y", "sam/.hidden", "sam/sp ace", "/shapes"):
+            got = run([str(JAMO), "get", spec], cwd=folder, env=env)
+            report(f"jamo get refuses the name {spec!r}", got.returncode == 1 and "jamo get needs a GitHub name and project" in got.stderr, f"{got.returncode} {got.stderr}")
+        got = run([str(CPP_JAMO), "get", "sam/shapes"], cwd=folder, env=env)
+        report("the C++ backup says to use jamo.exe for jamo get", got.returncode == 1 and "jamo.exe" in got.stderr, got.stderr)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_vscode_extension(work):
     spec = importlib.util.spec_from_file_location("make_vsix", ROOT / "vscode" / "make_vsix.py")
     packer = importlib.util.module_from_spec(spec)
@@ -444,6 +496,40 @@ def test_vscode_extension(work):
     errors, warnings = json.loads(result.stdout)
     report("the extension reads jamo check's errors", [(e["line"], e["column"], e["length"], e["is_warning"]) for e in errors] == [(2, 10, 4, False), (3, 14, 4, False)] and errors[0]["words"] == "nothing has this name: scor", str(errors))
     report("the extension reads jamo check's warnings", [(e["line"], e["column"], e["length"], e["is_warning"], e["hint"]) for e in warnings] == [(1, 8, 6, True, "Use it, or remove it.")], str(warnings))
+
+    # Hover and go to definition read the code itself. Each question is (line, word, after a dot) and the answer the
+    # file name, line and kind of what it finds, written out by hand
+    libraries_packed = sorted(name for name in names if name.startswith("extension/libraries/"))
+    report("the extension carries every library", libraries_packed == sorted(f"extension/libraries/{p.name}" for p in (ROOT / "libraries").glob("*.jamo")), str(libraries_packed))
+    (folder / "helper.jamo").write_text("# Adds two numbers\nfunc add(a: int, b: int): int\n    return a + b\nend\n", encoding="utf-8")
+    (folder / "game.jamo").write_text(
+        'use "list.jamo"\nuse "helper.jamo"\n\nstruct Player\n    name: string  # shown on top\n    score: int\nend\n\nenum Mood\n    CALM\nend\n\n'
+        "const SPEED = 4\n\nfunc Player.win(points: int)\n    self.score += points\nend\n\nfunc main()\n    var p = Player{name: \"a\", score: 0}\n"
+        "    p.win(SPEED)\n    var names = [\"b\"]\n    var keys = [1]\n    sort_by(names, keys)\n    for item in names\n        print(add(1, 2))\n    end\n"
+        "    var m = Mood.CALM\nend\n\nfunc other()\n    var p = 2\n    for k in 0..2\n        print(k)\n    end\n    for k in 0..3\n        print(k)\n    end\nend\n", encoding="utf-8")
+    questions = [(20, "win", True), (20, "SPEED", False), (20, "p", False), (23, "sort_by", False), (25, "add", False), (24, "item", False),
+                 (27, "CALM", True), (27, "Mood", False), (14, "points", False), (15, "self", False), (19, "name", True), (31, "p", False), (25, "print", False), (36, "k", False)]
+    script = folder / "define.js"
+    script.write_text(
+        'const fs = require("fs");\nconst path = require("path");\nconst ext = require(process.argv[2]);\n'
+        'const main = path.resolve("game.jamo");\nconst items = ext.gather(main, (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return null; } });\n'
+        'const questions = JSON.parse(process.argv[3]);\n'
+        'console.log(JSON.stringify(questions.map(([line, word, dot]) => ext.find_definitions(items, word, main, line, dot).map((i) => [path.basename(i.file), i.line, i.kind, i.doc]))));\n',
+        encoding="utf-8")
+    result = run([node, str(script), str(ROOT / "vscode" / "extension.js"), json.dumps(questions)], cwd=folder)
+    try:
+        answers = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        answers = result.stdout + result.stderr
+    sort_line = next(i for i, line in enumerate((ROOT / "libraries" / "list.jamo").read_text(encoding="utf-8").splitlines()) if line.startswith("func sort_by<T>"))
+    wanted = [
+        [["game.jamo", 14, "method", ""]], [["game.jamo", 12, "constant", ""]], [["game.jamo", 19, "variable", ""]],
+        [["list.jamo", sort_line, "function", "Sorts items by int keys, smallest first"]], [["helper.jamo", 1, "function", "Adds two numbers"]],
+        [["game.jamo", 24, "variable", ""]], [["game.jamo", 9, "member", ""]], [["game.jamo", 8, "enum", ""]],
+        [["game.jamo", 14, "input", ""]], [["game.jamo", 14, "input", ""]], [["game.jamo", 4, "field", "shown on top"]],
+        [["game.jamo", 31, "variable", ""]], [], [["game.jamo", 35, "variable", ""]],
+    ]
+    report("the extension's hover and go to definition find the right place", answers == wanted, f"{answers}\nwanted {wanted}")
 
 
 # --- Every example, with typed input. A second .in file runs the same program again, in the same folder ---
@@ -4575,8 +4661,8 @@ def text_cases(rng):
         new = random_text(rng, 3)
         cases.append((f"print(codes(replace({T}, {jamo_text(by)}, {jamo_text(new)})))", [codes_bytes(b.replace(by.encode("utf-8"), new.encode("utf-8")))]))
         cases.append((f"print(codes(trim({T})))", [codes_bytes(b.strip(b" \t\r\n"))]))
-        cases.append((f"print(codes(upper({T})))", [codes_bytes(b.upper())]))
-        cases.append((f"print(codes(lower({T})))", [codes_bytes(b.lower())]))
+        cases.append((f"print(codes(upper({T})))", [codes_bytes(twin_change_case(b, True))]))
+        cases.append((f"print(codes(lower({T})))", [codes_bytes(twin_change_case(b, False))]))
         times = rng.randrange(5)
         cases.append((f"print(codes(repeat({T}, {times})))", [codes_bytes(b * times)]))
         parts = [random_text(rng, 4) for _ in range(rng.randrange(5))]
@@ -4603,6 +4689,50 @@ def text_cases(rng):
 
 def codes_bytes(data):
     return "".join(f"{b} " for b in data)
+
+
+# Python's twin of text.jamo's upper and lower, from the rules in LANGUAGE terms: a to z, and the two-byte letters
+# of Latin-1, Latin Extended-A, Greek and Cyrillic that have a two-byte partner. Anything else, and broken UTF-8, stays
+def twin_case_letter(letter, to_upper):
+    if to_upper:
+        if 224 <= letter <= 254 and letter != 247:
+            return letter - 32
+        if (256 <= letter <= 311 and letter != 305 and letter % 2 == 1) or (313 <= letter <= 328 and letter % 2 == 0) or (330 <= letter <= 375 and letter % 2 == 1) or (378 <= letter <= 382 and letter % 2 == 0):
+            return letter - 1
+        if letter == 962:
+            return 931
+        if 945 <= letter <= 969 or 1072 <= letter <= 1103:
+            return letter - 32
+        if 1104 <= letter <= 1119:
+            return letter - 80
+        return letter
+    if 192 <= letter <= 222 and letter != 215:
+        return letter + 32
+    if (256 <= letter <= 311 and letter != 304 and letter % 2 == 0) or (313 <= letter <= 328 and letter % 2 == 1) or (330 <= letter <= 375 and letter % 2 == 0) or (377 <= letter <= 381 and letter % 2 == 1):
+        return letter + 1
+    if (913 <= letter <= 937 and letter != 930) or 1040 <= letter <= 1071:
+        return letter + 32
+    if 1024 <= letter <= 1039:
+        return letter + 80
+    return letter
+
+
+def twin_change_case(data, to_upper):
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        b = data[i]
+        if b < 128:
+            out.append(b - 32 if to_upper and 97 <= b <= 122 else b + 32 if not to_upper and 65 <= b <= 90 else b)
+            i += 1
+        elif 192 <= b < 224 and i + 1 < len(data) and 128 <= data[i + 1] < 192:
+            letter = twin_case_letter((b - 192) * 64 + data[i + 1] - 128, to_upper)
+            out += bytes([192 + letter // 64, 128 + letter % 64])
+            i += 2
+        else:
+            out.append(b)
+            i += 1
+    return bytes(out)
 
 
 def big_text_case(size):
@@ -5185,6 +5315,7 @@ def main():
         test_windows_calls(work)
         test_docs(work)
         test_examples(work)
+        test_get_command(work)
         test_vscode_extension(work)
         test_warnings_and_calls(work)
         test_small_blocks(work)

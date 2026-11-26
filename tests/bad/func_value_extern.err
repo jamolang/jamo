@@ -1,0 +1,4 @@
+func_value_extern.jamo line 4: GetTickCount is a Windows function, so it can't be used as a value.
+        var f = GetTickCount
+                ^^^^^^^^^^^^
+Write a Jamo function that calls it, and use that.

@@ -1,0 +1,8 @@
+func main()
+    try
+        print(1)
+    catch problem
+        var n: int = problem
+        print(n)
+    end
+end

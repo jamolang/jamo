@@ -893,6 +893,15 @@ func Checker.substitute(type: int, from: [int], to: [int]): int
         end
         return self.program.types.generic(base, args)
     end
+    if self.program.types.is_function(type)
+        var function = self.program.types.entry(type)
+        var inputs: [int] = []
+        for input in function.args
+            inputs.add(self.substitute(input, from, to))
+        end
+        var answer = self.substitute(function.element, from, to)
+        return self.program.types.function_of(inputs, answer)
+    end
     return type
 end
 
@@ -923,6 +932,17 @@ func Checker.work_out_types(pattern: int, given: int, params: [int], found: [int
         for i in 0..len(pattern_args)
             self.work_out_types(pattern_args[i], given_args[i], params, found)
         end
+    end
+    if types.is_function(pattern) and types.is_function(given)
+        var pattern_inputs = types.entry(pattern).args
+        var given_inputs = types.entry(given).args
+        if len(pattern_inputs) != len(given_inputs)
+            return
+        end
+        for i in 0..len(pattern_inputs)
+            self.work_out_types(pattern_inputs[i], given_inputs[i], params, found)
+        end
+        self.work_out_types(types.entry(pattern).element, types.entry(given).element, params, found)
     end
 end
 
@@ -1233,6 +1253,14 @@ func Checker.is_known(type: int): bool
         return true
     end
     var entry = self.program.types.entry(type)
+    if entry.is_function
+        for input in entry.args
+            if not self.is_known(input)
+                return false
+            end
+        end
+        return self.is_known(entry.element)
+    end
     if entry.is_array
         return self.is_known(entry.element)
     end
@@ -1251,6 +1279,16 @@ func Checker.check_type_exists(type: int, line: int, column: int, length: int, f
     var named = type
     while self.is_array(named)
         named = self.element_of(named)
+    end
+    if self.program.types.is_function(named)
+        var function = self.program.types.entry(named)
+        for input in function.args
+            self.check_type_exists(input, line, column, length, file)
+        end
+        if function.element != TYPE_NOTHING
+            self.check_type_exists(function.element, line, column, length, file)
+        end
+        return
     end
     if self.program.types.is_generic(named)
         self.make_generic_struct(named, line, column, length, file)
@@ -1492,6 +1530,9 @@ func Checker.statement_always_returns(place: int): bool
             return true
         end
     end
+    if s.kind == ST_TRY and self.always_returns(s.body) and self.always_returns(s.other_body)
+        return true
+    end
     if s.kind == ST_MATCH and s.covers_all
         var every_case_returns = not s.has_else or self.always_returns(s.other_body)
         for part in s.cases
@@ -1537,6 +1578,8 @@ func Checker.check_statement(place: int)
         self.check_for(s)
     elif kind == ST_MATCH
         self.check_match(s)
+    elif kind == ST_TRY
+        self.check_try(s)
     elif kind == ST_BREAK
         if self.loops_open == 0
             self.add(s.line, s.column, s.length, s.file, "break can only go inside a loop.", "")
@@ -1592,6 +1635,27 @@ func Checker.check_var(s: Stmt)
     s.slot = self.next_slot
     self.next_slot += 1
     self.declare(s.name, Variable{type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+end
+
+# The try part, then the catch part with its variable holding the error's words. A try keeps 8 slots for
+# jumping to its catch: the try before it, rbp, rsp, where the catch is, and r12 to r15
+func Checker.check_try(s: Stmt)
+    s.end_slot = self.next_slot
+    self.next_slot += TRY_SLOTS
+    self.check_block(s.body)
+    self.scopes.add(new_scope())
+    if s.name != ""
+        s.slot = self.next_slot
+        self.next_slot += 1
+        if self.constants.has(s.name)
+            self.add(s.name_line, s.name_column, s.name_length, s.file, s.name + " is already a constant, so a catch can't use that name.", "Pick a different name.")
+        else
+            self.declare(s.name, Variable{type: TYPE_STRING, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+        end
+    end
+    self.check_statements(s.other_body)
+    self.warn_about_unused_variables()
+    self.scopes.pop()
 end
 
 func Checker.check_match(s: Stmt)
@@ -1916,7 +1980,7 @@ func Checker.work_out_type(place: int): int
         return self.check_field(place)
     elif kind == EX_STRUCT_LITERAL
         return self.check_struct_literal(place)
-    elif kind == EX_ENUM_VALUE or kind == EX_BUILTIN_CALL
+    elif kind == EX_ENUM_VALUE or kind == EX_BUILTIN_CALL or kind == EX_FUNCTION_VALUE or kind == EX_CALL_VALUE
         return e.type
     elif kind == EX_INDEX
         return self.check_index(place)
@@ -1980,8 +2044,23 @@ func Checker.check_name(place: int): int
         self.add_at(e, e.name + " is an enum, so it needs one of its members.", "Like this: " + e.name + "." + first)
         return TYPE_UNKNOWN
     end
-    if self.has_function(e.name) or self.generic_functions.has(e.name)
-        self.add_at(e, e.name + " is a function, so it needs ( ) to be called.", "Like this: " + e.name + "()")
+    if self.has_function(e.name)
+        var function = self.function_named(e.name)
+        if function.dll != ""
+            self.add_at(e, e.name + " is a Windows function, so it can't be used as a value.", "Write a Jamo function that calls it, and use that.")
+            return TYPE_UNKNOWN
+        end
+        self.note_call(function.name)
+        var inputs: [int] = []
+        for input in function.inputs
+            inputs.add(input.type)
+        end
+        e.kind = EX_FUNCTION_VALUE
+        e.text = e.name
+        return self.program.types.function_of(inputs, function.return_type)
+    end
+    if self.generic_functions.has(e.name)
+        self.add_at(e, e.name + " is generic, so it can't be used as a value.", "Write a function for the types you need that calls it, and use that.")
         return TYPE_UNKNOWN
     end
     self.report_unknown_name(e.name, e.line, e.column, e.length, e.file, "")
@@ -2080,6 +2159,23 @@ func Checker.check_struct_method(place: int, type: int): int
                     self.check_expression(input)
                 end
                 return TYPE_UNKNOWN
+            end
+        end
+    end
+    if not self.has_function(prefix + e.name) and self.is_struct(type)
+        var fields = self.fields_of(type)
+        for i in 0..len(fields)
+            if fields[i].name == e.name and self.program.types.is_function(fields[i].type)
+                var field = self.program.new_expr(EX_FIELD, e.line, e.column, e.length)
+                var f = self.ex(field)
+                f.file = e.file
+                f.name = e.name
+                f.left = e.left
+                f.slot = i
+                f.type = fields[i].type
+                f.depth = self.ex(e.left).depth + 1
+                e.left = field
+                return self.check_value_call(place, fields[i].type)
             end
         end
     end
@@ -2352,6 +2448,9 @@ func Checker.check_binary(place: int): int
         if left == right and self.is_struct(left)
             self.add_at(e, "Structs can't be compared with == or !=.", "Compare their fields.")
         end
+        if left == right and self.program.types.is_function(left)
+            self.add_at(e, "Function values can't be compared with == or !=.", "")
+        end
         if left != right
             var hint = ""
             if is_number(left) and is_number(right)
@@ -2392,6 +2491,17 @@ end
 
 func Checker.check_call(place: int): int
     var e = self.ex(place)
+    var variable = self.find_variable(e.name)
+    if variable.slot != -1 and self.program.types.is_function(variable.type) and len(e.type_args) == 0
+        var callee = self.program.new_expr(EX_NAME, e.line, e.column, e.length)
+        var c = self.ex(callee)
+        c.file = e.file
+        c.name = e.name
+        c.depth = 1
+        self.check_expression(callee)
+        e.left = callee
+        return self.check_value_call(place, variable.type)
+    end
     if e.name == "callback" and self.find_variable(e.name).slot == -1
         return self.check_callback(place)
     end
@@ -2453,6 +2563,38 @@ func Checker.check_call(place: int): int
         end
     end
     return function.return_type
+end
+
+# A call through a function value in e.left, which is already checked
+func Checker.check_value_call(place: int, function: int): int
+    var e = self.ex(place)
+    e.kind = EX_CALL_VALUE
+    var entry = self.program.types.entry(function)
+    var inputs = entry.args
+    var given: [int] = []
+    for i in 0..len(e.inputs)
+        var wanted = TYPE_NOTHING
+        if i < len(inputs)
+            wanted = inputs[i]
+        end
+        given.add(self.check_wanting(e.inputs[i], wanted))
+    end
+    var what = e.name
+    if self.ex(e.left).kind == EX_FIELD
+        what = "The field " + e.name
+    end
+    if len(given) != len(inputs)
+        self.add_at(e, what + " takes " + count_words(len(inputs)) + ", but this gives it " + string(len(given)) + ".", "")
+        return entry.element
+    end
+    for i in 0..len(given)
+        if given[i] == TYPE_NOTHING
+            self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't be an input.", "")
+        elif given[i] != TYPE_UNKNOWN and given[i] != inputs[i]
+            self.add_at(self.ex(e.inputs[i]), "Input " + string(i + 1) + " of " + e.name + " must be " + self.with_article(inputs[i]) + ", but this is " + self.with_article(given[i]) + ".", "")
+        end
+    end
+    return entry.element
 end
 
 # callback(f) gives Windows the address of a Jamo function to call back

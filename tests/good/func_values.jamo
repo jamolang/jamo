@@ -1,0 +1,127 @@
+# Function values: a function's name as a value, func(...) types, calls through variables, fields and inputs,
+# and list.jamo's sort_with, filtered and mapped. The answers come from a Python twin
+use "list.jamo"
+
+struct Player
+    name: string
+    score: int
+end
+
+struct Button
+    label: string
+    on_click: func(int): int
+end
+
+var seed = 99
+
+func next_number(top: int): int
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return (seed / 65536) % top
+end
+
+func double(n: int): int
+    return n * 2
+end
+
+func square(n: int): int
+    return n * n
+end
+
+func is_even(n: int): bool
+    return n % 2 == 0
+end
+
+func label(n: int): string
+    return f"<{n}>"
+end
+
+func by_score(a: Player, b: Player): bool
+    return a.score > b.score
+end
+
+func shorter(a: string, b: string): bool
+    return len(a) < len(b)
+end
+
+func apply(f: func(int): int, x: int): int
+    return f(x)
+end
+
+func pick_step(n: int): func(int): int
+    if n % 2 == 0
+        return double
+    end
+    return square
+end
+
+# A recursive function, called through a variable
+func count_down(n: int): int
+    if n == 0
+        return 0
+    end
+    return 1 + count_down(n - 1)
+end
+
+var log_lines: [string] = []
+
+func note(text: string)
+    log_lines.add(text)
+end
+
+func main()
+    var f: func(int): int = double
+    print(f(21))
+    f = square
+    print(f(9))
+    print(apply(double, 50))
+    print(apply(pick_step(3), 12))
+    print(apply(pick_step(4), 12))
+    var steps = [double, square, double]
+    var value = 3
+    for step in steps
+        value = step(value)
+    end
+    print(value)
+    var b = Button{label: "Go", on_click: square}
+    print(b.on_click(5))
+    b.on_click = double
+    print(b.on_click(5))
+    var counter = count_down
+    print(counter(25))
+    var write = note
+    write("one")
+    write("two")
+    print(log_lines)
+    print(f)
+
+    # sort_with: highest score first, and equal scores keep their order
+    var players: [Player] = []
+    for i in 0..30
+        players.add(Player{name: f"p{i}", score: next_number(6)})
+    end
+    sort_with(players, by_score)
+    var order = ""
+    for p in players
+        order = order + p.name + " "
+    end
+    print(order)
+    var words = ["pear", "fig", "banana", "kiwi", "plum", "apple", "date"]
+    sort_with(words, shorter)
+    print(words)
+    var none: [int] = []
+    sort_with(none, is_even_before)
+    print(len(none))
+
+    # filtered and mapped
+    var numbers: [int] = []
+    for i in 0..15
+        numbers.add(next_number(100))
+    end
+    print(filtered(numbers, is_even))
+    print(mapped(numbers, label))
+    print(mapped(filtered(numbers, is_even), square))
+end
+
+func is_even_before(a: int, b: int): bool
+    return a < b
+end

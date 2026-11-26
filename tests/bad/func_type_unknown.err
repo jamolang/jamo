@@ -1,0 +1,6 @@
+func_type_unknown.jamo line 2: There's no type called Nope.
+        var f: func(Nope): int = main
+            ^
+func_type_unknown.jamo line 2: f is declared as a func(Nope): int, but this value is a func().
+        var f: func(Nope): int = main
+                                 ^^^^

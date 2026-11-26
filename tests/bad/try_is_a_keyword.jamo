@@ -1,0 +1,4 @@
+func main()
+    var try = 3
+    print(try)
+end

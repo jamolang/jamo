@@ -1,7 +1,7 @@
 # term: colors, tables, progress bars and menus for programs in the console. use "term.jamo"
 #
 # Colors use the codes every modern terminal understands. Windows' own console needs them turned on first, which
-# these functions do for you. Widths count bytes, so text in other languages may not line up exactly.
+# these functions do for you. Widths count letters, so accented and other languages line up too (wide letters like Chinese take two columns, so those may not).
 
 use "text.jamo"
 
@@ -71,18 +71,18 @@ end
 
 # The text with spaces after it, up to width bytes
 func pad_right(text: string, width: int): string
-    if len(text) >= width
+    if letter_count(text) >= width
         return text
     end
-    return text + repeat(" ", width - len(text))
+    return text + repeat(" ", width - letter_count(text))
 end
 
 # The text with spaces before it, up to width bytes
 func pad_left(text: string, width: int): string
-    if len(text) >= width
+    if letter_count(text) >= width
         return text
     end
-    return repeat(" ", width - len(text)) + text
+    return repeat(" ", width - letter_count(text)) + text
 end
 
 # The rows as a table, each column as wide as its widest text. The first row is the heading, with a line under it
@@ -96,8 +96,8 @@ func table(rows: [[string]]): string
             if i >= len(widths)
                 widths.add(0)
             end
-            if len(row[i]) > widths[i]
-                widths[i] = len(row[i])
+            if letter_count(row[i]) > widths[i]
+                widths[i] = letter_count(row[i])
             end
         end
     end

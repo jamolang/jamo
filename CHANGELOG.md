@@ -4,6 +4,19 @@ What changed in each version of Jamo.
 
 ## Not released yet
 
+- Function values: a function's name is a value of type `func(int, int): bool`, which can go in variables, arrays, struct fields and inputs and be called with `( )`, including fields called like methods. Generics work them out too. `list.jamo` gains `sort_with`, `filtered` and `mapped`. Guide section 29. 8 planted bugs were all caught.
+- Index errors say "which has 1 item" and "1 byte" instead of "1 items" and "1 bytes".
+- REVIEW.md has a third pass: what changed for real use, and what is still open.
+- `jamo get someone/project` downloads a shared library from GitHub into `packages/project`, from the files its `jamo-package.txt` lists, or `project.jamo` alone. It refuses names that could leave the folder and saves nothing unless every file downloads. Guide section 24.
+- `try` and `catch`: a run error or `fail` inside a `try`, however deep in its calls, jumps to its `catch`, which can name the error's words. `return`, `break` and `continue` work inside both parts. Guide section 28. 11 planted bugs in a copy of the compiler were all caught by the new tests.
+- Text with letters beyond English: `upper` and `lower` change accented, Greek and Cyrillic letters too, `letter_count`, `letters` and `reverse_letters` work with whole letters instead of bytes, and `term.jamo` pads and lines up tables by letters.
+- Jamo Playground (`playground/jamo_playground.pyw`): an editor with colors, Run, typed input, clickable errors, the examples menu and Stop.
+- A new example, Beat Run (`examples/beat_run.jamo`): a one-button rhythm runner with a song made in code, obstacles on the beat, a jump that fits inside one beat, attempts, best % and a progress bar. Checked: every jump has at least a 50 ms window either side, most 142 ms.
+- `sound.jamo`: `silence(seconds)` and `clip.mix(other, at, volume)` build songs and longer sounds from notes, to the exact sample.
+- A new example, Sky Hopper (`examples/platformer.jamo`): a three-level platformer with springs, spikes, coins, coyote time, a jump buffer, short and long jumps, squash and stretch, sparks and a following camera. Its GIF is at the top of the README's game section.
+- The VS Code extension (0.3.0) adds hover, go to definition (also into the built-in libraries, which it now carries), an outline and suggestions. They read the code itself, so they work while a file has mistakes.
+- Sort any array: `sort_by`, `sort_by_float` and `sort_by_text` in `list.jamo` sort items by a key array you give them, keeping equal items in order, and `sort_floats` sorts floats.
+- `bench/run_bench.py` times the same five programs in Jamo, C and Python, checks they print the same, and draws the chart in the README.
 - A mistake inside a generic copy also points at the line that asked for it, like `Map<float, int>.set doesn't work with these types, because of the mistake above.`, so a mistake inside a library says which line of the program caused it.
 - A generic call given an input that gives back nothing says so, instead of saying it can't work out the type.
 - `math.jamo` and `time.jamo` keep their state in variables outside functions, instead of a trick with the `.exe`'s header. Nothing changes for programs.

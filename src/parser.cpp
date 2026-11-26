@@ -70,7 +70,7 @@ private:
     // After a mistake on a line that opens a block, its lines still get read, and its end doesn't close the wrong thing
     void recover_from_statement(TokenKind first_word, Spot start) {
         skip_rest_of_line();
-        const bool opens_block = first_word == TokenKind::If || first_word == TokenKind::While || first_word == TokenKind::For || first_word == TokenKind::Match || first_word == TokenKind::Func;
+        const bool opens_block = first_word == TokenKind::If || first_word == TokenKind::While || first_word == TokenKind::For || first_word == TokenKind::Match || first_word == TokenKind::Func || first_word == TokenKind::Try || first_word == TokenKind::Catch;
         if (!opens_block) return;
         while (true) {
             parse_block(start, "block");
@@ -156,6 +156,28 @@ private:
         if (next_is(TokenKind::StringWord)) {
             take();
             return Type::String;
+        }
+        if (next_is(TokenKind::Func)) {
+            // func(int, int): bool, the type of a function value
+            take();
+            if (++nesting > DEEPEST_NESTING) fail("This type is nested too deeply.");
+            expect(TokenKind::LeftParen, "A function type needs ( ) with its inputs' types.", "Like this: func(int, int): bool");
+            std::vector<Type> inputs;
+            if (!next_is(TokenKind::RightParen)) {
+                while (true) {
+                    inputs.push_back(parse_type());
+                    if (!next_is(TokenKind::Comma)) break;
+                    take();
+                }
+            }
+            expect(TokenKind::RightParen, "This function type needs a closing ).");
+            Type answer = Type::Nothing;
+            if (next_is(TokenKind::Colon)) {
+                take();
+                answer = parse_type();
+            }
+            nesting--;
+            return program.types.function_of(inputs, answer);
         }
         if (next_is(TokenKind::LeftBracket)) {
             take();
@@ -394,7 +416,7 @@ private:
         if (++nesting > DEEPEST_NESTING) fail("This code is nested too deeply.");
         Block block;
         skip_newlines();
-        while (!next_is(TokenKind::EndWord) && !next_is(TokenKind::Else) && !next_is(TokenKind::Elif) && !next_is(TokenKind::Case)) {
+        while (!next_is(TokenKind::EndWord) && !next_is(TokenKind::Else) && !next_is(TokenKind::Elif) && !next_is(TokenKind::Case) && !(next_is(TokenKind::Catch) && opener_name == "try")) {
             if (next_is(TokenKind::End)) {
                 fail_at(opener, "This " + opener_name + " never gets its end.", "Add a line with end to finish it.");
             }
@@ -420,6 +442,9 @@ private:
             case TokenKind::While: return parse_while();
             case TokenKind::For: return parse_for();
             case TokenKind::Match: return parse_match();
+            case TokenKind::Try: return parse_try();
+            case TokenKind::Catch:
+                fail("A catch can only go inside a try.", "Like this: try, then what to do, then catch problem, then what to do if it goes wrong, then end");
             case TokenKind::Break: return parse_loop_word(StmtKind::Break);
             case TokenKind::Continue: return parse_loop_word(StmtKind::Continue);
             case TokenKind::Return: return parse_return();
@@ -547,6 +572,33 @@ private:
         }
         if (next_is(TokenKind::End)) fail_at(keyword.spot, "This match never gets its end.", "Add a line with end to finish it.");
         expect(TokenKind::EndWord, "A match can only hold case and else lines here.", "Like this: case Mood.CALM");
+        expect_line_end();
+        return stmt;
+    }
+
+    // try, a block, catch with an optional name for the error's words, a block, end
+    std::unique_ptr<Stmt> parse_try() {
+        const Token& keyword = take();
+        auto stmt = std::make_unique<Stmt>();
+        stmt->kind = StmtKind::Try;
+        stmt->spot = keyword.spot;
+        expect_line_end();
+        stmt->body = parse_block(keyword.spot, "try");
+        if (next_is(TokenKind::Else)) fail("A try can't have an else.", "Use catch for what to do when something goes wrong.");
+        if (next_is(TokenKind::Elif)) fail("A try can't have an elif.");
+        if (next_is(TokenKind::Case)) fail("A case can only go inside a match.");
+        expect(TokenKind::Catch, "This try needs a catch, saying what to do when something goes wrong.", "Like this: catch problem");
+        if (next_is(TokenKind::Name)) {
+            const Token& name = take();
+            stmt->name = name.text;
+            stmt->name_spot = name.spot;
+        }
+        expect_line_end();
+        stmt->other_body = parse_block(keyword.spot, "catch");
+        if (next_is(TokenKind::Else)) fail("A try can't have an else.");
+        if (next_is(TokenKind::Elif)) fail("A try can't have an elif.");
+        if (next_is(TokenKind::Case)) fail("A case can only go inside a match.");
+        expect(TokenKind::EndWord, "This try needs an end.");
         expect_line_end();
         return stmt;
     }

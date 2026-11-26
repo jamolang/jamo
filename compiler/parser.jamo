@@ -134,6 +134,46 @@ func Parser.parse_type(): int
         self.take()
         return TYPE_STRING
     end
+    if self.next_is(TK_FUNC)
+        # func(int, int): bool, the type of a function value
+        self.take()
+        self.nesting += 1
+        if self.nesting > DEEPEST_NESTING
+            self.fail("This type is nested too deeply.", "")
+            return TYPE_NOTHING
+        end
+        self.expect(TK_LEFT_PAREN, "A function type needs ( ) with its inputs' types.", "Like this: func(int, int): bool")
+        if self.stopped
+            return TYPE_NOTHING
+        end
+        var inputs: [int] = []
+        if not self.next_is(TK_RIGHT_PAREN)
+            while true
+                inputs.add(self.parse_type())
+                if self.stopped
+                    return TYPE_NOTHING
+                end
+                if not self.next_is(TK_COMMA)
+                    break
+                end
+                self.take()
+            end
+        end
+        self.expect(TK_RIGHT_PAREN, "This function type needs a closing ).", "")
+        if self.stopped
+            return TYPE_NOTHING
+        end
+        var answer = TYPE_NOTHING
+        if self.next_is(TK_COLON)
+            self.take()
+            answer = self.parse_type()
+            if self.stopped
+                return TYPE_NOTHING
+            end
+        end
+        self.nesting -= 1
+        return self.program.types.function_of(inputs, answer)
+    end
     if self.next_is(TK_LEFT_BRACKET)
         self.take()
         self.nesting += 1
@@ -294,7 +334,7 @@ end
 # After a mistake on a line that opens a block, its lines still get read, and its end doesn't close the wrong thing
 func Parser.recover_from_statement(first_word: int, line: int, column: int, length: int)
     self.skip_rest_of_line()
-    var opens_block = first_word == TK_IF or first_word == TK_WHILE or first_word == TK_FOR or first_word == TK_MATCH or first_word == TK_FUNC
+    var opens_block = first_word == TK_IF or first_word == TK_WHILE or first_word == TK_FOR or first_word == TK_MATCH or first_word == TK_FUNC or first_word == TK_TRY or first_word == TK_CATCH
     if not opens_block
         return
     end
@@ -628,7 +668,7 @@ func Parser.parse_block(line: int, column: int, length: int, opener_name: string
         return block
     end
     self.skip_newlines()
-    while not self.next_is(TK_END_WORD) and not self.next_is(TK_ELSE) and not self.next_is(TK_ELIF) and not self.next_is(TK_CASE)
+    while not self.next_is(TK_END_WORD) and not self.next_is(TK_ELSE) and not self.next_is(TK_ELIF) and not self.next_is(TK_CASE) and not (self.next_is(TK_CATCH) and opener_name == "try")
         if self.next_is(TK_END)
             self.fail_at(line, column, length, "This " + opener_name + " never gets its end.", "Add a line with end to finish it.")
             return block
@@ -666,6 +706,10 @@ func Parser.parse_statement(): int
         return self.parse_for()
     elif kind == TK_MATCH
         return self.parse_match()
+    elif kind == TK_TRY
+        return self.parse_try()
+    elif kind == TK_CATCH
+        self.fail("A catch can only go inside a try.", "Like this: try, then what to do, then catch problem, then what to do if it goes wrong, then end")
     elif kind == TK_BREAK
         return self.parse_loop_word(ST_BREAK)
     elif kind == TK_CONTINUE
@@ -934,6 +978,73 @@ func Parser.parse_match(): int
         return -1
     end
     self.expect(TK_END_WORD, "A match can only hold case and else lines here.", "Like this: case Mood.CALM")
+    if self.stopped
+        return -1
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    return stmt
+end
+
+# try, a block, catch with an optional name for the error's words, a block, end
+func Parser.parse_try(): int
+    var keyword = self.take()
+    var stmt = self.program.new_stmt(ST_TRY, keyword.line, keyword.column, keyword.length)
+    var s = self.st(stmt)
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    s.body = self.parse_block(keyword.line, keyword.column, keyword.length, "try")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_ELSE)
+        self.fail("A try can't have an else.", "Use catch for what to do when something goes wrong.")
+        return -1
+    end
+    if self.next_is(TK_ELIF)
+        self.fail("A try can't have an elif.", "")
+        return -1
+    end
+    if self.next_is(TK_CASE)
+        self.fail("A case can only go inside a match.", "")
+        return -1
+    end
+    self.expect(TK_CATCH, "This try needs a catch, saying what to do when something goes wrong.", "Like this: catch problem")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_NAME)
+        var name = self.take()
+        s.name = name.text
+        s.name_line = name.line
+        s.name_column = name.column
+        s.name_length = name.length
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    s.other_body = self.parse_block(keyword.line, keyword.column, keyword.length, "catch")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_ELSE)
+        self.fail("A try can't have an else.", "")
+        return -1
+    end
+    if self.next_is(TK_ELIF)
+        self.fail("A try can't have an elif.", "")
+        return -1
+    end
+    if self.next_is(TK_CASE)
+        self.fail("A case can only go inside a match.", "")
+        return -1
+    end
+    self.expect(TK_END_WORD, "This try needs an end.", "")
     if self.stopped
         return -1
     end

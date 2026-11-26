@@ -93,6 +93,21 @@ end
 - A `case` needs a fixed value, and can't repeat one
 - A `match` on an enum must cover every member or have an `else`
 
+## Function values
+```
+func double(n: int): int
+    return n * 2
+end
+
+var change: func(int): int = double
+print(change(4))
+```
+- A function's name without `( )` is a value of type `func(...)`: the inputs' types, then `:` and the answer's type, or nothing after `)` when it gives back nothing, like `func(string)`
+- A variable, input, struct field or array item of a function type is called with `( )`, like `change(4)` or `button.on_click(4)`. A field holding a function is called like a method
+- Methods, generic functions and `extern` functions can't be values
+- Two function types are the same when their inputs and answers are. Function values can't be compared with `==` or `!=`, and print as their type
+- A function value holds only which function it is. It doesn't keep any variables from where it was made
+
 ## Generics
 ```
 func first<T>(items: [T]): T
@@ -234,6 +249,19 @@ end
 - A `for` variable lasts until the loop ends and can't be assigned to
 - `break` leaves the innermost loop, and `continue` goes on to its next round. Both only work inside a loop
 
+```
+try
+    var n = int(text)
+catch problem
+    print(problem)
+end
+```
+- A run error or `fail` inside the `try` part, at any depth of calls, jumps to the `catch` part. The rest of the `try` part is skipped
+- The name after `catch` is optional. It's a `string` holding the error's words, without the file and line, and lasts until the `end`
+- The nearest open `try` catches. An error inside a `catch` goes to the `try` around it, if there is one
+- `return`, `break` and `continue` may leave a `try` or `catch` part
+- Running out of memory isn't caught. Neither is an error inside a function Windows calls back through `callback`, since a catch can't be reached across Windows' own code: those stop the program
+
 ## Operators
 `+ - * / % == != < > <= >=`, unary `-`, `and`, `or`, `not`, and parentheses. From loosest to tightest: `or`, `and`, `not`, `== !=`, `< > <= >=`, `+ -`, `* / %`, unary `-`.
 - `+ - * / %` and `< > <= >=` need two ints or two floats
@@ -255,7 +283,7 @@ end
 - `a < b < c` is an error, since `a < b` is a bool
 - A number too large for 64 bits is a compile error, but `-9223372036854775808` works
 - The smallest int divided by -1 wraps to itself
-- `print`, `len`, `int`, `float`, `bool`, `string`, `true`, `false`, `func`, `end`, `var`, `if`, `elif`, `else`, `while`, `for`, `in`, `break`, `continue`, `return`, `and`, `or`, `not`, `struct`, `enum`, `const`, `match`, `case` and `use` can't be names
+- `print`, `len`, `int`, `float`, `bool`, `string`, `true`, `false`, `func`, `end`, `var`, `if`, `elif`, `else`, `while`, `for`, `in`, `break`, `continue`, `return`, `and`, `or`, `not`, `struct`, `enum`, `const`, `match`, `case`, `use`, `try` and `catch` can't be names
 - Files may use Windows or Unix line endings, and tabs or spaces. Non-English text is allowed only in comments and quoted text
 - A program exits with code 0 when it finishes normally, and running out of stack ends it with a non-zero exit code
 - Compile errors stop at the first mistake in a program's structure. Mistakes in types and names are all reported together, up to 20
@@ -270,7 +298,7 @@ A run error shows the file and line, then stops the program with exit code 1:
 ```
 game.jamo line 8: Error: division by zero
 ```
-The others are running out of memory, a float that doesn't fit in an int, going outside a string or array, popping an empty array, a failed file read or write, and text that isn't a number.
+The others are running out of memory, a float that doesn't fit in an int, going outside a string or array, popping an empty array, a failed file read or write, and text that isn't a number. Any of them but running out of memory can be caught with `try`, so the program carries on.
 
 ## Memory
 Jamo frees strings, arrays and structs by itself once nothing can reach them. Programs never free anything by hand.

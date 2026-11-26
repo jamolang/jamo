@@ -2959,8 +2959,12 @@ end
 )JAMOLIBRARY";
     if (name == "list.jamo") return R"JAMOLIBRARY(# list: finding, putting in and taking out items of int and string arrays. use "list.jamo"
 #
-# Sorting and turning arrays around are in text.jamo: sort_ints, sort_strings, reverse_ints and reverse_strings.
-# The _int and _string versions came first. The ones at the end work on every kind of array, using generics.
+# Sorting ints and strings, and turning arrays around, are in text.jamo: sort_ints, sort_strings, reverse_ints and
+# reverse_strings. The _int and _string versions came first. The ones at the end work on every kind of array, using
+# generics, and sort_by, sort_by_float and sort_by_text sort any array by a key you give each item. sort_with,
+# filtered and mapped take a function of your own.
+
+use "text.jamo"
 
 func list_check_place(at: int, count: int, word: string)
     if at < 0 or at > count
@@ -3094,6 +3098,215 @@ func last_item<T>(items: [T]): T
         fail("last_item needs an array with something in it, but this one is empty.")
     end
     return items[len(items) - 1]
+end
+
+# --- Sorting any array ---
+# Jamo can't pass a function, so you give each item a key instead: an array the same length, where keys[i] belongs to
+# items[i]. Both arrays get sorted from the smallest key to the largest. Items with equal keys keep their order.
+#
+#     var names = ["Ana", "Bo", "Cy"]
+#     var scores = [30, 10, 20]
+#     sort_by(names, scores)       # names is now Bo, Cy, Ana and scores is 10, 20, 30
+
+# Sorts floats from smallest to largest. nan goes wherever it lands
+func sort_floats(items: [float])
+    list_put_in_order(items, list_order_of(items))
+end
+
+# Sorts items by int keys, smallest first
+func sort_by<T>(items: [T], keys: [int])
+    list_check_keys(len(items), len(keys), "sort_by")
+    var order = list_order_of(keys)
+    list_put_in_order(items, order)
+    list_put_in_order(keys, order)
+end
+
+# Sorts items by float keys, smallest first
+func sort_by_float<T>(items: [T], keys: [float])
+    list_check_keys(len(items), len(keys), "sort_by_float")
+    var order = list_order_of(keys)
+    list_put_in_order(items, order)
+    list_put_in_order(keys, order)
+end
+
+# Sorts items by text keys, in the same order as sort_strings ("Zoo" before "apple")
+func sort_by_text<T>(items: [T], keys: [string])
+    list_check_keys(len(items), len(keys), "sort_by_text")
+    var order = list_text_order_of(keys)
+    list_put_in_order(items, order)
+    list_put_in_order(keys, order)
+end
+
+func list_check_keys(items: int, keys: int, word: string)
+    if items != keys
+        fail(f"{word} needs one key for each item, but there are {items} items and {keys} keys.")
+    end
+end
+
+# The places of keys from smallest to largest, by merging runs that double in size. Equal keys keep their order.
+# K must work with <=, so ints and floats
+func list_order_of<K>(keys: [K]): [int]
+    var count = len(keys)
+    var from: [int] = []
+    var to: [int] = []
+    for i in 0..count
+        from.add(i)
+        to.add(i)
+    end
+    var width = 1
+    while width < count
+        var left = 0
+        while left < count
+            var middle = left + width
+            if middle > count
+                middle = count
+            end
+            var right = middle + width
+            if right > count
+                right = count
+            end
+            var a = left
+            var b = middle
+            for place in left..right
+                if b >= right or (a < middle and keys[from[a]] <= keys[from[b]])
+                    to[place] = from[a]
+                    a += 1
+                else
+                    to[place] = from[b]
+                    b += 1
+                end
+            end
+            left = right
+        end
+        var spare = from
+        from = to
+        to = spare
+        width *= 2
+    end
+    return from
+end
+
+# The same, for text keys
+func list_text_order_of(keys: [string]): [int]
+    var count = len(keys)
+    var from: [int] = []
+    var to: [int] = []
+    for i in 0..count
+        from.add(i)
+        to.add(i)
+    end
+    var width = 1
+    while width < count
+        var left = 0
+        while left < count
+            var middle = left + width
+            if middle > count
+                middle = count
+            end
+            var right = middle + width
+            if right > count
+                right = count
+            end
+            var a = left
+            var b = middle
+            for place in left..right
+                if b >= right or (a < middle and not text_before(keys[from[b]], keys[from[a]]))
+                    to[place] = from[a]
+                    a += 1
+                else
+                    to[place] = from[b]
+                    b += 1
+                end
+            end
+            left = right
+        end
+        var spare = from
+        from = to
+        to = spare
+        width *= 2
+    end
+    return from
+end
+
+# --- With a function of your own ---
+
+# Sorts items so that before(a, b) is true when a should come before b. Items it calls equal, where neither comes
+# before the other, keep their order. before must give the same answer each time for the same two items
+#
+#     func by_score(a: Player, b: Player): bool
+#         return a.score > b.score
+#     end
+#     sort_with(players, by_score)       # highest score first
+func sort_with<T>(items: [T], before: func(T, T): bool)
+    var count = len(items)
+    var from: [int] = []
+    var to: [int] = []
+    for i in 0..count
+        from.add(i)
+        to.add(i)
+    end
+    var width = 1
+    while width < count
+        var left = 0
+        while left < count
+            var middle = left + width
+            if middle > count
+                middle = count
+            end
+            var right = middle + width
+            if right > count
+                right = count
+            end
+            var a = left
+            var b = middle
+            for place in left..right
+                if b >= right or (a < middle and not before(items[from[b]], items[from[a]]))
+                    to[place] = from[a]
+                    a += 1
+                else
+                    to[place] = from[b]
+                    b += 1
+                end
+            end
+            left = right
+        end
+        var spare = from
+        from = to
+        to = spare
+        width *= 2
+    end
+    list_put_in_order(items, from)
+end
+
+# A new array with the items where keep(item) is true, in order
+func filtered<T>(items: [T], keep: func(T): bool): [T]
+    var out: [T] = []
+    for item in items
+        if keep(item)
+            out.add(item)
+        end
+    end
+    return out
+end
+
+# A new array with change(item) for each item, in order
+func mapped<T, U>(items: [T], change: func(T): U): [U]
+    var out: [U] = []
+    for item in items
+        out.add(change(item))
+    end
+    return out
+end
+
+# Moves items so items[i] becomes what was at items[order[i]]
+func list_put_in_order<T>(items: [T], order: [int])
+    var copy: [T] = []
+    for item in items
+        copy.add(item)
+    end
+    for i in 0..len(order)
+        items[i] = copy[order[i]]
+    end
 end
 )JAMOLIBRARY";
     if (name == "log.jamo") return R"JAMOLIBRARY(# log: messages with levels, to the screen, a file or both. use "log.jamo"
@@ -5345,6 +5558,46 @@ func tone(frequency: float, seconds: float, wave: string): Clip
     return Clip{samples: samples, frames: frames}
 end
 
+# A clip of silence, to mix other clips into, like a song made from notes
+func silence(seconds: float): Clip
+    if not (seconds >= 0.0 and seconds <= 600.0)
+        fail(f"silence lasts from 0.0 to 600.0 seconds, not {seconds}.")
+    end
+    var frames = int(seconds * 44100.0 + 0.5)
+    var samples = memory(frames * 4 + 4)
+    for f in 0..frames * 2
+        poke_u16(samples, f * 2, 32768)
+    end
+    return Clip{samples: samples, frames: frames}
+end
+
+# Adds another clip into this one, starting at a time in seconds, at a volume from 0.0 to 4.0.
+# The part that goes past the end is left off, and loud parts are kept from wrapping around
+func Clip.mix(other: Clip, at: float, volume: float)
+    if not (at >= 0.0 and at <= 600.0)
+        fail(f"mix starts from 0.0 to 600.0 seconds in, not {at}.")
+    end
+    var level = int(sound_volume(volume) * 32768.0)
+    var start = int(at * 44100.0 + 0.5)
+    var count = other.frames
+    if start + count > self.frames
+        count = self.frames - start
+    end
+    var to = start * 4
+    var from = 0
+    for i in 0..count * 2
+        var value = peek_u16(self.samples, to) - 32768 + (peek_u16(other.samples, from) - 32768) * level / 32768
+        if value > 32767
+            value = 32767
+        elif value < -32768
+            value = -32768
+        end
+        poke_u16(self.samples, to, value + 32768)
+        to += 2
+        from += 2
+    end
+end
+
 # The sine of a whole turn times x, for x from 0.0 to 1.0
 func sound_sine(x: float): float
     var sign = 1.0
@@ -5514,7 +5767,7 @@ end
     if (name == "term.jamo") return R"JAMOLIBRARY(# term: colors, tables, progress bars and menus for programs in the console. use "term.jamo"
 #
 # Colors use the codes every modern terminal understands. Windows' own console needs them turned on first, which
-# these functions do for you. Widths count bytes, so text in other languages may not line up exactly.
+# these functions do for you. Widths count letters, so accented and other languages line up too (wide letters like Chinese take two columns, so those may not).
 
 use "text.jamo"
 
@@ -5584,18 +5837,18 @@ end
 
 # The text with spaces after it, up to width bytes
 func pad_right(text: string, width: int): string
-    if len(text) >= width
+    if letter_count(text) >= width
         return text
     end
-    return text + repeat(" ", width - len(text))
+    return text + repeat(" ", width - letter_count(text))
 end
 
 # The text with spaces before it, up to width bytes
 func pad_left(text: string, width: int): string
-    if len(text) >= width
+    if letter_count(text) >= width
         return text
     end
-    return repeat(" ", width - len(text)) + text
+    return repeat(" ", width - letter_count(text)) + text
 end
 
 # The rows as a table, each column as wide as its widest text. The first row is the heading, with a line under it
@@ -5609,8 +5862,8 @@ func table(rows: [[string]]): string
             if i >= len(widths)
                 widths.add(0)
             end
-            if len(row[i]) > widths[i]
-                widths[i] = len(row[i])
+            if letter_count(row[i]) > widths[i]
+                widths[i] = letter_count(row[i])
             end
         end
     end
@@ -5898,32 +6151,139 @@ func replace(text: string, old: string, new: string): string
     return memory_text(place, total)
 end
 
-# Text with a to z made into A to Z. Other letters stay as they are
+# Text with small letters made into capitals: a to z, and the accented, Greek and Cyrillic letters (like é, ß stays,
+# ω and ж). Anything else stays as it is
 func upper(text: string): string
+    return text_change_case(text, true)
+end
+
+# Text with capitals made into small letters, the same letters as upper
+func lower(text: string): string
+    return text_change_case(text, false)
+end
+
+# Letters from U+0080 to U+07FF take two bytes in UTF-8, and every letter upper and lower change is one of them,
+# so the text keeps its length
+func text_change_case(text: string, to_upper: bool): string
     var count = len(text)
     var place = memory(count + 1)
-    for i in 0..count
+    var i = 0
+    while i < count
         var code = byte(text, i)
-        if code >= 97 and code <= 122
-            code -= 32
+        if code < 128
+            if to_upper and code >= 97 and code <= 122
+                code -= 32
+            elif not to_upper and code >= 65 and code <= 90
+                code += 32
+            end
+            poke_u8(place, i, code)
+            i += 1
+        elif code >= 192 and code < 224 and i + 1 < count and byte(text, i + 1) >= 128 and byte(text, i + 1) < 192
+            var letter = (code - 192) * 64 + byte(text, i + 1) - 128
+            if to_upper
+                letter = text_upper_letter(letter)
+            else
+                letter = text_lower_letter(letter)
+            end
+            poke_u8(place, i, 192 + letter / 64)
+            poke_u8(place, i + 1, 128 + letter % 64)
+            i += 2
+        else
+            poke_u8(place, i, code)
+            i += 1
         end
-        poke_u8(place, i, code)
     end
     return memory_text(place, count)
 end
 
-# Text with A to Z made into a to z. Other letters stay as they are
-func lower(text: string): string
-    var count = len(text)
-    var place = memory(count + 1)
-    for i in 0..count
-        var code = byte(text, i)
-        if code >= 65 and code <= 90
-            code += 32
-        end
-        poke_u8(place, i, code)
+# The capital of a two-byte letter, by its Unicode number, or the same number when it has none that's two bytes
+func text_upper_letter(letter: int): int
+    if letter >= 224 and letter <= 254 and letter != 247
+        return letter - 32                                   # à to þ
+    elif letter >= 256 and letter <= 311 and letter != 305 and letter % 2 == 1
+        return letter - 1                                    # ā to ķ
+    elif letter >= 313 and letter <= 328 and letter % 2 == 0
+        return letter - 1                                    # ĺ to ň
+    elif letter >= 330 and letter <= 375 and letter % 2 == 1
+        return letter - 1                                    # ŋ to ŷ
+    elif letter >= 378 and letter <= 382 and letter % 2 == 0
+        return letter - 1                                    # ź to ž
+    elif letter == 962
+        return 931                                           # ς, the sigma at the end of a word
+    elif letter >= 945 and letter <= 969
+        return letter - 32                                   # α to ω
+    elif letter >= 1072 and letter <= 1103
+        return letter - 32                                   # а to я
+    elif letter >= 1104 and letter <= 1119
+        return letter - 80                                   # ѐ to џ
     end
-    return memory_text(place, count)
+    return letter
+end
+
+# The small letter of a two-byte capital, by its Unicode number
+func text_lower_letter(letter: int): int
+    if letter >= 192 and letter <= 222 and letter != 215
+        return letter + 32                                   # À to Þ
+    elif letter >= 256 and letter <= 311 and letter != 304 and letter % 2 == 0
+        return letter + 1                                    # Ā to Ķ
+    elif letter >= 313 and letter <= 328 and letter % 2 == 1
+        return letter + 1                                    # Ĺ to Ň
+    elif letter >= 330 and letter <= 375 and letter % 2 == 0
+        return letter + 1                                    # Ŋ to Ŷ
+    elif letter >= 377 and letter <= 381 and letter % 2 == 1
+        return letter + 1                                    # Ź to Ž
+    elif letter >= 913 and letter <= 937 and letter != 930
+        return letter + 32                                   # Α to Ω
+    elif letter >= 1040 and letter <= 1071
+        return letter + 32                                   # А to Я
+    elif letter >= 1024 and letter <= 1039
+        return letter + 80                                   # Ѐ to Џ
+    end
+    return letter
+end
+
+# --- Letters, not bytes ---
+# len and text[i] count bytes. In UTF-8 a letter outside English takes 2 to 4 bytes, so these count whole letters
+
+# How many letters the text has. "héllo" has 6 bytes but 5 letters
+func letter_count(text: string): int
+    var total = 0
+    for i in 0..len(text)
+        var code = byte(text, i)
+        if code < 128 or code >= 192
+            total += 1
+        end
+    end
+    return total
+end
+
+# The text split into its letters, each as its own text
+func letters(text: string): [string]
+    var out: [string] = []
+    var count = len(text)
+    if count == 0
+        return out
+    end
+    var start = 0
+    for i in 1..count + 1
+        if i == count or byte(text, i) < 128 or byte(text, i) >= 192
+            out.add(slice(text, start, i))
+            start = i
+        end
+    end
+    return out
+end
+
+# The letters in the other order, keeping each letter's bytes together
+func reverse_letters(text: string): string
+    var parts = letters(text)
+    var out: [string] = []
+    var i = len(parts) - 1
+    while i >= 0
+        out.add(parts[i])
+        i -= 1
+    end
+    return join(out, "")
 end
 
 # --- Joining ---

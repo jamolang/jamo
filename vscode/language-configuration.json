@@ -9,7 +9,7 @@
     ],
     "surroundingPairs": [["(", ")"], ["[", "]"], ["{", "}"], ["\"", "\""]],
     "indentationRules": {
-        "increaseIndentPattern": "^\\s*(func|struct|enum|if|elif|else|while|for|match|case)\\b",
-        "decreaseIndentPattern": "^\\s*(end|elif|else|case)\\b"
+        "increaseIndentPattern": "^\\s*(func|struct|enum|if|elif|else|while|for|match|case|try|catch)\\b",
+        "decreaseIndentPattern": "^\\s*(end|elif|else|case|catch)\\b"
     }
 }

@@ -6,6 +6,7 @@
 use "modules.jamo"
 use "checker.jamo"
 use "pe.jamo"
+use "net.jamo"
 
 extern "kernel32.dll" func GetStdHandle(which: i32): int
 extern "kernel32.dll" func WriteFile(file: int, data: int, size: i32, written: int, overlapped: int): bool
@@ -27,7 +28,7 @@ const FAILED = 1
 const CLEANER_CHECKS = 2
 const CLEANER_OFF = 4
 const VERSION = "0.2.0"
-const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
+const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
 # The game jamo new --game starts from: a player that moves, a coin to catch, and a score
 const NEW_GAME = "use \"gfx.jamo\"\nuse \"math.jamo\"\n\nconst WIDTH = 640\nconst HEIGHT = 480\nconst SIZE = 32.0\nconst SPEED = 4.0\n\n# Everything the game keeps track of lives in one struct, passed to the functions that need it\nstruct Game\n    x: float\n    y: float\n    coin_x: float\n    coin_y: float\n    score: int\nend\n\nfunc Game.move(window: Window)\n    if window.key_down(\"left\")\n        self.x -= SPEED\n    end\n    if window.key_down(\"right\")\n        self.x += SPEED\n    end\n    if window.key_down(\"up\")\n        self.y -= SPEED\n    end\n    if window.key_down(\"down\")\n        self.y += SPEED\n    end\n    self.x = clamp(self.x, 0.0, float(WIDTH) - SIZE)\n    self.y = clamp(self.y, 0.0, float(HEIGHT) - SIZE)\nend\n\n# Touching the coin scores a point, and the coin jumps somewhere new\nfunc Game.catch_coin()\n    if abs(self.x + SIZE / 2.0 - self.coin_x) < 24.0 and abs(self.y + SIZE / 2.0 - self.coin_y) < 24.0\n        self.score += 1\n        self.coin_x = 20.0 + random_float() * float(WIDTH - 40)\n        self.coin_y = 60.0 + random_float() * float(HEIGHT - 80)\n    end\nend\n\nfunc Game.draw(screen: Gfx)\n    screen.clear(rgb(24, 28, 44))\n    screen.circle(self.coin_x, self.coin_y, 10.0, rgb(255, 210, 60))\n    screen.rect(self.x, self.y, SIZE, SIZE, rgb(90, 200, 255))\n    screen.text(f\"Coins: {self.score}\", 16.0, 16.0, 24.0, rgb(255, 255, 255))\nend\n\nfunc main()\n    var window = open_window(\"My game\", WIDTH, HEIGHT)\n    var screen = start_gfx(window)\n    var game = Game{x: 300.0, y: 220.0, coin_x: 120.0, coin_y: 120.0, score: 0}\n    while window.is_open()\n        if window.key_pressed(\"escape\")\n            window.close()\n        end\n        game.move(window)\n        game.catch_coin()\n        game.draw(screen)\n        screen.show()\n        window.wait_frame(60)\n    end\nend\n"
 const NEW_PROGRAM = "func main()\n    print(\"Hello from Jamo!\")\nend\n"
@@ -366,6 +367,9 @@ func command_answer(words: [string]): int
     if count == 4 and command == "new" and words[2] == "--game"
         return make_new_program(words[1], true)
     end
+    if count == 3 and command == "get"
+        return get_package(words[1])
+    end
     if count == 3 and command == "check"
         var program = new_program()
         if load_and_check(words[1], program)
@@ -428,6 +432,133 @@ func command_answer(words: [string]): int
         inputs.add(words[i])
     end
     return run(exe_path, inputs)
+end
+
+# --- jamo get: downloads a package, a library someone shared on GitHub ---
+# jamo get someone/project fetches the list jamo-package.txt from the project's main branch, one .jamo file name per
+# line, then each file, into packages/project/ in the current folder. With no list it fetches project.jamo alone.
+# JAMO_PACKAGE_SITE changes where from, which the tests use to fetch from their own server on 127.0.0.1
+
+extern "kernel32.dll" func GetEnvironmentVariableW(name: int, buffer: int, size: i32): i32
+
+const PACKAGE_SITE = "https://raw.githubusercontent.com"
+const PACKAGE_LIST = "jamo-package.txt"
+const PACKAGE_MOST_BYTES = 4000000
+const PACKAGE_MOST_FILES = 100
+
+# An environment variable's value, or "" when it isn't set. Only ASCII, which is all a web address needs here
+func environment(name: string): string
+    var buffer = memory(2048)
+    var size = GetEnvironmentVariableW(wide(name), buffer, 1000)
+    if size <= 0 or size >= 1000
+        return ""
+    end
+    var place = memory(size + 1)
+    for i in 0..size
+        var letter = peek_u16(buffer, i * 2)
+        if letter > 127
+            return ""
+        end
+        poke_u8(place, i, letter)
+    end
+    return memory_text(place, size)
+end
+
+# Letters, digits, - _ and ., not starting with a dot, so a name can never climb out of its folder
+func package_name_ok(name: string): bool
+    if len(name) == 0 or len(name) > 100 or byte(name, 0) == 46
+        return false
+    end
+    for i in 0..len(name)
+        var c = byte(name, i)
+        var ok = (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57) or c == 45 or c == 95 or c == 46
+        if not ok
+            return false
+        end
+    end
+    return true
+end
+
+func get_package(spec: string): int
+    var parts = split(spec, "/")
+    if len(parts) != 2 or not package_name_ok(parts[0]) or not package_name_ok(parts[1])
+        complain("jamo get needs a GitHub name and project, like this: jamo get someone/project\n")
+        return FAILED
+    end
+    var project = parts[1]
+    var site = environment("JAMO_PACKAGE_SITE")
+    if site == ""
+        site = PACKAGE_SITE
+    end
+    var base = site + "/" + parts[0] + "/" + project + "/HEAD/"
+    var net = start_net()
+    net.set_timeout(30.0)
+    var files: [string] = []
+    var list = net.get(base + PACKAGE_LIST)
+    if list.status == 200
+        for line in split(replace(list.text, "\r", ""), "\n")
+            var name = trim(line)
+            if name != "" and not starts_with(name, "#")
+                if not package_name_ok(name) or not ends_with(name, ".jamo")
+                    complain(f"{spec}'s {PACKAGE_LIST} lists {name}, which isn't a plain .jamo file name, so nothing was saved.\n")
+                    net.close()
+                    return FAILED
+                end
+                files.add(name)
+            end
+        end
+    elif list.status == 404
+        files.add(project + ".jamo")
+    else
+        complain(f"I couldn't get {spec}: {package_problem(list)}\n")
+        net.close()
+        return FAILED
+    end
+    if len(files) == 0 or len(files) > PACKAGE_MOST_FILES
+        complain(f"{spec}'s {PACKAGE_LIST} must list from 1 to {PACKAGE_MOST_FILES} .jamo files.\n")
+        net.close()
+        return FAILED
+    end
+    # Everything is fetched before anything is saved, so a failure leaves no half package behind
+    var texts: [string] = []
+    for name in files
+        var got = net.get(base + name)
+        if got.status != 200
+            complain(f"I couldn't get {name} from {spec}: {package_problem(got)}\n")
+            net.close()
+            return FAILED
+        end
+        if len(got.text) > PACKAGE_MOST_BYTES
+            complain(f"{name} from {spec} is over {PACKAGE_MOST_BYTES / 1000000} MB, which is too big for a Jamo file.\n")
+            net.close()
+            return FAILED
+        end
+        texts.add(got.text)
+    end
+    net.close()
+    var folder = "packages/" + project
+    make_folders(folder)
+    for i in 0..len(files)
+        if not save_text(folder + "/" + files[i], texts[i])
+            complain(f"I couldn't save {folder}/{files[i]}.\n")
+            return FAILED
+        end
+    end
+    var word = "files"
+    if len(files) == 1
+        word = "file"
+    end
+    say(f"Got {len(files)} {word} from {spec} into {folder}\nUse it with: use \"{folder}/{files[0]}\"\n")
+    return 0
+end
+
+func package_problem(got: Response): string
+    if got.status == 404
+        return "it isn't there (404). Check the name, and that the project is public"
+    elif got.status > 0
+        return f"the site answered {got.status}"
+    end
+    return got.error
 end
 
 func main()

@@ -1,0 +1,45 @@
+1. an index error, caught
+  index 5 is outside this array, which has 3 items
+2. from deep inside calls
+  index 3 is outside this array, which has 0 items
+3. fail() is caught too
+4
+  7 is odd
+4. no error: the catch is skipped
+  fine
+5. nested: the inner catch first, then an error in it goes to the outer one
+  inner: can't turn "12x" into an int
+  outer: index 0 is outside this array, which has 0 items
+6. return, break and continue from inside a try
+10
+-1
+4
+  division by zero
+7. registers kept
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+  caught: division by zero
+210225249
+520
+520
+8. in a loop many times
+1500
+9. helpers
+42
+-1
+b
+none
+1.5
+8
+  Box.get: index 2 is outside this array, which has 2 items
+-1
+10. the catch's words are text like any other
+true
+done

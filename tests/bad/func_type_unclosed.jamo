@@ -1,0 +1,4 @@
+func main()
+    var f: func(int = 3
+    print(1)
+end

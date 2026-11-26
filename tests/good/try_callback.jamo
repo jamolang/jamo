@@ -1,0 +1,17 @@
+# A run error inside a function Windows calls back must not jump to a catch outside, back across Windows' own
+# code, so it stops the program instead
+extern "user32.dll" func EnumWindows(each: int, data: int): bool
+
+func each_window(window: int, data: int): bool
+    fail("stopped inside a callback")
+    return window + data >= 0
+end
+
+func main()
+    try
+        EnumWindows(callback(each_window), 0)
+        print("after")
+    catch problem
+        print("caught " + problem)
+    end
+end

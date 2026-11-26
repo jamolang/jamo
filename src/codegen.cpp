@@ -69,6 +69,8 @@ public:
         text.pop_empty = string_number("pop needs an item, but this array is empty");
         text.outside_array = string_number(" is outside this array, which has ");
         text.items_word = string_number(" items");
+        text.item_word = string_number(" item");
+        text.byte_word = string_number(" byte");
         text.quote = string_number("\"");
         text.new_line = string_number("\n");
         text.cant_turn = string_number("can't turn \"");
@@ -192,6 +194,7 @@ private:
         if (!expr) return;
         if (expr->kind == ExprKind::Call) called.push_back(expr->name);
         if (expr->kind == ExprKind::BuiltinCall && expr->name == "callback") called.push_back(expr->text);
+        if (expr->kind == ExprKind::FunctionValue) called.push_back(expr->text);
         if (expr->kind == ExprKind::MethodCall && program.types.is_struct(expr->left->type)) called.push_back(program.types.name(expr->left->type) + "." + expr->name);
         find_calls(expr->left.get(), called);
         find_calls(expr->right.get(), called);
@@ -692,7 +695,9 @@ private:
     void choose_registers(const Function& function) {
         slot_registers.clear();
         saved_count = 0;
-        if (!optimizing) return;
+        // A catch can't know what a function's own variables held in registers, so a function with a try keeps
+        // them all in memory
+        if (!optimizing || has_try(function.body)) return;
         std::map<int, int64_t> uses;
         count_uses_in_block(function.body, 0, uses);
         std::vector<std::pair<int64_t, int>> busiest;
@@ -794,9 +799,11 @@ private:
                 write_match(stmt);
                 break;
             case StmtKind::Break:
+                if (tries_open.size() > loops.back().tries) close_tries_from(loops.back().tries);
                 out.jump(loops.back().finished);
                 break;
             case StmtKind::Continue:
+                if (tries_open.size() > loops.back().tries) close_tries_from(loops.back().tries);
                 out.jump(loops.back().next);
                 break;
             case StmtKind::Return:
@@ -804,8 +811,16 @@ private:
                 if (inline_end >= 0) {
                     out.jump(inline_end);
                 } else {
+                    if (!tries_open.empty()) {
+                        out.push_rax();
+                        close_tries_from(0);
+                        out.pop_rax();
+                    }
                     write_return();
                 }
+                break;
+            case StmtKind::Try:
+                write_try(stmt);
                 break;
             case StmtKind::Call:
                 write_expression(*stmt.value);
@@ -1037,13 +1052,71 @@ private:
         out.place(finished);
     }
 
+    // --- try and catch ---
+    // A try fills in 8 slots, as a record the runtime can follow: [0] the try around this one, [8] rbp, [16] rsp,
+    // [24] where the catch is, then r12 to r15. The newest try's record is kept in the data section. A run error
+    // with a try open goes back to that try's rbp and rsp and jumps to its catch with the error's words in rax,
+    // and the catch puts r12 to r15 back, since the functions in between may have changed them
+
+    // The frame offset of one field of a try's record
+    int try_field(int first_slot, int field) const { return frame_offset(first_slot + TRY_SLOTS - 1 - field); }
+
+    // Makes the try around the ones from this place on the newest again, as when leaving them
+    void close_tries_from(size_t place) {
+        out.load_rax_from_frame(try_field(tries_open[place], 0));
+        out.store_rax_data(DataRef::TryFrame);
+    }
+
+    void write_try(const Stmt& stmt) {
+        const int first = stmt.end_slot;
+        const Label catcher = out.new_label();
+        const Label finished = out.new_label();
+        out.load_rax_data(DataRef::TryFrame);
+        out.store_rax_to_frame(try_field(first, 0));
+        out.mov_rax_rbp();
+        out.store_rax_to_frame(try_field(first, 1));
+        out.mov_rax_rsp();
+        out.store_rax_to_frame(try_field(first, 2));
+        out.lea_rax_label(catcher);
+        out.store_rax_to_frame(try_field(first, 3));
+        for (int reg = 0; reg < VARIABLE_REGISTERS; reg++) out.store_reg_to_frame(reg, try_field(first, 4 + reg));
+        out.lea_rax_frame(try_field(first, 0));
+        out.store_rax_data(DataRef::TryFrame);
+        tries_open.push_back(first);
+        write_block(stmt.body);
+        tries_open.pop_back();
+        if (!always_leaves(stmt.body)) {
+            out.load_rax_from_frame(try_field(first, 0));
+            out.store_rax_data(DataRef::TryFrame);
+            out.jump(finished);
+        }
+        out.place(catcher);
+        for (int reg = 0; reg < VARIABLE_REGISTERS; reg++) out.load_reg_from_frame(reg, try_field(first, 4 + reg));
+        if (stmt.slot >= 0) store_slot_rax(stmt.slot);
+        write_block(stmt.other_body);
+        out.place(finished);
+    }
+
+    static bool has_try(const Block& block) {
+        for (const auto& stmt : block) {
+            if (stmt->kind == StmtKind::Try || has_try(stmt->body) || has_try(stmt->other_body)) return true;
+            for (const ElifPart& part : stmt->elifs) {
+                if (has_try(part.body)) return true;
+            }
+            for (const CasePart& part : stmt->cases) {
+                if (has_try(part.body)) return true;
+            }
+        }
+        return false;
+    }
+
     void write_while(const Stmt& stmt) {
         if (optimizing) {
             // The check sits after the body, so each round takes one jump instead of two
             const Label body = out.new_label();
             const Label check = out.new_label();
             const Label finished = out.new_label();
-            loops.push_back({check, finished});
+            push_loop({check, finished});
             out.jump(check);
             out.place(body);
             write_block(stmt.body);
@@ -1055,7 +1128,7 @@ private:
         }
         const Label start = out.new_label();
         const Label finished = out.new_label();
-        loops.push_back({start, finished});
+        push_loop({start, finished});
         out.place(start);
         write_jump(*stmt.value, false, finished);
         write_block(stmt.body);
@@ -1073,7 +1146,7 @@ private:
         store_slot_rax(stmt.array_slot);
         out.zero_eax();
         store_slot_rax(stmt.end_slot);
-        loops.push_back({next, finished});
+        push_loop({next, finished});
         if (optimizing) {
             // The check sits after the body, so each round takes one jump instead of two
             const Label body = out.new_label();
@@ -1138,7 +1211,7 @@ private:
         store_slot_rax(stmt.slot);
         write_expression(*stmt.range_end);
         store_slot_rax(stmt.end_slot);
-        loops.push_back({next, finished});
+        push_loop({next, finished});
         if (optimizing) {
             // The check sits after the body, and a variable in a register is counted and compared where it is
             const Label body = out.new_label();
@@ -1286,6 +1359,21 @@ private:
                 note_call_site(expr.spot);
                 if (!expr.inputs.empty()) out.add_rsp(static_cast<int>(expr.inputs.size()) * WORD_SIZE);
                 break;
+            case ExprKind::FunctionValue:
+                out.lea_rax_label(function_labels.at(expr.text));
+                break;
+            case ExprKind::CallValue:
+                // The same as a call by name, but to the address the value holds. r11 holds nothing in Jamo code
+                for (const auto& input : expr.inputs) {
+                    write_expression(*input);
+                    out.push_rax();
+                }
+                write_expression(*expr.left);
+                out.mov_r11_rax();
+                out.call_r11();
+                note_call_site(expr.spot);
+                if (!expr.inputs.empty()) out.add_rsp(static_cast<int>(expr.inputs.size()) * WORD_SIZE);
+                break;
         }
     }
 
@@ -1408,10 +1496,17 @@ private:
         out.bytes({0x53, 0x56, 0x57});                    // push rbx, rsi, rdi: Windows expects these kept
         out.bytes({0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57});  // push r12 to r15
         out.bytes({0x48, 0x83, 0xEC, 0x08});              // sub rsp, 8
+        // A try open outside doesn't reach in here: a run error must never jump back across Windows' own code
+        out.load_rax_data(DataRef::TryFrame);
+        out.bytes({0x48, 0x89, 0x45, 0xC0});              // mov [rbp-64], rax
+        out.zero_eax();
+        out.store_rax_data(DataRef::TryFrame);
         static const std::vector<std::vector<uint8_t>> pushes = {{0x51}, {0x52}, {0x41, 0x50}, {0x41, 0x51}};  // rcx, rdx, r8, r9
         for (size_t i = 0; i < function.inputs.size(); i++) out.bytes_from(pushes[i]);
         out.call(function_labels.at(function.name));
         if (!function.inputs.empty()) out.add_rsp(static_cast<int>(function.inputs.size()) * WORD_SIZE);
+        out.bytes({0x48, 0x8B, 0x4D, 0xC0});              // mov rcx, [rbp-64]
+        out.store_rcx_data(DataRef::TryFrame);
         out.bytes({0x48, 0x8D, 0x65, 0xC8});              // lea rsp, [rbp-56]
         out.bytes({0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5F, 0x5E, 0x5B, 0x5D, 0xC3});  // pop them back, ret
     }
@@ -1628,6 +1723,13 @@ private:
     void write_show_function(Type type) {
         if (program.types.is_enum(type)) {
             write_show_enum(type);
+            return;
+        }
+        if (program.types.is_function(type)) {
+            // A function value shows as its type, like func(int): bool
+            out.place(show_labels.at(type));
+            out.lea_rax_string(string_number(program.types.name(type)));
+            out.jump(runtime.builder_add_string);
             return;
         }
         const Label not_shown_yet = out.new_label();
@@ -2104,9 +2206,16 @@ private:
     struct Loop {
         Label next;
         Label finished;
+        size_t tries = 0;  // How many trys were open when it started, so break and continue close the ones inside it
     };
 
     std::vector<Loop> loops;
+    std::vector<int> tries_open;  // The first slot of each try being written, outermost first
+
+    void push_loop(Loop loop) {
+        loop.tries = tries_open.size();
+        loops.push_back(loop);
+    }
     std::map<Type, Label> show_labels;
     std::vector<Type> shows_to_write;
     Runtime runtime;

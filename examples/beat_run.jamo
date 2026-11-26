@@ -1,0 +1,459 @@
+# Beat Run: a one-button rhythm runner. The cube runs by itself; press Space (or click) to jump over spikes and pits,
+# and onto blocks. Every obstacle sits on the music's beat, so jump with the music. Crash and it starts again,
+# showing how far you got. Esc goes back to the start screen.
+#
+# The song is made in code when the game starts: drums, bass and a lead are mixed into one clip with Clip.mix, so
+# the game can follow the music's own clock. A jump lasts a little less than one beat, so jumps can land on every beat.
+
+use "gfx.jamo"
+use "sound.jamo"
+use "math.jamo"
+use "text.jamo"
+
+const WIDTH = 800
+const HEIGHT = 450
+const BPM = 120.0
+const BEAT = 0.5                      # seconds a beat lasts at 120 BPM
+const BEAT_PX = 160.0                 # how far the cube runs in one beat
+const GROUND = 340.0
+const PLAYER_X = 180.0
+const SIZE = 26.0
+const JUMP_TIME = 0.45                # 0.9 of a beat: up and down again before the next beat
+const JUMP_HEIGHT = 74.0
+const BLOCK_H = 44.0
+const SPIKE_W = 26.0
+const SPIKE_H = 26.0
+const INTRO_BEATS = 8
+const AUDIO_LAG = 0.035               # roughly how far behind the mixer the speakers are
+const HALF = 80.0                     # one level character: half a beat of running
+const SPEED = 320.0                   # BEAT_PX / BEAT
+# Obstacles sit this far ahead of their beat, so a jump pressed on the beat is at its highest over a spike
+const LEAD = 32.0
+
+# The level, one character per half beat: . ground, ^ spike, _ pit, = block, F finish.
+# Lined up in bars of 8 (4 beats), with a space between bars to make it easy to read
+const LEVEL = "........ ........ ...^.... ...^.... ...^...^ .......^ ..^...^. ...^.... ..==.... ..==.... ^...^... ..^..^.. ..._.... ...^.... .._...^. ...^...^ ..====.. ..====.. ..^.^... ...^.^.. .^.^.^.. .^...^.. ..==..^. ..==..^. .._..._. ...^...^ ..====== .^.^.^.^ .^...^.. ..._..^. ...^...^ ..^..... ........ F......."
+
+# --- The song ---
+
+const NOTE_A2 = 110.0
+const NOTE_C3 = 130.81
+const NOTE_D3 = 146.83
+const NOTE_E3 = 164.81
+const NOTE_G2 = 98.0
+const NOTE_F2 = 87.31
+
+func bass_note(bar: int): float
+    var notes = [NOTE_A2, NOTE_A2, NOTE_F2, NOTE_G2]
+    return notes[bar % 4]
+end
+
+# Every instrument is made once, then mixed in at each place it plays
+func make_song(beats: int): Clip
+    var song = silence(float(beats) * BEAT + 1.0)
+    var kick = tone(55.0, 0.12, "sine")
+    var kick_click = tone(180.0, 0.02, "triangle")
+    var snare = tone(2000.0, 0.09, "noise")
+    var hat = tone(6000.0, 0.025, "noise")
+    var lead_notes = [440.0, 523.25, 659.25, 587.33, 523.25, 659.25, 783.99, 659.25]
+    var leads: [Clip] = []
+    for note in lead_notes
+        leads.add(tone(note, 0.12, "square"))
+    end
+    var basses: [Clip] = []
+    for note in [NOTE_A2, NOTE_F2, NOTE_G2]
+        basses.add(tone(note, BEAT * 0.45, "saw"))
+    end
+    for beat in 0..beats
+        var t = float(beat) * BEAT
+        var bar = beat / 4
+        song.mix(kick, t, 1.0)
+        song.mix(kick_click, t, 0.25)
+        if beat % 2 == 1
+            song.mix(snare, t, 0.35)
+        end
+        song.mix(hat, t + BEAT / 2.0, 0.18)
+        if beat >= INTRO_BEATS / 2
+            var note = bass_note(bar)
+            var which = 0
+            if note == NOTE_F2
+                which = 1
+            elif note == NOTE_G2
+                which = 2
+            end
+            song.mix(basses[which], t, 0.35)
+            song.mix(basses[which], t + BEAT / 2.0, 0.25)
+        end
+        if beat >= INTRO_BEATS
+            song.mix(leads[(beat * 2) % 8], t, 0.09)
+            song.mix(leads[(beat * 2 + 3) % 8], t + BEAT / 2.0, 0.07)
+        end
+    end
+    return song
+end
+
+# --- The run ---
+
+struct Run
+    time: float               # seconds into the song
+    y: float                  # how high the cube's bottom is above the ground (0 on the ground)
+    vy: float
+    on_floor: bool
+    floor: float
+    spin: float
+    dead: bool
+    won: bool
+    attempt: int
+    best: float
+    shake: float
+    flash: float
+    sparks: [Spark]
+end
+
+struct Spark
+    x: float
+    y: float
+    vx: float
+    vy: float
+    life: float
+    color: Color
+end
+
+func gravity(): float
+    return 8.0 * JUMP_HEIGHT / (JUMP_TIME * JUMP_TIME)
+end
+
+func jump_speed(): float
+    return 4.0 * JUMP_HEIGHT / JUMP_TIME
+end
+
+# The level without its spaces, one character per half beat
+func level_tiles(): string
+    return replace(LEVEL, " ", "")
+end
+
+# Which level character is at a place along the run, in pixels
+func half_at(x: float): int
+    return floor((x - LEAD) / HALF)
+end
+
+func tile(tiles: string, half: int): int
+    if half < 0 or half >= len(tiles)
+        return 46
+    end
+    return byte(tiles, half)
+end
+
+func burst(run: Run, x: float, y: float, count: int, color: Color, speed: float)
+    for i in 0..count
+        var angle = random_float() * pi() * 2.0
+        var power = speed * (0.3 + random_float() * 0.7)
+        run.sparks.add(Spark{x: x, y: y, vx: cos(angle) * power, vy: sin(angle) * power - speed * 0.4, life: 0.5 + random_float() * 0.4, color: color})
+    end
+end
+
+func new_run(attempt: int, best: float): Run
+    return Run{time: 0.0, y: 0.0, vy: 0.0, on_floor: true, floor: 0.0, spin: 0.0, dead: false, won: false, attempt: attempt, best: best, shake: 0.0, flash: 0.0, sparks: []}
+end
+
+# How far through the level, from 0 to 100
+func progress(run: Run, tiles: string): float
+    var total = float(len(tiles) - 8) * HALF
+    return clamp(run.time * SPEED / total * 100.0, 0.0, 100.0)
+end
+
+# Moves the run on by dt seconds. Gives back true on the frame it crashes
+func advance(run: Run, tiles: string, dt: float, jump: bool): bool
+    run.time += dt
+    run.shake = max(0.0, run.shake - dt * 3.0)
+    run.flash = max(0.0, run.flash - dt * 2.0)
+    var middle = run.time * SPEED
+    var front = middle + SIZE / 2.0 - 4.0
+    var back = middle - SIZE / 2.0 + 4.0
+
+    # What's under the cube: a block raises the floor, a pit drops it away
+    var under = tile(tiles, half_at(middle))
+    var floor_height = 0.0
+    if under == 61
+        floor_height = BLOCK_H
+    end
+    var over_pit = tile(tiles, half_at(back)) == 95 and tile(tiles, half_at(front)) == 95
+
+    if jump and run.on_floor
+        run.vy = jump_speed()
+        run.on_floor = false
+        burst(run, PLAYER_X + SIZE / 2.0, GROUND - run.y, 6, rgb(200, 220, 255), 120.0)
+    end
+    run.vy -= gravity() * dt
+    run.y += run.vy * dt
+    if not run.on_floor
+        run.spin += dt * 360.0 / JUMP_TIME / 2.0
+    end
+    if over_pit
+        if run.y < -SIZE
+            return crash(run)
+        end
+        run.on_floor = false
+    elif run.y <= floor_height
+        # Running into the side of a block is a crash; landing on it is fine
+        if floor_height - run.y > 10.0 and run.vy <= 0.0
+            return crash(run)
+        end
+        if not run.on_floor
+            burst(run, PLAYER_X + SIZE / 2.0, GROUND - floor_height, 4, rgb(160, 180, 220), 80.0)
+        end
+        run.y = floor_height
+        run.vy = 0.0
+        run.on_floor = true
+        run.spin = float(round(run.spin / 90.0) * 90)
+    else
+        run.on_floor = false
+    end
+    # A block ahead whose side the cube runs into
+    if tile(tiles, half_at(front)) == 61 and run.y < BLOCK_H - 6.0
+        return crash(run)
+    end
+    # Spikes: a smaller box than the drawing, so near misses count as misses
+    for k in 0..2
+        var spot = half_at(back) + k
+        if tile(tiles, spot) == 94
+            var spike_left = float(spot) * HALF + LEAD + (HALF - SPIKE_W) / 2.0 + 6.0
+            var spike_right = spike_left + SPIKE_W - 12.0
+            if front > spike_left and back < spike_right and run.y < SPIKE_H - 8.0
+                return crash(run)
+            end
+        end
+    end
+    if tile(tiles, half_at(middle)) == 70
+        run.won = true
+        run.best = 100.0
+    end
+    return false
+end
+
+func crash(run: Run): bool
+    run.dead = true
+    run.shake = 1.0
+    run.flash = 1.0
+    burst(run, PLAYER_X + SIZE / 2.0, GROUND - run.y - SIZE / 2.0, 24, rgb(255, 90, 120), 300.0)
+    return true
+end
+
+func move_sparks(run: Run, dt: float)
+    var kept: [Spark] = []
+    for s in run.sparks
+        s.life -= dt
+        s.vy += 700.0 * dt
+        s.x += s.vx * dt
+        s.y += s.vy * dt
+        if s.life > 0.0
+            kept.add(s)
+        end
+    end
+    run.sparks = kept
+end
+
+# --- Drawing ---
+
+func draw(screen: Gfx, run: Run, tiles: string, title: bool)
+    var beat_part = (run.time / BEAT) % 1.0
+    if run.time < 0.0
+        beat_part = 0.0
+    end
+    var pulse = max(0.0, 1.0 - beat_part * 4.0)
+    var shake_x = 0.0
+    var shake_y = 0.0
+    if run.shake > 0.0
+        shake_x = (random_float() - 0.5) * 14.0 * run.shake
+        shake_y = (random_float() - 0.5) * 14.0 * run.shake
+    end
+    var hue = floor(run.time / (BEAT * 16.0)) % 3
+    var sky = rgb(24, 18, 48)
+    var glow = rgb(255, 80, 170)
+    if hue == 1
+        sky = rgb(12, 26, 52)
+        glow = rgb(60, 200, 255)
+    elif hue == 2
+        sky = rgb(30, 14, 30)
+        glow = rgb(255, 170, 60)
+    end
+    screen.clear(sky)
+
+    # The beat: a sun whose glow swells with the kick drum, and a city that scrolls slower than the ground
+    screen.circle(620.0 + shake_x, 140.0 + shake_y, 90.0 + pulse * 26.0, faded(glow, 12 + floor(pulse * 22.0)))
+    screen.circle(620.0 + shake_x, 140.0 + shake_y, 58.0, faded(glow, 140))
+    for k in 0..5
+        var down = 12.0 + float(k) * 9.0
+        var half_width = sqrt(58.0 * 58.0 - down * down) + 1.0
+        screen.rect(620.0 - half_width + shake_x, 140.0 + down + shake_y, half_width * 2.0, 3.0 + float(k), sky)
+    end
+    var scroll = run.time * SPEED
+    var city = scroll * 0.3
+    var first_house = floor(city / 48.0)
+    for k in first_house..first_house + floor(float(WIDTH) / 48.0) + 2
+        var tall = 50.0 + float((k * 7919) % 9) * 14.0
+        var left = float(k) * 48.0 - city + shake_x
+        screen.rect(left, GROUND - tall + shake_y, 44.0, tall, rgb(34, 26, 64))
+        if (k * 31) % 3 == 0
+            screen.rect(left + 10.0, GROUND - tall + 12.0 + shake_y, 6.0, 6.0, faded(glow, 90))
+        end
+    end
+
+    # The ground, with a line on every beat so the rhythm can be read ahead
+    var origin = scroll - PLAYER_X - SIZE / 2.0
+    var first = half_at(origin) - 1
+    for half in first..first + floor(float(WIDTH) / HALF) + 3
+        var left = float(half) * HALF + LEAD - origin + shake_x
+        var here = tile(tiles, half)
+        if here != 95
+            screen.rect(left, GROUND + shake_y, HALF + 1.0, float(HEIGHT) - GROUND, rgb(16, 12, 30))
+            screen.rect(left, GROUND + shake_y, HALF + 1.0, 4.0, glow)
+        end
+        if half % 2 == 0
+            screen.rect(left, GROUND + 4.0 + shake_y, 2.0, 18.0, rgba(255, 255, 255, 40))
+        end
+        if here == 94
+            var sx = left + (HALF - SPIKE_W) / 2.0
+            for k in 0..5
+                var w = SPIKE_W - float(k) * 5.0
+                screen.rect(sx + (SPIKE_W - w) / 2.0, GROUND - float(k + 1) * 5.2 + shake_y, w, 5.2, rgb(250, 250, 255))
+            end
+        elif here == 61
+            screen.rect(left, GROUND - BLOCK_H + shake_y, HALF + 1.0, BLOCK_H, rgb(40, 32, 80))
+            screen.rect(left, GROUND - BLOCK_H + shake_y, HALF + 1.0, 4.0, glow)
+        elif here == 70
+            for k in 0..8
+                var c = rgb(250, 250, 255)
+                if k % 2 == 1
+                    c = rgb(20, 20, 30)
+                end
+                screen.rect(left, GROUND - 120.0 + float(k) * 15.0 + shake_y, 8.0, 15.0, c)
+            end
+        end
+    end
+
+    # The cube, turning while it's in the air
+    if not run.dead
+        var cx = PLAYER_X + SIZE / 2.0 + shake_x
+        var cy = GROUND - run.y - SIZE / 2.0 + shake_y
+        var angle = run.spin * pi() / 180.0
+        var r = SIZE * 0.7071
+        var corners: [float] = []
+        for k in 0..4
+            var a = angle + pi() / 4.0 + float(k) * pi() / 2.0
+            corners.add(cx + cos(a) * r)
+            corners.add(cy + sin(a) * r)
+        end
+        screen.quad(corners[0], corners[1], corners[2], corners[3], corners[4], corners[5], corners[6], corners[7], 84.0 / 640.0, 304.0 / 384.0, 84.0 / 640.0, 304.0 / 384.0, rgb(255, 220, 90))
+        screen.circle(cx, cy, 6.0 + pulse * 2.0, rgb(255, 250, 220))
+    end
+    for s in run.sparks
+        var size = 2.0 + s.life * 7.0
+        screen.rect(s.x - size / 2.0 + shake_x, s.y - size / 2.0 + shake_y, size, size, s.color)
+    end
+
+    # Progress along the top, with the best try marked
+    var done = progress(run, tiles)
+    screen.rect(140.0, 24.0, 540.0, 8.0, rgba(255, 255, 255, 40))
+    screen.rect(140.0, 24.0, 5.4 * done, 8.0, glow)
+    if run.best > 0.0
+        screen.rect(140.0 + 5.4 * run.best - 1.0, 18.0, 3.0, 20.0, rgb(255, 255, 255))
+    end
+    screen.text(f"{floor(done)}%", 712.0, 14.0, 20.0, rgb(240, 240, 250))
+    screen.text(f"Attempt {run.attempt}", 16.0, 14.0, 20.0, rgb(200, 200, 220))
+
+    if run.flash > 0.0
+        screen.rect(0.0, 0.0, float(WIDTH), float(HEIGHT), rgba(255, 255, 255, floor(run.flash * 90.0)))
+    end
+    if title
+        screen.rect(0.0, 0.0, float(WIDTH), float(HEIGHT), rgba(10, 8, 20, 170))
+        screen.text("BEAT RUN", 285.0, 130.0, 56.0, glow)
+        screen.text("Press Space or click to jump, on the beat", 210.0, 210.0, 22.0, rgb(240, 240, 250))
+        screen.text("Press Space to start", 305.0, 260.0, 22.0, rgb(200, 200, 220))
+    elif run.won
+        screen.rect(200.0, 150.0, 400.0, 130.0, rgba(10, 8, 20, 220))
+        screen.text("Level complete!", 290.0, 168.0, 34.0, glow)
+        screen.text(f"in {run.attempt} attempts", 330.0, 214.0, 22.0, rgb(240, 240, 250))
+        screen.text("Space to play again", 315.0, 246.0, 20.0, rgb(200, 200, 220))
+    elif run.dead
+        screen.text(f"{floor(done)}%", 360.0, 170.0, 44.0, rgb(255, 255, 255))
+        if done >= run.best and done > 0.0
+            screen.text("New best!", 345.0, 222.0, 26.0, glow)
+        end
+    end
+    screen.show()
+end
+
+# A color with a new alpha, from 0 to 255
+func faded(color: Color, alpha: int): Color
+    return Color{red: color.red, green: color.green, blue: color.blue, alpha: float(alpha) / 255.0}
+end
+
+func main()
+    var window = open_window("Beat Run", WIDTH, HEIGHT)
+    var screen = start_gfx(window)
+    var speakers = start_sound()
+    var tiles = level_tiles()
+    var beats = len(tiles) / 2 + 4
+    var song = make_song(beats)
+    var crash_sound = tone(90.0, 0.35, "saw")
+    var win_sound = tone(880.0, 0.6, "triangle")
+    var music = speakers.play(silence(0.01))
+    music.stop()
+    var run = new_run(1, 0.0)
+    var title = true
+    var restart_in = 0.0
+    random_seed(3)
+    while window.is_open()
+        var dt = min(window.frame_time(), 0.05)
+        var pressed = window.key_pressed("space") or window.key_pressed("up") or window.mouse_pressed("left")
+        if window.key_pressed("escape")
+            title = true
+            music.stop()
+            run = new_run(1, run.best)
+        end
+        if title
+            if pressed
+                title = false
+                music = speakers.play(song)
+                run = new_run(run.attempt, run.best)
+            end
+        elif run.won
+            move_sparks(run, dt)
+            if pressed
+                music = speakers.play(song)
+                run = new_run(1, run.best)
+            end
+        elif run.dead
+            move_sparks(run, dt)
+            run.shake = max(0.0, run.shake - dt * 3.0)
+            run.flash = max(0.0, run.flash - dt * 2.0)
+            restart_in -= dt
+            if restart_in <= 0.0
+                music = speakers.play(song)
+                run = new_run(run.attempt + 1, run.best)
+            end
+        else
+            # Follow the music's own clock when there are speakers, and the frame clock when there aren't
+            var target = run.time + dt
+            if speakers.has_device() and music.is_playing()
+                var heard = float(music.place) / 44100.0 - AUDIO_LAG
+                target = run.time + dt + (heard - (run.time + dt)) * 0.1
+            end
+            var step = max(0.0, target - run.time)
+            if advance(run, tiles, step, pressed)
+                music.stop()
+                speakers.play(crash_sound).set_volume(0.3)
+                run.best = max(run.best, progress(run, tiles))
+                restart_in = 0.9
+            elif run.won
+                speakers.play(win_sound).set_volume(0.3)
+            end
+            move_sparks(run, dt)
+        end
+        speakers.update()
+        draw(screen, run, tiles, title)
+        window.wait_frame(60)
+    end
+    speakers.close()
+end

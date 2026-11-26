@@ -40,6 +40,7 @@ const char* const USAGE =
     "  jamo check file.jamo   Finds mistakes without writing an .exe\n"
     "  jamo new name          Makes a folder called name, with a program to start from\n"
     "  jamo new --game name   Makes it with a small window game to start from instead\n"
+    "  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n"
     "  jamo version           Shows which Jamo this is\n"
     "  jamo help              Shows this\n";
 // The game jamo new --game starts from: a player that moves, a coin to catch, and a score
@@ -586,6 +587,10 @@ int wmain(int count, wchar_t** words) {
         if (count == 3 && command == L"ast") return print_tree(fs::path(words[2]));
         if (count == 3 && command == L"checked") return print_checked(fs::path(words[2]));
         if (count == 4 && command == L"code") return print_code(fs::path(words[3]), _wtoi(words[2]));
+        if (count == 3 && command == L"get") {
+            std::fputs("The C++ backup can't download packages. Use jamo.exe, the compiler written in Jamo, for jamo get.\n", stderr);
+            return FAILED;
+        }
         if (count == 3 && command == L"check") {
             Program program;
             return load_and_check(fs::path(words[2]), program) ? 0 : FAILED;

@@ -1,0 +1,9 @@
+func a(): int
+    return 1
+end
+
+func main()
+    var f = a
+    var g = a
+    print(f == g)
+end

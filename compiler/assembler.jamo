@@ -40,6 +40,7 @@ const DATA_CALL_TABLE = 22
 const DATA_STRING = 23
 const DATA_IMPORT = 24
 const DATA_GLOBALS = 25
+const DATA_TRY_FRAME = 26
 
 # Which entry in the program's string table holds each fixed text the runtime uses
 struct RuntimeText
@@ -57,6 +58,8 @@ struct RuntimeText
     pop_empty: int
     outside_array: int
     items_word: int
+    item_word: int
+    byte_word: int
     quote: int
     new_line: int
     cant_turn: int
@@ -363,6 +366,32 @@ func Assembler.load_reg_from_frame(reg: int, offset: int)
     self.hex("4c8b")
     self.byte(165 + reg * 8)
     self.int32(offset)
+end
+
+# mov [rbp+offset], r12+reg
+func Assembler.store_reg_to_frame(reg: int, offset: int)
+    self.hex("4c89")
+    self.byte(165 + reg * 8)
+    self.int32(offset)
+end
+
+func Assembler.mov_rax_rbp()
+    self.hex("4889e8")
+end
+
+func Assembler.mov_rax_rsp()
+    self.hex("4889e0")
+end
+
+# lea rax, [rbp+offset]
+func Assembler.lea_rax_frame(offset: int)
+    self.hex("488d85")
+    self.int32(offset)
+end
+
+func Assembler.store_rcx_data(target: int)
+    self.hex("48890d")
+    self.data_gap(target, 0)
 end
 
 func Assembler.mov_rcx_rax()

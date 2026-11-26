@@ -1,0 +1,18 @@
+# Index errors say "1 item" and "1 byte", and "2 items" for more
+func main()
+    try
+        print([5][1])
+    catch p
+        print(p)
+    end
+    try
+        print("a"[3])
+    catch p
+        print(p)
+    end
+    try
+        print([5, 6][2])
+    catch p
+        print(p)
+    end
+end

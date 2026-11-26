@@ -94,7 +94,7 @@ int main() {
     bad(in_main("var x = 1\nvar x = 2"), "already a variable");
 
     // Mixed names
-    bad("func f()\nend\nfunc main()\nprint(f)\nend", "is a function");
+    bad("func f<T>(x: T): T\nreturn x\nend\nfunc main()\nprint(f)\nend", "is generic, so it can't be used as a value");
     bad(in_main("var x = 1\nx()"), "is a variable");
 
     // Missing return

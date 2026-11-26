@@ -1,0 +1,4 @@
+try_needs_catch.jamo line 4: This try needs a catch, saying what to do when something goes wrong.
+        end
+        ^^^
+Like this: catch problem

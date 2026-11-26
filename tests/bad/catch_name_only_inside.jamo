@@ -1,0 +1,8 @@
+func main()
+    try
+        print(1)
+    catch
+        print(2)
+    end
+    print(problem)
+end

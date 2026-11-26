@@ -53,6 +53,7 @@ bool statement_always_returns(const Stmt* stmt) {
             for (const ElifPart& part : stmt->elifs) every_elif_returns = every_elif_returns && always_returns(part.body);
             if (every_elif_returns) return true;
         }
+        if (stmt->kind == StmtKind::Try && always_returns(stmt->body) && always_returns(stmt->other_body)) return true;
         if (stmt->kind == StmtKind::Match && stmt->covers_all) {
             bool every_case_returns = !stmt->has_else || always_returns(stmt->other_body);
             for (const CasePart& part : stmt->cases) every_case_returns = every_case_returns && always_returns(part.body);
@@ -491,6 +492,12 @@ private:
             for (Type& arg : args) arg = substitute(arg, from, to);
             return program.types.generic(base, args);
         }
+        if (program.types.is_function(type)) {
+            std::vector<Type> inputs = program.types.inputs_of(type);
+            for (Type& input : inputs) input = substitute(input, from, to);
+            const Type answer = substitute(program.types.answer_of(type), from, to);
+            return program.types.function_of(inputs, answer);
+        }
         return type;
     }
 
@@ -512,6 +519,13 @@ private:
             const std::vector<Type> given_args = program.types.args_of(given);
             if (pattern_args.size() != given_args.size()) return;
             for (size_t i = 0; i < pattern_args.size(); i++) work_out_types(pattern_args[i], given_args[i], params, found);
+        }
+        if (program.types.is_function(pattern) && program.types.is_function(given)) {
+            const std::vector<Type> pattern_inputs = program.types.inputs_of(pattern);
+            const std::vector<Type> given_inputs = program.types.inputs_of(given);
+            if (pattern_inputs.size() != given_inputs.size()) return;
+            for (size_t i = 0; i < pattern_inputs.size(); i++) work_out_types(pattern_inputs[i], given_inputs[i], params, found);
+            work_out_types(program.types.answer_of(pattern), program.types.answer_of(given), params, found);
         }
     }
 
@@ -733,6 +747,12 @@ private:
     void check_type_exists(Type type, Spot spot) {
         Type named = type;
         while (program.types.is_array(named)) named = program.types.element_of(named);
+        if (program.types.is_function(named)) {
+            const std::vector<Type> inputs = program.types.inputs_of(named);
+            for (Type input : inputs) check_type_exists(input, spot);
+            if (program.types.answer_of(named) != Type::Nothing) check_type_exists(program.types.answer_of(named), spot);
+            return;
+        }
         if (program.types.is_generic(named)) {
             make_generic_struct(named, spot);
             return;
@@ -906,6 +926,7 @@ private:
                 break;
             case StmtKind::For: check_for(stmt); break;
             case StmtKind::Match: check_match(stmt); break;
+            case StmtKind::Try: check_try(stmt); break;
             case StmtKind::Break:
                 if (loops_open == 0) errors.add(stmt.spot, "break can only go inside a loop.");
                 break;
@@ -948,6 +969,26 @@ private:
         }
         stmt.slot = next_slot++;
         scopes.back()[stmt.name] = {type, stmt.slot, false, false, true, stmt.name_spot};
+    }
+
+    // The try part, then the catch part with its variable holding the error's words. A try keeps 8 slots for
+    // jumping to its catch: the try before it, rbp, rsp, where the catch is, and r12 to r15
+    void check_try(Stmt& stmt) {
+        stmt.end_slot = next_slot;
+        next_slot += TRY_SLOTS;
+        check_block(stmt.body);
+        scopes.emplace_back();
+        if (!stmt.name.empty()) {
+            stmt.slot = next_slot++;
+            if (constants.count(stmt.name)) {
+                errors.add(stmt.name_spot, stmt.name + " is already a constant, so a catch can't use that name.", "Pick a different name.");
+            } else {
+                scopes.back()[stmt.name] = {Type::String, stmt.slot, false, false, true, stmt.name_spot};
+            }
+        }
+        check_statements(stmt.other_body);
+        warn_about_unused_variables();
+        scopes.pop_back();
     }
 
     void check_match(Stmt& stmt) {
@@ -1184,6 +1225,8 @@ private:
                 return check_struct_literal(expr);
             case ExprKind::EnumValue:
             case ExprKind::BuiltinCall:
+            case ExprKind::FunctionValue:
+            case ExprKind::CallValue:
                 return expr.type;
             case ExprKind::Index:
                 return check_index(expr);
@@ -1235,8 +1278,21 @@ private:
             errors.add(expr.spot, expr.name + " is an enum, so it needs one of its members.", "Like this: " + expr.name + "." + (enums[expr.name]->members.empty() ? "VALUE" : enums[expr.name]->members.front()));
             return Type::Unknown;
         }
-        if (functions.count(expr.name) || generic_functions.count(expr.name)) {
-            errors.add(expr.spot, expr.name + " is a function, so it needs ( ) to be called.", "Like this: " + expr.name + "()");
+        const auto function = functions.find(expr.name);
+        if (function != functions.end()) {
+            if (!function->second->dll.empty()) {
+                errors.add(expr.spot, expr.name + " is a Windows function, so it can't be used as a value.", "Write a Jamo function that calls it, and use that.");
+                return Type::Unknown;
+            }
+            note_call(function->second->name);
+            std::vector<Type> inputs;
+            for (const Input& input : function->second->inputs) inputs.push_back(input.type);
+            expr.kind = ExprKind::FunctionValue;
+            expr.text = expr.name;
+            return program.types.function_of(inputs, function->second->return_type);
+        }
+        if (generic_functions.count(expr.name)) {
+            errors.add(expr.spot, expr.name + " is generic, so it can't be used as a value.", "Write a function for the types you need that calls it, and use that.");
             return Type::Unknown;
         }
         report_unknown_name(expr.name, expr.spot);
@@ -1319,6 +1375,22 @@ private:
                     return Type::Unknown;
                 }
                 found = functions.find(prefix + expr.name);
+            }
+        }
+        if (found == functions.end() && program.types.is_struct(type)) {
+            const std::vector<StructField>& fields = program.types.fields_of(type);
+            for (size_t i = 0; i < fields.size(); i++) {
+                if (fields[i].name != expr.name || !program.types.is_function(fields[i].type)) continue;
+                auto field = std::make_unique<Expr>();
+                field->kind = ExprKind::Field;
+                field->spot = expr.spot;
+                field->name = expr.name;
+                field->left = std::move(expr.left);
+                field->slot = static_cast<int>(i);
+                field->type = fields[i].type;
+                field->depth = field->left->depth + 1;
+                expr.left = std::move(field);
+                return check_value_call(expr, fields[i].type);
             }
         }
         if (found == functions.end()) {
@@ -1524,6 +1596,7 @@ private:
         if (is_equality) {
             if (left == right && program.types.is_array(left)) errors.add(expr.spot, "Arrays can't be compared with == or !=.", "Compare their items in a loop.");
             if (left == right && program.types.is_struct(left)) errors.add(expr.spot, "Structs can't be compared with == or !=.", "Compare their fields.");
+            if (left == right && program.types.is_function(left)) errors.add(expr.spot, "Function values can't be compared with == or !=.");
             if (left != right) errors.add(expr.spot, "== and != need both sides to be the same type, but this compares " + type_name(left) + " and " + type_name(right) + ".", is_number(left) && is_number(right) ? MATCH_NUMBERS : "");
             return Type::Bool;
         }
@@ -1547,6 +1620,16 @@ private:
     }
 
     Type check_call(Expr& expr) {
+        if (const Variable* variable = find_variable(expr.name); variable && program.types.is_function(variable->type) && expr.type_args.empty()) {
+            auto callee = std::make_unique<Expr>();
+            callee->kind = ExprKind::Name;
+            callee->spot = expr.spot;
+            callee->name = expr.name;
+            callee->depth = 1;
+            check_expression(*callee);
+            expr.left = std::move(callee);
+            return check_value_call(expr, variable->type);
+        }
         if (expr.name == "callback" && !find_variable(expr.name)) return check_callback(expr);
         const auto generic = generic_functions.find(expr.name);
         if (generic != generic_functions.end() && !find_variable(expr.name)) return check_generic_call(expr, *generic->second);
@@ -1590,6 +1673,27 @@ private:
             }
         }
         return function.return_type;
+    }
+
+    // A call through a function value in expr.left, which is already checked
+    Type check_value_call(Expr& expr, Type function) {
+        expr.kind = ExprKind::CallValue;
+        const std::vector<Type> inputs = program.types.inputs_of(function);
+        std::vector<Type> given;
+        for (size_t i = 0; i < expr.inputs.size(); i++) given.push_back(check_wanting(*expr.inputs[i], i < inputs.size() ? inputs[i] : Type::Nothing));
+        const std::string what = expr.left->kind == ExprKind::Field ? "The field " + expr.name : expr.name;
+        if (given.size() != inputs.size()) {
+            errors.add(expr.spot, what + " takes " + count_words(inputs.size()) + ", but this gives it " + std::to_string(given.size()) + ".");
+            return program.types.answer_of(function);
+        }
+        for (size_t i = 0; i < given.size(); i++) {
+            if (given[i] == Type::Nothing) {
+                errors.add(expr.inputs[i]->spot, "This doesn't give back a value, so it can't be an input.");
+            } else if (given[i] != Type::Unknown && given[i] != inputs[i]) {
+                errors.add(expr.inputs[i]->spot, "Input " + std::to_string(i + 1) + " of " + expr.name + " must be " + with_article(inputs[i]) + ", but this is " + with_article(given[i]) + ".");
+            }
+        }
+        return program.types.answer_of(function);
     }
 
     static bool is_builtin(const std::string& name) {

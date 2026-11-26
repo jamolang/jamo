@@ -58,7 +58,7 @@
         },
         "keyword": {
             "patterns": [
-                { "name": "keyword.control.jamo", "match": "\\b(if|elif|else|while|for|in|match|case|break|continue|return|end|use)\\b" },
+                { "name": "keyword.control.jamo", "match": "\\b(if|elif|else|while|for|in|match|case|break|continue|return|end|use|try|catch)\\b" },
                 { "name": "keyword.declaration.jamo", "match": "\\b(var|const|func|struct|enum|extern)\\b" },
                 { "name": "keyword.operator.word.jamo", "match": "\\b(and|or|not)\\b" },
                 { "name": "constant.language.jamo", "match": "\\b(true|false)\\b" },

@@ -1,0 +1,4 @@
+catch_name_is_constant.jamo line 6: LIMIT is already a constant, so a catch can't use that name.
+        catch LIMIT
+              ^^^^^
+Pick a different name.

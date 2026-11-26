@@ -1,0 +1,6 @@
+try_is_a_keyword.jamo line 2: This needs a variable name.
+        var try = 3
+            ^^^
+try_is_a_keyword.jamo line 3: This needs a value here, like a number, a name or a function call.
+        print(try)
+              ^^^

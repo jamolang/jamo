@@ -22,6 +22,8 @@ enum class TokenKind {
     PlusAssign, MinusAssign, StarAssign, SlashAssign,
     Plus, Minus, Star, Slash, Percent,
     Equal, NotEqual, Less, Greater, LessEqual, GreaterEqual,
+    // Keywords added after the rest, so the numbers above stay the same
+    Try, Catch,
 };
 
 struct Token {

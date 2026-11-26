@@ -154,32 +154,139 @@ func replace(text: string, old: string, new: string): string
     return memory_text(place, total)
 end
 
-# Text with a to z made into A to Z. Other letters stay as they are
+# Text with small letters made into capitals: a to z, and the accented, Greek and Cyrillic letters (like é, ß stays,
+# ω and ж). Anything else stays as it is
 func upper(text: string): string
+    return text_change_case(text, true)
+end
+
+# Text with capitals made into small letters, the same letters as upper
+func lower(text: string): string
+    return text_change_case(text, false)
+end
+
+# Letters from U+0080 to U+07FF take two bytes in UTF-8, and every letter upper and lower change is one of them,
+# so the text keeps its length
+func text_change_case(text: string, to_upper: bool): string
     var count = len(text)
     var place = memory(count + 1)
-    for i in 0..count
+    var i = 0
+    while i < count
         var code = byte(text, i)
-        if code >= 97 and code <= 122
-            code -= 32
+        if code < 128
+            if to_upper and code >= 97 and code <= 122
+                code -= 32
+            elif not to_upper and code >= 65 and code <= 90
+                code += 32
+            end
+            poke_u8(place, i, code)
+            i += 1
+        elif code >= 192 and code < 224 and i + 1 < count and byte(text, i + 1) >= 128 and byte(text, i + 1) < 192
+            var letter = (code - 192) * 64 + byte(text, i + 1) - 128
+            if to_upper
+                letter = text_upper_letter(letter)
+            else
+                letter = text_lower_letter(letter)
+            end
+            poke_u8(place, i, 192 + letter / 64)
+            poke_u8(place, i + 1, 128 + letter % 64)
+            i += 2
+        else
+            poke_u8(place, i, code)
+            i += 1
         end
-        poke_u8(place, i, code)
     end
     return memory_text(place, count)
 end
 
-# Text with A to Z made into a to z. Other letters stay as they are
-func lower(text: string): string
-    var count = len(text)
-    var place = memory(count + 1)
-    for i in 0..count
-        var code = byte(text, i)
-        if code >= 65 and code <= 90
-            code += 32
-        end
-        poke_u8(place, i, code)
+# The capital of a two-byte letter, by its Unicode number, or the same number when it has none that's two bytes
+func text_upper_letter(letter: int): int
+    if letter >= 224 and letter <= 254 and letter != 247
+        return letter - 32                                   # à to þ
+    elif letter >= 256 and letter <= 311 and letter != 305 and letter % 2 == 1
+        return letter - 1                                    # ā to ķ
+    elif letter >= 313 and letter <= 328 and letter % 2 == 0
+        return letter - 1                                    # ĺ to ň
+    elif letter >= 330 and letter <= 375 and letter % 2 == 1
+        return letter - 1                                    # ŋ to ŷ
+    elif letter >= 378 and letter <= 382 and letter % 2 == 0
+        return letter - 1                                    # ź to ž
+    elif letter == 962
+        return 931                                           # ς, the sigma at the end of a word
+    elif letter >= 945 and letter <= 969
+        return letter - 32                                   # α to ω
+    elif letter >= 1072 and letter <= 1103
+        return letter - 32                                   # а to я
+    elif letter >= 1104 and letter <= 1119
+        return letter - 80                                   # ѐ to џ
     end
-    return memory_text(place, count)
+    return letter
+end
+
+# The small letter of a two-byte capital, by its Unicode number
+func text_lower_letter(letter: int): int
+    if letter >= 192 and letter <= 222 and letter != 215
+        return letter + 32                                   # À to Þ
+    elif letter >= 256 and letter <= 311 and letter != 304 and letter % 2 == 0
+        return letter + 1                                    # Ā to Ķ
+    elif letter >= 313 and letter <= 328 and letter % 2 == 1
+        return letter + 1                                    # Ĺ to Ň
+    elif letter >= 330 and letter <= 375 and letter % 2 == 0
+        return letter + 1                                    # Ŋ to Ŷ
+    elif letter >= 377 and letter <= 381 and letter % 2 == 1
+        return letter + 1                                    # Ź to Ž
+    elif letter >= 913 and letter <= 937 and letter != 930
+        return letter + 32                                   # Α to Ω
+    elif letter >= 1040 and letter <= 1071
+        return letter + 32                                   # А to Я
+    elif letter >= 1024 and letter <= 1039
+        return letter + 80                                   # Ѐ to Џ
+    end
+    return letter
+end
+
+# --- Letters, not bytes ---
+# len and text[i] count bytes. In UTF-8 a letter outside English takes 2 to 4 bytes, so these count whole letters
+
+# How many letters the text has. "héllo" has 6 bytes but 5 letters
+func letter_count(text: string): int
+    var total = 0
+    for i in 0..len(text)
+        var code = byte(text, i)
+        if code < 128 or code >= 192
+            total += 1
+        end
+    end
+    return total
+end
+
+# The text split into its letters, each as its own text
+func letters(text: string): [string]
+    var out: [string] = []
+    var count = len(text)
+    if count == 0
+        return out
+    end
+    var start = 0
+    for i in 1..count + 1
+        if i == count or byte(text, i) < 128 or byte(text, i) >= 192
+            out.add(slice(text, start, i))
+            start = i
+        end
+    end
+    return out
+end
+
+# The letters in the other order, keeping each letter's bytes together
+func reverse_letters(text: string): string
+    var parts = letters(text)
+    var out: [string] = []
+    var i = len(parts) - 1
+    while i >= 0
+        out.add(parts[i])
+        i -= 1
+    end
+    return join(out, "")
 end
 
 # --- Joining ---

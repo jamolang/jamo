@@ -1,0 +1,38 @@
+# After trys are left by return, break and the end of their block, an error outside every try still stops the
+# program. A try left open by mistake would send it to that old catch instead, printing "stale"
+func early(): int
+    try
+        return 5
+    catch
+        print("stale")
+    end
+    return 0
+end
+
+func main()
+    print(early())
+    for i in 0..3
+        try
+            if i == 1
+                break
+            end
+        catch
+            print("stale")
+        end
+    end
+    for i in 0..2
+        try
+            continue
+        catch
+            print("stale")
+        end
+    end
+    try
+        print("inside")
+    catch
+        print("stale")
+    end
+    var items = [1]
+    print(items[2])
+    print("never")
+end

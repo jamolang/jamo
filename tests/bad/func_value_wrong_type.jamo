@@ -1,0 +1,8 @@
+func double(n: int): int
+    return n * 2
+end
+
+func main()
+    var f: func(int): string = double
+    print(f(1))
+end

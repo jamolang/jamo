@@ -1,0 +1,3 @@
+func_type_unclosed.jamo line 2: This function type needs a closing ).
+        var f: func(int = 3
+                        ^
