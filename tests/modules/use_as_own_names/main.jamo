@@ -1,0 +1,19 @@
+use "enemies.jamo" as foes
+use "items.jamo" as loot
+
+func spawn(): int
+    return 100
+end
+
+func main()
+    print(foes.spawn())
+    print(foes.spawn())
+    print(loot.spawn())
+    print(foes.MAX + loot.MAX)
+    foes.count = 10
+    foes.count += 1
+    print(foes.count)
+    print(spawn())
+    var e = Enemy{hp: 7}
+    print(e.hurt())
+end

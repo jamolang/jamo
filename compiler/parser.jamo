@@ -301,15 +301,26 @@ func Parser.parse_top_level()
     elif self.next_is(TK_ENUM)
         self.parse_enum()
     elif self.next_is(TK_CONST)
+        var count = len(self.program.consts)
         self.parse_const()
+        if not self.stopped and len(self.program.consts) > count
+            var decl = self.program.consts[len(self.program.consts) - 1]
+            decl.name = self.own_name(decl.name)
+        end
     elif self.next_is(TK_EXTERN)
         self.parse_extern()
     elif self.next_is(TK_FUNC)
+        var count = len(self.program.functions)
         self.parse_function()
+        if not self.stopped and len(self.program.functions) > count
+            var function = self.program.functions[len(self.program.functions) - 1]
+            function.name = self.own_name(function.name)
+        end
     elif self.next_is(TK_VAR)
         var global = self.parse_var()
         if not self.stopped
             self.program.globals.add(global)
+            self.st(global).name = self.own_name(self.st(global).name)
         end
     else
         self.fail("Only functions, structs, enums, constants, variables, extern and use lines can go at the top level of a file.", "Put this code inside a function, like func main().")
@@ -320,6 +331,15 @@ func starts_top_level(kind: int): bool
     return kind == TK_FUNC or kind == TK_CONST or kind == TK_VAR or kind == TK_STRUCT or kind == TK_ENUM or kind == TK_EXTERN or kind == TK_USE
 end
 
+# In a file used with as, its functions, constants and variables get names of their own: spawn (in enemies.jamo).
+# A method keeps its name, since its struct is shared
+func Parser.own_name(name: string): string
+    if self.program.own_label == "" or contains(name, ".")
+        return name
+    end
+    return name + " (in " + self.program.own_label + ")"
+end
+
 # private func, private const or private var: only the file it's in can use it
 func Parser.parse_private()
     if self.next_is(TK_FUNC)
@@ -327,6 +347,7 @@ func Parser.parse_private()
         self.parse_function()
         if not self.stopped and len(self.program.functions) > count
             var function = self.program.functions[len(self.program.functions) - 1]
+            function.name = self.own_name(function.name)
             self.program.private_names.add(function.name)
             self.program.private_files.add(function.file)
         end
@@ -335,6 +356,7 @@ func Parser.parse_private()
         self.parse_const()
         if not self.stopped and len(self.program.consts) > count
             var decl = self.program.consts[len(self.program.consts) - 1]
+            decl.name = self.own_name(decl.name)
             self.program.private_names.add(decl.name)
             self.program.private_files.add(decl.file)
         end
@@ -342,6 +364,7 @@ func Parser.parse_private()
         var global = self.parse_var()
         if not self.stopped
             self.program.globals.add(global)
+            self.st(global).name = self.own_name(self.st(global).name)
             self.program.private_names.add(self.st(global).name)
             self.program.private_files.add(self.st(global).file)
         end
@@ -396,7 +419,19 @@ func Parser.parse_use()
     if self.stopped
         return
     end
-    self.program.uses.add(UseLine{path: path.value, line: path.line, column: path.column, length: path.length, file: self.program.current_file})
+    var use_line = UseLine{path: path.value, line: path.line, column: path.column, length: path.length, file: self.program.current_file, alias: "", alias_line: 0, alias_column: 0, alias_length: 1}
+    if self.next_is(TK_NAME) and self.peek().text == "as"
+        self.take()
+        var alias = self.expect_name("a name for the file")
+        if self.stopped
+            return
+        end
+        use_line.alias = alias.text
+        use_line.alias_line = alias.line
+        use_line.alias_column = alias.column
+        use_line.alias_length = alias.length
+    end
+    self.program.uses.add(use_line)
     self.expect_line_end()
 end
 

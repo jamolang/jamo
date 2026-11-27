@@ -458,7 +458,7 @@ private:
 
     // A function written inside another with func name(...) is hidden as "name (lambda N)": the program sees just name
     static std::string shown_name(const std::string& name) {
-        const size_t cut = name.find(" (lambda ");
+        const size_t cut = std::min(name.find(" (lambda "), name.find(" (in "));
         return cut == std::string::npos || cut == 0 ? name : name.substr(0, cut);
     }
 

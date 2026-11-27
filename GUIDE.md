@@ -551,7 +551,7 @@ end
 grr
 ```
 
-All the names in a program share one space, so two files can't both have a function with the same name.
+All the names in a program share one space, so two files can't both have a function with the same name (unless they're used with `as`, further down).
 
 As a program grows, a file often has helpers that only it should use. Put `private` in front of them, and Jamo stops any other file from using them, so nobody leans on something you might change later:
 
@@ -577,6 +577,43 @@ main.jamo line 4: balance is private to bank.jamo, so only that file can use it.
 ```
 
 `private` works on functions, methods, constants and variables outside functions.
+
+In a big program, two files often want the same name: goblins and ghosts might both have a `make_noise` and a `SPEED`. Use each file `as` a name, and it keeps its own:
+
+```jamo file=goblins.jamo
+const SPEED = 2
+
+func make_noise(): string
+    return "grr"
+end
+```
+
+```jamo file=ghosts.jamo
+const SPEED = 5
+
+func make_noise(): string
+    return "boo"
+end
+```
+
+```jamo
+use "goblins.jamo" as goblins
+use "ghosts.jamo" as ghosts
+
+func main()
+    print(goblins.make_noise())
+    print(ghosts.make_noise())
+    print(goblins.SPEED + ghosts.SPEED)
+end
+```
+
+```output
+grr
+boo
+7
+```
+
+Inside `goblins.jamo` nothing changes: it calls its own `make_noise()` as usual. Other files reach its functions, constants and variables through the name, like `goblins.SPEED`. Its structs and enums are still shared by the whole program. A file used with `as` has to be used with `as` everywhere it's used.
 
 ## 13. A window
 

@@ -1,0 +1,3 @@
+use_built_in_with_as.jamo line 1: Built-in libraries can't be used with as.
+    use "math.jamo" as m
+                       ^

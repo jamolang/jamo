@@ -1,0 +1,4 @@
+use "enemies.jamo"
+
+func other_thing()
+end

@@ -1,0 +1,5 @@
+use "enemies.jamo" as foes
+use "other.jamo"
+
+func main()
+end

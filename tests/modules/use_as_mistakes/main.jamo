@@ -1,0 +1,11 @@
+use "enemies.jamo" as foes
+
+func main()
+    print(foes.nothing())
+    print(foes.NOPE)
+    foes.nada = 1
+    print(foes.helper())
+    print(MAX)
+    print(count)
+    print(spwn())
+end

@@ -1,0 +1,5 @@
+use "enemies.jamo" as foes
+
+func main()
+    print(foes.divide(0))
+end

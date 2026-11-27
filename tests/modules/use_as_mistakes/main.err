@@ -1,0 +1,27 @@
+main.jamo line 4: enemies.jamo has nothing called nothing.
+        print(foes.nothing())
+              ^^^^^^^^^^^^^^
+A file used with as shares its functions, constants and variables. Its structs and enums are used without the file's name.
+main.jamo line 5: enemies.jamo has nothing called NOPE.
+        print(foes.NOPE)
+              ^^^^^^^^^
+A file used with as shares its functions, constants and variables. Its structs and enums are used without the file's name.
+main.jamo line 6: enemies.jamo has nothing called nada.
+        foes.nada = 1
+        ^^^^^^^^^
+A file used with as shares its functions, constants and variables. Its structs and enums are used without the file's name.
+main.jamo line 7: helper is private to enemies.jamo, so only that file can use it.
+        print(foes.helper())
+              ^^^^^^^^^^^^^
+To share it, take away private where it's made.
+main.jamo line 8: nothing has this name: MAX
+        print(MAX)
+              ^^^
+Did you mean foes.MAX?
+main.jamo line 9: nothing has this name: count
+        print(count)
+              ^^^^^
+Did you mean foes.count?
+main.jamo line 10: There's no function called spwn.
+        print(spwn())
+              ^^^^^^

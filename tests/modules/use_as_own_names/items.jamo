@@ -1,0 +1,5 @@
+const MAX = 10
+
+func spawn(): string
+    return "sword"
+end

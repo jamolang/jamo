@@ -61,6 +61,7 @@ public:
         files.push_back(path);
         used_from.push_back(from);
         uses_of.emplace_back();
+        with_as.push_back(0);
     }
 
     // Each file after the files it uses, from the main file, so a library's variables are ready before its users'
@@ -78,6 +79,7 @@ public:
             if (is_built_in(files[i])) {
                 const std::string name = built_in_name(files[i]);
                 source = builtin_library(name);
+                program.own_label.clear();
                 errors.add_file(name + BUILT_IN_LABEL, source);
                 program.file_names.push_back(name + BUILT_IN_LABEL);
                 const std::vector<Token> tokens = read_tokens(source, errors);
@@ -97,6 +99,8 @@ public:
             const std::string name = as_text(files[i].lexically_relative(root));
             errors.add_file(name, source);
             program.file_names.push_back(name);
+            program.own_label = with_as[i] == 2 ? name : "";
+            if (with_as[i] == 2) program.own_files.push_back(static_cast<int>(i));
             const std::vector<Token> tokens = read_tokens(source, errors);
             if (errors.any()) return true;
             program.uses.clear();
@@ -123,6 +127,10 @@ private:
     void add_use(const UseLine& use, const fs::path& folder) {
         // The libraries built into jamo.exe always win, so a program's own file can't hide one
         if (builtin_library(use.path)) {
+            if (!use.alias.empty()) {
+                errors.add(use.alias_spot, "Built-in libraries can't be used with as.");
+                return;
+            }
             const fs::path place(BUILT_IN + std::wstring(use.path.begin(), use.path.end()));
             if (!seen.count(same_file_key(place))) add_file(place, use.spot);
             note_use(place);
@@ -151,6 +159,29 @@ private:
         }
         if (!seen.count(same_file_key(found))) add_file(found, use.spot);
         note_use(found);
+        note_alias(use, seen.at(same_file_key(found)));
+    }
+
+    // use ... as: a file is used with as everywhere or nowhere, since its names are read one way or the other
+    void note_alias(const UseLine& use, size_t target) {
+        const int how = use.alias.empty() ? 1 : 2;
+        if (target == 0 && how == 2) {
+            errors.add(use.alias_spot, "The main file can't be used with as.");
+            return;
+        }
+        if (with_as[target] != 0 && with_as[target] != how) {
+            errors.add(use.spot, use.path + (how == 1 ? " is used with as in another file, so it needs as here too." : " is used without as in another file, so it can't have as here."));
+            return;
+        }
+        with_as[target] = how;
+        if (how == 1) return;
+        for (const Alias& alias : program.aliases) {
+            if (alias.file == static_cast<int>(using_file) && alias.name == use.alias && alias.target != static_cast<int>(target)) {
+                errors.add(use.alias_spot, use.alias + " already names another file here.");
+                return;
+            }
+        }
+        program.aliases.push_back({static_cast<int>(using_file), use.alias, static_cast<int>(target)});
     }
 
     const fs::path& root;
@@ -160,6 +191,7 @@ private:
     std::vector<Spot> used_from;
     std::map<std::wstring, size_t> seen;          // Each file's place in files
     std::vector<std::vector<size_t>> uses_of;     // The files each one uses, in the order of its use lines
+    std::vector<int> with_as;                     // 0 not used yet, 1 used without as, 2 used with as
     size_t using_file = 0;
 };
 
@@ -179,6 +211,7 @@ bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
 }
 
 void load_extra_file(const std::string& name, const std::string& source, Errors& errors, Program& program) {
+    program.own_label.clear();
     errors.add_file(name, source);
     program.file_names.push_back(name);
     const std::vector<Token> tokens = read_tokens(source, errors);

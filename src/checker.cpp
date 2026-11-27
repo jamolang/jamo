@@ -1088,6 +1088,7 @@ private:
             check_assign_to_target(stmt);
             return;
         }
+        if (const Variable* local = find_variable(stmt.name); !local || local->slot <= FIRST_GLOBAL_SLOT) stmt.name = own_name(stmt.name, stmt.name_spot.file);
         const Variable* variable = find_variable(stmt.name);
         const Type type = check_wanting(*stmt.value, variable ? variable->type : Type::Nothing);
         if (!variable && constants.count(stmt.name)) {
@@ -1132,6 +1133,22 @@ private:
     }
 
     void check_assign_to_target(Stmt& stmt) {
+        // foes.count = 3, for a variable of a file used with as
+        if (stmt.target->kind == ExprKind::Field && stmt.target->left->kind == ExprKind::Name && !find_variable(stmt.target->left->name)) {
+            const int target = alias_target(stmt.target->left->name, stmt.target->spot.file);
+            if (target >= 0) {
+                const std::string key = shared_name(stmt.target->name, target, stmt.target->spot);
+                if (key.empty()) {
+                    check_expression(*stmt.value);
+                    return;
+                }
+                stmt.name = key;
+                stmt.name_spot = stmt.target->spot;
+                stmt.target.reset();
+                check_assign(stmt);
+                return;
+            }
+        }
         const Type wanted = check_expression(*stmt.target);
         const Type type = check_wanting(*stmt.value, wanted);
         if (stmt.target->kind == ExprKind::Index && stmt.target->left->type == Type::String) {
@@ -1281,6 +1298,13 @@ private:
 
     Type check_name(Expr& expr) {
         const Variable* variable = find_variable(expr.name);
+        if (!variable || variable->slot <= FIRST_GLOBAL_SLOT) {
+            const std::string own = own_name(expr.name, expr.spot.file);
+            if (own != expr.name) {
+                expr.name = own;
+                variable = find_variable(own);
+            }
+        }
         if (variable && variable->capture >= 0) {
             expr.kind = ExprKind::Capture;
             expr.number = static_cast<uint64_t>(variable->capture);
@@ -1366,6 +1390,18 @@ private:
     }
 
     Type check_field(Expr& expr) {
+        // foes.MAX, for a constant or variable of a file used with as
+        if (expr.left->kind == ExprKind::Name && !find_variable(expr.left->name)) {
+            const int target = alias_target(expr.left->name, expr.spot.file);
+            if (target >= 0) {
+                const std::string key = shared_name(expr.name, target, expr.spot);
+                if (key.empty()) return Type::Unknown;
+                expr.kind = ExprKind::Name;
+                expr.name = key;
+                expr.left.reset();
+                return check_name(expr);
+            }
+        }
         if (expr.left->kind == ExprKind::Name && !find_variable(expr.left->name) && enums.count(expr.left->name)) {
             return check_enum_value(expr, *enums[expr.left->name]);
         }
@@ -1545,6 +1581,21 @@ private:
     }
 
     Type check_method_call(Expr& expr) {
+        // foes.spawn(), for a function of a file used with as
+        if (expr.left->kind == ExprKind::Name && !find_variable(expr.left->name)) {
+            const int target = alias_target(expr.left->name, expr.spot.file);
+            if (target >= 0) {
+                const std::string key = shared_name(expr.name, target, expr.spot);
+                if (key.empty()) {
+                    for (auto& input : expr.inputs) check_expression(*input);
+                    return Type::Unknown;
+                }
+                expr.kind = ExprKind::Call;
+                expr.name = key;
+                expr.left.reset();
+                return check_call(expr);
+            }
+        }
         const Type type = check_expression(*expr.left);
         if (type == Type::Unknown) {
             for (auto& input : expr.inputs) check_expression(*input);
@@ -1659,6 +1710,7 @@ private:
     }
 
     Type check_call(Expr& expr) {
+        if (const Variable* local = find_variable(expr.name); !local || local->slot <= FIRST_GLOBAL_SLOT) expr.name = own_name(expr.name, expr.spot.file);
         if (const Variable* variable = find_variable(expr.name); variable && program.types.is_function(variable->type) && expr.type_args.empty()) {
             auto callee = std::make_unique<Expr>();
             callee->kind = ExprKind::Name;
@@ -1755,6 +1807,7 @@ private:
             errors.add(expr.spot, "callback takes the name of one function.", "Like this: callback(on_message)");
             return Type::Int;
         }
+        expr.inputs[0]->name = own_name(expr.inputs[0]->name, expr.inputs[0]->spot.file);
         const std::string& name = expr.inputs[0]->name;
         const auto found = functions.find(name);
         if (found == functions.end() || !found->second->dll.empty()) {
@@ -1876,8 +1929,45 @@ private:
             for (const auto& item : scope) options.push_back(item.first);
         }
         for (const auto& item : global_places) options.push_back(item.first);
-        const std::string close = closest(name, options);
+        const std::string through = alias_hint(name, spot.file);
+        const std::string close = through.empty() ? closest(name, options) : through;
         errors.add(spot, "nothing has this name: " + name, close.empty() ? fallback : "Did you mean " + close + "?");
+    }
+
+    // --- use ... as ---
+    bool has_top_level(const std::string& name) const {
+        return functions.count(name) || generic_functions.count(name) || constants.count(name) || global_order.count(name);
+    }
+
+    // In a file used with as, its own names come first: spawn there means spawn (in enemies.jamo)
+    std::string own_name(const std::string& name, int file) const {
+        if (file < 0 || std::find(program.own_files.begin(), program.own_files.end(), file) == program.own_files.end()) return name;
+        const std::string key = name + " (in " + program.file_names[static_cast<size_t>(file)] + ")";
+        return has_top_level(key) ? key : name;
+    }
+
+    // For a name this file doesn't have but a file it uses with as does: foes.MAX
+    std::string alias_hint(const std::string& name, int file) const {
+        for (const Alias& alias : program.aliases) {
+            if (alias.file == file && has_top_level(name + " (in " + program.file_names[static_cast<size_t>(alias.target)] + ")")) return alias.name + "." + name;
+        }
+        return "";
+    }
+
+    // The file an alias means in a file, or -1
+    int alias_target(const std::string& name, int file) const {
+        for (const Alias& alias : program.aliases) {
+            if (alias.file == file && alias.name == name) return alias.target;
+        }
+        return -1;
+    }
+
+    // foes.spawn: the hidden name of spawn in the file foes means, or "" having said there's no such thing
+    std::string shared_name(const std::string& name, int target, Spot spot) {
+        const std::string key = name + " (in " + program.file_names[static_cast<size_t>(target)] + ")";
+        if (has_top_level(key)) return key;
+        errors.add(spot, program.file_names[static_cast<size_t>(target)] + " has nothing called " + name + ".", "A file used with as shares its functions, constants and variables. Its structs and enums are used without the file's name.");
+        return "";
     }
 
     // A name made with private can only be used in the file it's made in
@@ -1885,7 +1975,7 @@ private:
         if (spot.file < 0) return;
         for (const auto& [made, file] : program.private_names) {
             if (made != name) continue;
-            if (file != spot.file) errors.add(spot, name + " is private to " + program.file_names[static_cast<size_t>(file)] + ", so only that file can use it.", "To share it, take away private where it's made.");
+            if (file != spot.file) errors.add(spot, name.substr(0, name.find(" (in ")) + " is private to " + program.file_names[static_cast<size_t>(file)] + ", so only that file can use it.", "To share it, take away private where it's made.");
             return;
         }
     }
@@ -1897,7 +1987,8 @@ private:
         }
         for (const auto& item : generic_functions) options.push_back(item.first);
         std::sort(options.begin(), options.end());
-        const std::string close = closest(expr.name, options);
+        const std::string through = alias_hint(expr.name, expr.spot.file);
+        const std::string close = through.empty() ? closest(expr.name, options) : through;
         errors.add(expr.spot, "There's no function called " + expr.name + ".", close.empty() ? "" : "Did you mean " + close + "?");
     }
 
@@ -1905,6 +1996,7 @@ private:
         std::string best;
         int best_score = MOST_DIFFERENT_LETTERS + 1;
         for (const std::string& option : options) {
+            if (option.find(" (in ") != std::string::npos) continue;
             const int score = letters_different(name, option);
             if (score < best_score && score < static_cast<int>(std::max(name.size(), option.size()))) {
                 best = option;

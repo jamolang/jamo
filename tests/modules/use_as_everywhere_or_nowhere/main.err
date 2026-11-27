@@ -1,0 +1,3 @@
+other.jamo line 1: enemies.jamo is used with as in another file, so it needs as here too.
+    use "enemies.jamo"
+        ^^^^^^^^^^^^^^

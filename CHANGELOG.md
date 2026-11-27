@@ -4,6 +4,7 @@ What changed in each version of Jamo.
 
 ## Not released yet
 
+- `use "enemies.jamo" as foes` gives a file its own names: its functions, constants and variables are reached as `foes.spawn()` and `foes.MAX`, so two files can each have a `spawn` and a `MAX`. A name you forgot the `foes.` on gets "Did you mean foes.MAX?".
 - `private` before a function, method, constant or variable outside functions keeps it to its own file. Another file that uses it gets a clear error naming the file it belongs to.
 - `jamo test` runs the `test_` functions in every file whose name ends in `_test.jamo`, in the folder and the folders inside it. Each test runs as its own program in its file's folder, so one that crashes can't stop the rest, and a failed test shows what it printed and the line where it went wrong. `test.jamo` has `expect`, `expect_equal`, `expect_text` and `expect_near` for them.
 - A function written inside another with `func name(...)` shows by its own name in `--trace` and in a run error's list of calls, where it used to show as `(lambda 1)`.

@@ -46,12 +46,15 @@ private:
                 parse_enum();
             } else if (next_is(TokenKind::Const)) {
                 parse_const();
+                make_own(program.consts.back().name);
             } else if (next_is(TokenKind::Extern)) {
                 program.functions.push_back(parse_extern());
             } else if (next_is(TokenKind::Func)) {
                 program.functions.push_back(parse_function());
+                make_own(program.functions.back()->name);
             } else if (next_is(TokenKind::Var)) {
                 program.globals.push_back(parse_var());
+                make_own(program.globals.back()->name);
             } else {
                 fail("Only functions, structs, enums, constants, variables, extern and use lines can go at the top level of a file.", "Put this code inside a function, like func main().");
             }
@@ -63,17 +66,26 @@ private:
                kind == TokenKind::Extern || kind == TokenKind::Use;
     }
 
+    // In a file used with as, its functions, constants and variables get names of their own: spawn (in enemies.jamo).
+    // A method keeps its name, since its struct is shared
+    void make_own(std::string& name) const {
+        if (!program.own_label.empty() && name.find('.') == std::string::npos) name += " (in " + program.own_label + ")";
+    }
+
     // private func, private const or private var: only the file it's in can use it
     void parse_private() {
         if (next_is(TokenKind::Func)) {
             auto function = parse_function();
+            make_own(function->name);
             program.private_names.push_back({function->name, function->spot.file});
             program.functions.push_back(std::move(function));
         } else if (next_is(TokenKind::Const)) {
             parse_const();
+            make_own(program.consts.back().name);
             program.private_names.push_back({program.consts.back().name, program.consts.back().spot.file});
         } else if (next_is(TokenKind::Var)) {
             auto global = parse_var();
+            make_own(global->name);
             program.private_names.push_back({global->name, global->spot.file});
             program.globals.push_back(std::move(global));
         } else {
@@ -276,7 +288,14 @@ private:
     void parse_use() {
         take();
         const Token& path = expect(TokenKind::String, "use needs a file name in quotes.", "Like this: use \"enemy.jamo\"");
-        program.uses.push_back({path.value, path.spot});
+        UseLine use{path.value, path.spot, "", Spot{}};
+        if (next_is(TokenKind::Name) && peek().text == "as") {
+            take();
+            const Token& alias = expect_name("a name for the file");
+            use.alias = alias.text;
+            use.alias_spot = alias.spot;
+        }
+        program.uses.push_back(use);
         expect_line_end();
     }
 

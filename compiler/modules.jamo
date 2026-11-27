@@ -27,6 +27,7 @@ struct Loader
     use_from: [int]
     use_to: [int]
     using_file: int
+    with_as: [int]     # 0 not used yet, 1 used without as, 2 used with as
 end
 
 # --- Paths ---
@@ -214,7 +215,7 @@ end
 # --- Loading ---
 
 func new_loader(root: string, errors: Errors, program: Program): Loader
-    return Loader{root: root, errors: errors, program: program, files: [], from_lines: [], from_columns: [], from_lengths: [], from_files: [], seen: [], use_from: [], use_to: [], using_file: 0}
+    return Loader{root: root, errors: errors, program: program, files: [], from_lines: [], from_columns: [], from_lengths: [], from_files: [], seen: [], use_from: [], use_to: [], using_file: 0, with_as: []}
 end
 
 func Loader.add_file(path: string, line: int, column: int, length: int, file: int)
@@ -224,6 +225,7 @@ func Loader.add_file(path: string, line: int, column: int, length: int, file: in
     self.from_lengths.add(length)
     self.from_files.add(file)
     self.seen.add(lower(path))
+    self.with_as.add(0)
 end
 
 # A use line's file, by its place in files
@@ -302,6 +304,7 @@ func Loader.load_all(): bool
         var path = self.files[i]
         if starts_with(path, BUILT_IN)
             var name = slice(path, len(BUILT_IN), len(path))
+            self.program.own_label = ""
             if not self.read(name + BUILT_IN_LABEL, builtin_library(name))
                 return true
             end
@@ -319,7 +322,13 @@ func Loader.load_all(): bool
                 self.errors.add(self.from_lines[i], self.from_columns[i], self.from_lengths[i], self.from_files[i], "I can't read the file " + relative_path(path, self.root) + ".", "")
                 return true
             end
-            if not self.read(relative_path(path, self.root), read_file(path))
+            var name = relative_path(path, self.root)
+            self.program.own_label = ""
+            if self.with_as[i] == 2
+                self.program.own_label = name
+                self.program.own_files.add(i)
+            end
+            if not self.read(name, read_file(path))
                 return true
             end
             var folder = parent_path(path)
@@ -338,6 +347,10 @@ end
 func Loader.add_use(use_line: UseLine, folder: string)
     # The libraries built into jamo.exe always win, so a program's own file can't hide one
     if builtin_library(use_line.path) != ""
+        if use_line.alias != ""
+            self.errors.add(use_line.alias_line, use_line.alias_column, use_line.alias_length, use_line.file, "Built-in libraries can't be used with as.", "")
+            return
+        end
         var place = BUILT_IN + use_line.path
         if not self.has_seen(place)
             self.add_file(place, use_line.line, use_line.column, use_line.length, use_line.file)
@@ -369,6 +382,45 @@ func Loader.add_use(use_line: UseLine, folder: string)
         self.add_file(found, use_line.line, use_line.column, use_line.length, use_line.file)
     end
     self.note_use(found)
+    var key = lower(found)
+    for i in 0..len(self.seen)
+        if self.seen[i] == key
+            self.note_alias(use_line, i)
+        end
+    end
+end
+
+# use ... as: a file is used with as everywhere or nowhere, since its names are read one way or the other
+func Loader.note_alias(use_line: UseLine, target: int)
+    var how = 2
+    if use_line.alias == ""
+        how = 1
+    end
+    if target == 0 and how == 2
+        self.errors.add(use_line.alias_line, use_line.alias_column, use_line.alias_length, use_line.file, "The main file can't be used with as.", "")
+        return
+    end
+    if self.with_as[target] != 0 and self.with_as[target] != how
+        var words = use_line.path + " is used with as in another file, so it needs as here too."
+        if how == 2
+            words = use_line.path + " is used without as in another file, so it can't have as here."
+        end
+        self.errors.add(use_line.line, use_line.column, use_line.length, use_line.file, words, "")
+        return
+    end
+    self.with_as[target] = how
+    if how == 1
+        return
+    end
+    for i in 0..len(self.program.alias_names)
+        if self.program.alias_files[i] == self.using_file and self.program.alias_names[i] == use_line.alias and self.program.alias_targets[i] != target
+            self.errors.add(use_line.alias_line, use_line.alias_column, use_line.alias_length, use_line.file, use_line.alias + " already names another file here.", "")
+            return
+        end
+    end
+    self.program.alias_files.add(self.using_file)
+    self.program.alias_names.add(use_line.alias)
+    self.program.alias_targets.add(target)
 end
 
 # Loads the main file and every file it uses. Answers false when the main file can't be read
@@ -391,6 +443,7 @@ end
 
 # Reads one more file from text, like the main that jamo test makes. It uses nothing
 func load_extra_file(name: string, source: string, errors: Errors, program: Program)
+    program.own_label = ""
     var loader = new_loader("", errors, program)
     loader.read(name, source)
     errors.current = 0

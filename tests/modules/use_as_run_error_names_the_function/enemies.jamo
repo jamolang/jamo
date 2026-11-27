@@ -1,0 +1,23 @@
+struct Enemy
+    hp: int
+end
+
+const MAX = 3
+var count = 0
+
+func spawn(): int
+    count += 1
+    return count * MAX + helper()
+end
+
+private func helper(): int
+    return 0
+end
+
+func Enemy.hurt(): int
+    return self.hp - MAX
+end
+
+func divide(n: int): int
+    return 10 / n
+end

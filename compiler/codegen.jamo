@@ -723,6 +723,10 @@ end
 # A function written inside another with func name(...) is hidden as "name (lambda N)": the program sees just name
 func shown_name(name: string): string
     var cut = find(name, " (lambda ")
+    var inside = find(name, " (in ")
+    if inside > 0 and (cut < 0 or inside < cut)
+        cut = inside
+    end
     if cut <= 0
         return name
     end
