@@ -35,7 +35,10 @@ public:
 private:
     void parse_top_level() {
         {
-            if (next_is(TokenKind::Use)) {
+            if (next_is(TokenKind::Name) && peek().text == "private" && at + 1 < tokens.size() && starts_top_level(tokens[at + 1].kind)) {
+                take();
+                parse_private();
+            } else if (next_is(TokenKind::Use)) {
                 parse_use();
             } else if (next_is(TokenKind::Struct)) {
                 parse_struct();
@@ -52,6 +55,29 @@ private:
             } else {
                 fail("Only functions, structs, enums, constants, variables, extern and use lines can go at the top level of a file.", "Put this code inside a function, like func main().");
             }
+        }
+    }
+
+    static bool starts_top_level(TokenKind kind) {
+        return kind == TokenKind::Func || kind == TokenKind::Const || kind == TokenKind::Var || kind == TokenKind::Struct || kind == TokenKind::Enum ||
+               kind == TokenKind::Extern || kind == TokenKind::Use;
+    }
+
+    // private func, private const or private var: only the file it's in can use it
+    void parse_private() {
+        if (next_is(TokenKind::Func)) {
+            auto function = parse_function();
+            program.private_names.push_back({function->name, function->spot.file});
+            program.functions.push_back(std::move(function));
+        } else if (next_is(TokenKind::Const)) {
+            parse_const();
+            program.private_names.push_back({program.consts.back().name, program.consts.back().spot.file});
+        } else if (next_is(TokenKind::Var)) {
+            auto global = parse_var();
+            program.private_names.push_back({global->name, global->spot.file});
+            program.globals.push_back(std::move(global));
+        } else {
+            fail("Only functions, constants and variables outside functions can be private.", "Like this: private func helper()");
         }
     }
 

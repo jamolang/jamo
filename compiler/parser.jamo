@@ -291,7 +291,10 @@ func Parser.parse()
 end
 
 func Parser.parse_top_level()
-    if self.next_is(TK_USE)
+    if self.next_is(TK_NAME) and self.peek().text == "private" and self.at + 1 < len(self.tokens) and starts_top_level(self.tokens[self.at + 1].kind)
+        self.take()
+        self.parse_private()
+    elif self.next_is(TK_USE)
         self.parse_use()
     elif self.next_is(TK_STRUCT)
         self.parse_struct()
@@ -310,6 +313,40 @@ func Parser.parse_top_level()
         end
     else
         self.fail("Only functions, structs, enums, constants, variables, extern and use lines can go at the top level of a file.", "Put this code inside a function, like func main().")
+    end
+end
+
+func starts_top_level(kind: int): bool
+    return kind == TK_FUNC or kind == TK_CONST or kind == TK_VAR or kind == TK_STRUCT or kind == TK_ENUM or kind == TK_EXTERN or kind == TK_USE
+end
+
+# private func, private const or private var: only the file it's in can use it
+func Parser.parse_private()
+    if self.next_is(TK_FUNC)
+        var count = len(self.program.functions)
+        self.parse_function()
+        if not self.stopped and len(self.program.functions) > count
+            var function = self.program.functions[len(self.program.functions) - 1]
+            self.program.private_names.add(function.name)
+            self.program.private_files.add(function.file)
+        end
+    elif self.next_is(TK_CONST)
+        var count = len(self.program.consts)
+        self.parse_const()
+        if not self.stopped and len(self.program.consts) > count
+            var decl = self.program.consts[len(self.program.consts) - 1]
+            self.program.private_names.add(decl.name)
+            self.program.private_files.add(decl.file)
+        end
+    elif self.next_is(TK_VAR)
+        var global = self.parse_var()
+        if not self.stopped
+            self.program.globals.add(global)
+            self.program.private_names.add(self.st(global).name)
+            self.program.private_files.add(self.st(global).file)
+        end
+    else
+        self.fail("Only functions, constants and variables outside functions can be private.", "Like this: private func helper()")
     end
 end
 

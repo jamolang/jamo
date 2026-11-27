@@ -255,10 +255,12 @@ struct Program
     globals: [int]
     setup_order: [int]
     lambda_bodies: [[int]]     # The blocks of functions written in place with one: a Lambda's number is its place + 1
+    private_names: [string]    # Made with private, and the file each one can be used in
+    private_files: [int]
 end
 
 func new_program(): Program
-    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: [], lambda_bodies: []}
+    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: [], lambda_bodies: [], private_names: [], private_files: []}
 end
 
 # Variables outside functions get slots from -2 down (-1 means no slot), and their values are set up by a

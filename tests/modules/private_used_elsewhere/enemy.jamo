@@ -1,0 +1,25 @@
+struct Enemy
+    hp: int
+end
+
+private const SPEED = 4
+private var made = 0
+
+private func helper(n: int): int
+    return n * SPEED
+end
+
+private func first<T>(items: [T]): T
+    return items[0]
+end
+
+private func Enemy.think(): int
+    return self.hp + helper(1)
+end
+
+func spawn(): Enemy
+    made += 1
+    var e = Enemy{hp: helper(made)}
+    print(e.think() + first([made]))
+    return e
+end

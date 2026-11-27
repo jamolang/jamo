@@ -1103,6 +1103,7 @@ private:
             return;
         }
         stmt.slot = variable->slot;
+        if (variable->slot <= FIRST_GLOBAL_SLOT) check_private(stmt.name, stmt.name_spot);
         if (stmt.has_operation) {
             mark_used(stmt.name);
             note_global_read(variable->slot);
@@ -1289,6 +1290,7 @@ private:
             mark_used(expr.name);
             expr.slot = variable->slot;
             note_global_read(variable->slot);
+            if (variable->slot <= FIRST_GLOBAL_SLOT) check_private(expr.name, expr.spot);
             return variable->type;
         }
         const auto later = global_order.find(expr.name);
@@ -1301,6 +1303,7 @@ private:
             return Type::Unknown;
         }
         if (constants.count(expr.name)) {
+            check_private(expr.name, expr.spot);
             ConstDecl& decl = *constants[expr.name];
             if (!check_constant(decl)) return Type::Unknown;
             const Spot spot = expr.spot;
@@ -1318,6 +1321,7 @@ private:
                 errors.add(expr.spot, expr.name + " is a Windows function, so it can't be used as a value.", "Write a Jamo function that calls it, and use that.");
                 return Type::Unknown;
             }
+            check_private(expr.name, expr.spot);
             note_call(function->second->name);
             std::vector<Type> inputs;
             for (const Input& input : function->second->inputs) inputs.push_back(input.type);
@@ -1445,6 +1449,7 @@ private:
             return Type::Unknown;
         }
         const Function& function = *found->second;
+        check_private(function.name, expr.spot);
         note_call(function.name);
         const size_t wanted = function.inputs.size() - 1;
         if (expr.inputs.size() != wanted) {
@@ -1666,7 +1671,10 @@ private:
         }
         if (expr.name == "callback" && !find_variable(expr.name)) return check_callback(expr);
         const auto generic = generic_functions.find(expr.name);
-        if (generic != generic_functions.end() && !find_variable(expr.name)) return check_generic_call(expr, *generic->second);
+        if (generic != generic_functions.end() && !find_variable(expr.name)) {
+            check_private(expr.name, expr.spot);
+            return check_generic_call(expr, *generic->second);
+        }
         if (!expr.type_args.empty() && !find_variable(expr.name)) {
             for (auto& input : expr.inputs) check_expression(*input);
             if (functions.count(expr.name) || is_builtin(expr.name)) {
@@ -1696,6 +1704,7 @@ private:
             return Type::Unknown;
         }
         const Function& function = *found->second;
+        check_private(function.name, expr.spot);
         note_call(function.name);
         if (given.size() != function.inputs.size()) {
             errors.add(expr.spot, function.name + " takes " + count_words(function.inputs.size()) + ", but this gives it " + std::to_string(given.size()) + ".");
@@ -1753,6 +1762,7 @@ private:
             return Type::Int;
         }
         const Function& function = *found->second;
+        check_private(name, expr.inputs[0]->spot);
         if (function.inputs.size() > MOST_CALLBACK_INPUTS) errors.add(expr.inputs[0]->spot, name + " takes " + count_words(function.inputs.size()) + ", but a callback can take up to 4.");
         for (const Input& input : function.inputs) {
             if (input.type != Type::Int && input.type != Type::Bool) errors.add(expr.inputs[0]->spot, "A callback's inputs must be ints or bools, but " + input.name + " is " + with_article(input.type) + ".");
@@ -1868,6 +1878,16 @@ private:
         for (const auto& item : global_places) options.push_back(item.first);
         const std::string close = closest(name, options);
         errors.add(spot, "nothing has this name: " + name, close.empty() ? fallback : "Did you mean " + close + "?");
+    }
+
+    // A name made with private can only be used in the file it's made in
+    void check_private(const std::string& name, Spot spot) {
+        if (spot.file < 0) return;
+        for (const auto& [made, file] : program.private_names) {
+            if (made != name) continue;
+            if (file != spot.file) errors.add(spot, name + " is private to " + program.file_names[static_cast<size_t>(file)] + ", so only that file can use it.", "To share it, take away private where it's made.");
+            return;
+        }
     }
 
     void report_unknown_function(const Expr& expr) {

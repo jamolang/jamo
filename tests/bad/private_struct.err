@@ -1,0 +1,4 @@
+private_struct.jamo line 1: Only functions, constants and variables outside functions can be private.
+    private struct Thing
+            ^^^^^^
+Like this: private func helper()

@@ -1816,6 +1816,9 @@ func Checker.check_assign(s: Stmt)
         return
     end
     s.slot = found.slot
+    if found.slot <= FIRST_GLOBAL_SLOT
+        self.check_private(s.name, s.name_line, s.name_column, s.name_length, s.file)
+    end
     if s.has_operation
         self.mark_used(s.name)
         self.note_global_read(found.slot)
@@ -2065,6 +2068,9 @@ func Checker.check_name(place: int): int
         self.mark_used(e.name)
         e.slot = found.slot
         self.note_global_read(found.slot)
+        if found.slot <= FIRST_GLOBAL_SLOT
+            self.check_private(e.name, e.line, e.column, e.length, e.file)
+        end
         return found.type
     end
     if self.setting_up >= 0 and self.global_order.has(e.name)
@@ -2078,6 +2084,7 @@ func Checker.check_name(place: int): int
         end
     end
     if self.constants.has(e.name)
+        self.check_private(e.name, e.line, e.column, e.length, e.file)
         var decl = self.program.consts[self.constants.get(e.name)]
         if not self.check_constant(decl)
             return TYPE_UNKNOWN
@@ -2105,6 +2112,7 @@ func Checker.check_name(place: int): int
             self.add_at(e, e.name + " is a Windows function, so it can't be used as a value.", "Write a Jamo function that calls it, and use that.")
             return TYPE_UNKNOWN
         end
+        self.check_private(e.name, e.line, e.column, e.length, e.file)
         self.note_call(function.name)
         var inputs: [int] = []
         for input in function.inputs
@@ -2258,6 +2266,7 @@ func Checker.check_struct_method(place: int, type: int): int
         return TYPE_UNKNOWN
     end
     var function = self.function_named(prefix + e.name)
+    self.check_private(function.name, e.line, e.column, e.length, e.file)
     self.note_call(function.name)
     var wanted = len(function.inputs) - 1
     if len(e.inputs) != wanted
@@ -2561,6 +2570,7 @@ func Checker.check_call(place: int): int
         return self.check_callback(place)
     end
     if self.generic_functions.has(e.name) and self.find_variable(e.name).slot == -1
+        self.check_private(e.name, e.line, e.column, e.length, e.file)
         return self.check_generic_call(place, self.generic_functions.get(e.name))
     end
     if len(e.type_args) > 0 and self.find_variable(e.name).slot == -1
@@ -2610,6 +2620,7 @@ func Checker.check_call(place: int): int
         return TYPE_UNKNOWN
     end
     var function = self.function_named(e.name)
+    self.check_private(function.name, e.line, e.column, e.length, e.file)
     self.note_call(function.name)
     if len(given) != len(function.inputs)
         self.add_at(e, function.name + " takes " + count_words(len(function.inputs)) + ", but this gives it " + string(len(given)) + ".", "")
@@ -2676,6 +2687,7 @@ func Checker.check_callback(place: int): int
         return TYPE_INT
     end
     var function = self.function_named(name)
+    self.check_private(name, input.line, input.column, input.length, input.file)
     if len(function.inputs) > MOST_CALLBACK_INPUTS
         self.add_at(input, name + " takes " + count_words(len(function.inputs)) + ", but a callback can take up to 4.", "")
     end
@@ -2997,6 +3009,21 @@ func Checker.report_unknown_name(name: string, line: int, column: int, length: i
     end
     var close = closest(name, options)
     self.add(line, column, length, file, "nothing has this name: " + name, did_you_mean(close, fallback))
+end
+
+# A name made with private can only be used in the file it's made in
+func Checker.check_private(name: string, line: int, column: int, length: int, file: int)
+    if file < 0
+        return
+    end
+    for i in 0..len(self.program.private_names)
+        if self.program.private_names[i] == name
+            if self.program.private_files[i] != file
+                self.add(line, column, length, file, name + " is private to " + self.program.file_names[self.program.private_files[i]] + ", so only that file can use it.", "To share it, take away private where it's made.")
+            end
+            return
+        end
+    end
 end
 
 func Checker.report_unknown_function(e: Expr)

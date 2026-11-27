@@ -977,6 +977,9 @@ func tidy_source(text: string): string
             continue
         end
         var first = tidy_first_word(line)
+        if first == "private"
+            first = tidy_first_word(trim(slice(line, len("private"), len(line))))
+        end
         var code = tidy_code_part(line)
         var level = len(stack)
         if open > 0

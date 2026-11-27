@@ -1,0 +1,6 @@
+private struct Thing
+    x: int
+end
+
+func main()
+end

@@ -553,6 +553,31 @@ grr
 
 All the names in a program share one space, so two files can't both have a function with the same name.
 
+As a program grows, a file often has helpers that only it should use. Put `private` in front of them, and Jamo stops any other file from using them, so nobody leans on something you might change later:
+
+```jamo file=bank.jamo
+private var balance = 0
+
+private func check_amount(amount: int)
+    if amount <= 0
+        fail("The amount has to be more than 0.")
+    end
+end
+
+func deposit(amount: int)
+    check_amount(amount)
+    balance += amount
+end
+```
+
+If your main file tries `balance = 1000000`, Jamo won't build it:
+
+```output
+main.jamo line 4: balance is private to bank.jamo, so only that file can use it.
+```
+
+`private` works on functions, methods, constants and variables outside functions.
+
 ## 13. A window
 
 `use "window.jamo"` opens a real window, and reads the keyboard and mouse. It comes with Jamo, so there's nothing to download.

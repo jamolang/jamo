@@ -148,6 +148,7 @@ use "enemy.jamo"
 - This loads a file, looking from the folder of the file using it. Each file loads once, so files can use each other
 - `use` goes at the top level. Paths can go into folders, but can't leave the main file's folder
 - Everything in a program shares one set of names, so using a name twice is a compile error, naming both files. The one exception is an `extern` declared again exactly the same. See Calling Windows
+- `private` before `func`, `const` or a `var` outside functions means only that file can use the name. Using it from another file is a compile error. The name still can't be used twice in a program. `private` means this only at the start of a line outside functions, so it still works as an ordinary name
 
 ## Input and files
 - `input()` reads a line, without its line ending. When there's no more input, it gives `""`

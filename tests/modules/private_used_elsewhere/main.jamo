@@ -1,0 +1,14 @@
+use "enemy.jamo"
+
+func main()
+    var e = spawn()
+    print(helper(2))
+    print(SPEED)
+    print(made)
+    made = 3
+    made += 1
+    print(e.think())
+    print(first([1]))
+    var f = helper
+    print(f(1))
+end

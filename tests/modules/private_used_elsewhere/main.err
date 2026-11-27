@@ -1,0 +1,32 @@
+main.jamo line 5: helper is private to enemy.jamo, so only that file can use it.
+        print(helper(2))
+              ^^^^^^^^^
+To share it, take away private where it's made.
+main.jamo line 6: SPEED is private to enemy.jamo, so only that file can use it.
+        print(SPEED)
+              ^^^^^
+To share it, take away private where it's made.
+main.jamo line 7: made is private to enemy.jamo, so only that file can use it.
+        print(made)
+              ^^^^
+To share it, take away private where it's made.
+main.jamo line 8: made is private to enemy.jamo, so only that file can use it.
+        made = 3
+        ^^^^
+To share it, take away private where it's made.
+main.jamo line 9: made is private to enemy.jamo, so only that file can use it.
+        made += 1
+        ^^^^
+To share it, take away private where it's made.
+main.jamo line 10: Enemy.think is private to enemy.jamo, so only that file can use it.
+        print(e.think())
+              ^^^^^^^^^
+To share it, take away private where it's made.
+main.jamo line 11: first is private to enemy.jamo, so only that file can use it.
+        print(first([1]))
+              ^^^^^^^^^^
+To share it, take away private where it's made.
+main.jamo line 12: helper is private to enemy.jamo, so only that file can use it.
+        var f = helper
+                ^^^^^^
+To share it, take away private where it's made.

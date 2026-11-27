@@ -1,0 +1,7 @@
+use "enemy.jamo"
+
+func main()
+    var private = 5
+    var e = spawn()
+    print(e.hp + private)
+end
