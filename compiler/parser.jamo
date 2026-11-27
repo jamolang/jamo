@@ -1407,12 +1407,32 @@ func Parser.parse_postfix(): int
     if self.stopped
         return -1
     end
-    while self.next_is(TK_LEFT_BRACKET) or self.next_is(TK_DOT)
+    while self.next_is(TK_LEFT_BRACKET) or self.next_is(TK_DOT) or self.next_is(TK_LEFT_PAREN)
         if self.next_is(TK_DOT)
             value = self.parse_after_dot(value)
             if self.stopped
                 return -1
             end
+            continue
+        end
+        if self.next_is(TK_LEFT_PAREN)
+            # Calling whatever function value this is, like makers[i](3)
+            var v = self.ex(value)
+            var call = self.program.new_expr(EX_CALL, v.line, v.column, v.length)
+            self.ex(call).depth = v.depth + 1
+            self.parse_call(call)
+            if self.stopped
+                return -1
+            end
+            var c = self.ex(call)
+            c.kind = EX_CALL_VALUE
+            c.truth = true
+            if c.depth > TALLEST_EXPRESSION
+                self.fail_at(v.line, v.column, v.length, "This expression is too long.", "Split it across a few variables.")
+                return -1
+            end
+            c.left = value
+            value = call
             continue
         end
         self.take()
@@ -1545,6 +1565,63 @@ func Parser.parse_array_literal(place: int): int
     return place
 end
 
+# func(x: int, y: int): int => x * y, a function written in place. The answer's type can be left out
+func Parser.parse_lambda(place: int): int
+    self.take()
+    var e = self.ex(place)
+    e.kind = EX_LAMBDA
+    self.expect(TK_LEFT_PAREN, "A function written in place needs ( ) with its inputs.", "Like this: func(x: int): int => x * 2")
+    if self.stopped
+        return -1
+    end
+    if not self.next_is(TK_RIGHT_PAREN)
+        while true
+            var name = self.expect_name("an input name")
+            if self.stopped
+                return -1
+            end
+            self.expect(TK_COLON, "Each input needs a type.", "Like this: func(x: int): int => x * 2")
+            if self.stopped
+                return -1
+            end
+            e.field_names.add(name.text)
+            e.field_lines.add(name.line)
+            e.field_columns.add(name.column)
+            e.field_lengths.add(name.length)
+            e.type_args.add(self.parse_type())
+            if self.stopped
+                return -1
+            end
+            if not self.next_is(TK_COMMA)
+                break
+            end
+            self.take()
+        end
+    end
+    self.expect(TK_RIGHT_PAREN, "These inputs need a closing ).", "")
+    if self.stopped
+        return -1
+    end
+    if self.next_is(TK_COLON)
+        self.take()
+        e.truth = true
+        e.convert_to = self.parse_type()
+        if self.stopped
+            return -1
+        end
+    end
+    self.expect(TK_ARROW, "A function written in place needs => before what it gives back.", "Like this: func(x: int): int => x * 2")
+    if self.stopped
+        return -1
+    end
+    e.left = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    e.depth = self.ex(e.left).depth + 1
+    return place
+end
+
 func Parser.parse_primary(): int
     var token = self.peek()
     var place = self.program.new_expr(EX_NUMBER, token.line, token.column, token.length)
@@ -1571,6 +1648,8 @@ func Parser.parse_primary(): int
         return place
     elif kind == TK_LEFT_BRACKET
         return self.parse_array_literal(place)
+    elif kind == TK_FUNC
+        return self.parse_lambda(place)
     elif kind == TK_FSTRING_START
         return self.parse_fstring(place)
     elif kind == TK_NOT

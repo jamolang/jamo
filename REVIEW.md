@@ -224,8 +224,8 @@ Written on 2026-11-26, after a day of work aimed at what the first pass said hel
 
 ## Still open
 
-- Functions can be passed as values now (added the same day, with `sort_with`, `filtered` and `mapped`), but they can't remember the variables around them: there are no closures.
-- The console can still show non-English text garbled, though files get it right. Fixing it means writing through `WriteConsoleW`.
+- Functions can be passed as values, and written in place with `=>`, keeping the values of the variables around them (closures, added the next day). One written in place holds a single expression.
+- Printing to the console now goes through `WriteConsoleW`, and `input()` reads through `ReadConsoleW`, so printing and typing work in any language.
 - Running out of memory, and errors inside functions Windows calls back, can't be caught. Both are on purpose, and documented.
 - `jamo get` has no versions: it takes whatever is on the project's main branch.
 - The repo is still private, so none of this has met a real new user. That's the next real test.

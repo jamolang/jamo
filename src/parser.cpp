@@ -796,9 +796,22 @@ private:
     // What can follow a value: text[i], items.add(1)
     ExprPtr parse_postfix() {
         ExprPtr value = parse_primary();
-        while (next_is(TokenKind::LeftBracket) || next_is(TokenKind::Dot)) {
+        while (next_is(TokenKind::LeftBracket) || next_is(TokenKind::Dot) || next_is(TokenKind::LeftParen)) {
             if (next_is(TokenKind::Dot)) {
                 value = parse_after_dot(std::move(value));
+                continue;
+            }
+            if (next_is(TokenKind::LeftParen)) {
+                // Calling whatever function value this is, like makers[i](3)
+                auto call = std::make_unique<Expr>();
+                call->spot = value->spot;
+                call->depth = value->depth + 1;
+                call = parse_call(std::move(call));
+                call->kind = ExprKind::CallValue;
+                call->truth = true;
+                if (call->depth > TALLEST_EXPRESSION) fail_at(value->spot, "This expression is too long.", "Split it across a few variables.");
+                call->left = std::move(value);
+                value = std::move(call);
                 continue;
             }
             take();
@@ -868,6 +881,34 @@ private:
         return expr;
     }
 
+    // func(x: int, y: int): int => x * y, a function written in place. The answer's type can be left out
+    ExprPtr parse_lambda(ExprPtr expr) {
+        take();
+        expr->kind = ExprKind::Lambda;
+        expect(TokenKind::LeftParen, "A function written in place needs ( ) with its inputs.", "Like this: func(x: int): int => x * 2");
+        if (!next_is(TokenKind::RightParen)) {
+            while (true) {
+                const Token& name = expect_name("an input name");
+                expect(TokenKind::Colon, "Each input needs a type.", "Like this: func(x: int): int => x * 2");
+                expr->field_names.push_back(name.text);
+                expr->field_spots.push_back(name.spot);
+                expr->type_args.push_back(parse_type());
+                if (!next_is(TokenKind::Comma)) break;
+                take();
+            }
+        }
+        expect(TokenKind::RightParen, "These inputs need a closing ).");
+        if (next_is(TokenKind::Colon)) {
+            take();
+            expr->truth = true;
+            expr->convert_to = parse_type();
+        }
+        expect(TokenKind::Arrow, "A function written in place needs => before what it gives back.", "Like this: func(x: int): int => x * 2");
+        expr->left = parse_expression();
+        expr->depth = expr->left->depth + 1;
+        return expr;
+    }
+
     ExprPtr parse_primary() {
         const Token& token = peek();
         auto expr = std::make_unique<Expr>();
@@ -896,6 +937,8 @@ private:
                 return expr;
             case TokenKind::LeftBracket:
                 return parse_array_literal(std::move(expr));
+            case TokenKind::Func:
+                return parse_lambda(std::move(expr));
             case TokenKind::FStringStart:
                 return parse_fstring(std::move(expr));
             case TokenKind::Not:

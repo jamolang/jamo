@@ -1,0 +1,4 @@
+lambda_needs_arrow.jamo line 2: A function written in place needs => before what it gives back.
+        var f = func(x: int): int x * 2
+                                  ^
+Like this: func(x: int): int => x * 2

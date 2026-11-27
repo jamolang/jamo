@@ -2,6 +2,14 @@
 
 What changed in each version of Jamo.
 
+## Not released yet
+
+- Every .exe Jamo writes has the PE checksum normal Windows programs have. Without it, Windows Defender's machine learning started taking freshly built Jamo programs, and jamo.exe itself, for malware.
+- Functions written in place: `func(x: int): int => x * 2`. They can use the variables around them, keeping a copy of each value from when they were made, and can sit inside each other. The answer's type can be left out. Guide section 29.
+- Any value holding a function can be called straight away, like `steps[1](2)` or `make_adder(5)(1)`.
+- Calling a variable that isn't a function says what it is: `n is an int, not a function, so it can't be called.`
+- Printing to a console window shows text in any language right: accented, Greek, Cyrillic, Chinese and Japanese letters used to come out garbled. Typing them into `input()` works too. Files and pipes still get the same UTF-8 bytes as before.
+
 ## 0.3.0
 
 ### New in the language

@@ -1,0 +1,4 @@
+lambda_input_needs_type.jamo line 2: Each input needs a type.
+        var f = func(x): int => x
+                      ^
+Like this: func(x: int): int => x * 2

@@ -1,4 +1,4 @@
-generic_call_looks_like_comparison.jamo line 8: x is a variable, so it can't be called like a function.
+generic_call_looks_like_comparison.jamo line 8: x is an int, not a function, so it can't be called.
         print(both(x < y, y > (x)))
                    ^^^^^^^^^^^^^^
 A < with a > and ( after it reads as types, like first<int>(...). To compare, take away the ( ) after the >.

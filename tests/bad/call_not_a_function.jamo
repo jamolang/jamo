@@ -1,0 +1,10 @@
+# Calling things that aren't functions, and calling with the wrong inputs
+func main()
+    var n = 3
+    print(n(1))
+    var items = [1, 2]
+    print(items[0](5))
+    var f = func(x: int): int => x
+    print(f("a"))
+    print(f(1, 2))
+end

@@ -51,6 +51,10 @@ void write_write(Assembler& out, const Runtime& runtime, const RuntimeText& text
     (void)text;
     const Label to_stream = out.new_label();
     const Label next_part = out.new_label();
+    const Label console = out.new_label();
+    const Label console_part = out.new_label();
+    const Label back_off = out.new_label();
+    const Label whole_letters = out.new_label();
     const Label finished = out.new_label();
     out.place(runtime.write);
     out.bytes({0x48, 0x83, 0xF9, 0xF4});  // cmp rcx, -12
@@ -85,6 +89,11 @@ void write_write(Assembler& out, const Runtime& runtime, const RuntimeText& text
     out.bytes({0x48, 0x83, 0xEC, 0x30});  // sub rsp, 48
     out.call_windows(DataRef::GetStdHandle);
     out.bytes({0x48, 0x89, 0xC7});  // mov rdi, rax
+    out.bytes({0x48, 0x89, 0xF9});  // mov rcx, rdi
+    out.bytes({0x48, 0x8D, 0x54, 0x24, 0x28});  // lea rdx, [rsp+40]
+    out.call_windows(DataRef::GetConsoleMode);
+    out.bytes({0x85, 0xC0});  // test eax, eax
+    out.jump_if_not_equal(console);
     out.place(next_part);
     out.bytes({0x48, 0x85, 0xF6});  // test rsi, rsi
     out.jump_if_equal(finished);
@@ -105,6 +114,44 @@ void write_write(Assembler& out, const Runtime& runtime, const RuntimeText& text
     out.bytes({0x48, 0x01, 0xC3});  // add rbx, rax
     out.bytes({0x48, 0x29, 0xC6});  // sub rsi, rax
     out.jump(next_part);
+    out.place(console);
+    out.bytes({0x48, 0x81, 0xEC, 0x10, 0x08, 0x00, 0x00});  // sub rsp, 2064
+    out.place(console_part);
+    out.bytes({0x48, 0x85, 0xF6});  // test rsi, rsi
+    out.jump_if_equal(finished);
+    out.bytes({0x49, 0x89, 0xF0});  // mov r8, rsi
+    out.bytes({0xB8, 0xE8, 0x03, 0x00, 0x00});  // mov eax, 1000
+    out.bytes({0x49, 0x39, 0xC0});  // cmp r8, rax
+    out.jump_if_at_most(whole_letters);
+    out.bytes({0x49, 0x89, 0xC0});  // mov r8, rax
+    out.place(back_off);
+    out.bytes({0x42, 0x0F, 0xB6, 0x04, 0x03});  // movzx eax, byte ptr [rbx+r8]
+    out.bytes({0x25, 0xC0, 0x00, 0x00, 0x00});  // and eax, 192
+    out.bytes({0x3D, 0x80, 0x00, 0x00, 0x00});  // cmp eax, 128
+    out.jump_if_not_equal(whole_letters);
+    out.bytes({0x49, 0xFF, 0xC8});  // dec r8
+    out.jump_if_not_equal(back_off);
+    out.bytes({0x41, 0xB8, 0xE8, 0x03, 0x00, 0x00});  // mov r8d, 1000
+    out.place(whole_letters);
+    out.bytes({0x4C, 0x89, 0x84, 0x24, 0x08, 0x08, 0x00, 0x00});  // mov qword ptr [rsp+2056], r8
+    out.bytes({0xB9, 0xE9, 0xFD, 0x00, 0x00});  // mov ecx, 65001
+    out.bytes({0x31, 0xD2});  // xor edx, edx
+    out.bytes({0x4D, 0x89, 0xC1});  // mov r9, r8
+    out.bytes({0x49, 0x89, 0xD8});  // mov r8, rbx
+    out.bytes({0x48, 0x8D, 0x44, 0x24, 0x30});  // lea rax, [rsp+48]
+    out.bytes({0x48, 0x89, 0x44, 0x24, 0x20});  // mov qword ptr [rsp+32], rax
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x28, 0xE8, 0x03, 0x00, 0x00});  // mov qword ptr [rsp+40], 1000
+    out.call_windows(DataRef::MultiByteToWideChar);
+    out.bytes({0x48, 0x89, 0xF9});  // mov rcx, rdi
+    out.bytes({0x48, 0x8D, 0x54, 0x24, 0x30});  // lea rdx, [rsp+48]
+    out.bytes({0x41, 0x89, 0xC0});  // mov r8d, eax
+    out.bytes({0x4C, 0x8D, 0x8C, 0x24, 0x00, 0x08, 0x00, 0x00});  // lea r9, [rsp+2048]
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00});  // mov qword ptr [rsp+32], 0
+    out.call_windows(DataRef::WriteConsoleW);
+    out.bytes({0x48, 0x8B, 0x84, 0x24, 0x08, 0x08, 0x00, 0x00});  // mov rax, qword ptr [rsp+2056]
+    out.bytes({0x48, 0x01, 0xC3});  // add rbx, rax
+    out.bytes({0x48, 0x29, 0xC6});  // sub rsi, rax
+    out.jump(console_part);
     out.place(finished);
     out.bytes({0x48, 0x8D, 0x65, 0xE8});  // lea rsp, [rbp-24]
     out.bytes({0x5F});  // pop rdi
@@ -1742,6 +1789,7 @@ void write_stdin_refill(Assembler& out, const Runtime& runtime, const RuntimeTex
     const Label has_buffer = out.new_label();
     const Label no_input = out.new_label();
     const Label finished = out.new_label();
+    const Label console_input = out.new_label();
     out.place(runtime.stdin_refill);
     out.bytes({0x55});  // push rbp
     out.bytes({0x48, 0x89, 0xE5});  // mov rbp, rsp
@@ -1757,7 +1805,13 @@ void write_stdin_refill(Assembler& out, const Runtime& runtime, const RuntimeTex
     out.place(has_buffer);
     out.bytes({0x48, 0xC7, 0xC1, 0xF6, 0xFF, 0xFF, 0xFF});  // mov rcx, -10
     out.call_windows(DataRef::GetStdHandle);
+    out.bytes({0x48, 0x89, 0x44, 0x24, 0x30});  // mov qword ptr [rsp+48], rax
     out.bytes({0x48, 0x89, 0xC1});  // mov rcx, rax
+    out.bytes({0x48, 0x8D, 0x54, 0x24, 0x28});  // lea rdx, [rsp+40]
+    out.call_windows(DataRef::GetConsoleMode);
+    out.bytes({0x85, 0xC0});  // test eax, eax
+    out.jump_if_not_equal(console_input);
+    out.bytes({0x48, 0x8B, 0x4C, 0x24, 0x30});  // mov rcx, qword ptr [rsp+48]
     out.bytes({0x48, 0x8B, 0x13});  // mov rdx, qword ptr [rbx]
     out.bytes({0x41, 0xB8, 0x00, 0x10, 0x00, 0x00});  // mov r8d, 4096
     out.bytes({0x4C, 0x8D, 0x4C, 0x24, 0x38});  // lea r9, [rsp+56]
@@ -1777,6 +1831,31 @@ void write_stdin_refill(Assembler& out, const Runtime& runtime, const RuntimeTex
     out.bytes({0x5B});  // pop rbx
     out.bytes({0x5D});  // pop rbp
     out.bytes({0xC3});  // ret
+    out.place(console_input);
+    out.bytes({0x48, 0x81, 0xEC, 0x40, 0x0A, 0x00, 0x00});  // sub rsp, 2624
+    out.bytes({0x48, 0x8B, 0x8C, 0x24, 0x70, 0x0A, 0x00, 0x00});  // mov rcx, qword ptr [rsp+2672]
+    out.bytes({0x48, 0x8D, 0x54, 0x24, 0x40});  // lea rdx, [rsp+64]
+    out.bytes({0x41, 0xB8, 0x14, 0x05, 0x00, 0x00});  // mov r8d, 1300
+    out.bytes({0x4C, 0x8D, 0x4C, 0x24, 0x38});  // lea r9, [rsp+56]
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00});  // mov qword ptr [rsp+56], 0
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00});  // mov qword ptr [rsp+32], 0
+    out.call_windows(DataRef::ReadConsoleW);
+    out.bytes({0x85, 0xC0});  // test eax, eax
+    out.jump_if_equal(no_input);
+    out.bytes({0xB9, 0xE9, 0xFD, 0x00, 0x00});  // mov ecx, 65001
+    out.bytes({0x31, 0xD2});  // xor edx, edx
+    out.bytes({0x4C, 0x8D, 0x44, 0x24, 0x40});  // lea r8, [rsp+64]
+    out.bytes({0x44, 0x8B, 0x4C, 0x24, 0x38});  // mov r9d, dword ptr [rsp+56]
+    out.bytes({0x48, 0x8B, 0x03});  // mov rax, qword ptr [rbx]
+    out.bytes({0x48, 0x89, 0x44, 0x24, 0x20});  // mov qword ptr [rsp+32], rax
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x10, 0x00, 0x00});  // mov qword ptr [rsp+40], 4096
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00});  // mov qword ptr [rsp+48], 0
+    out.bytes({0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00});  // mov qword ptr [rsp+56], 0
+    out.call_windows(DataRef::WideCharToMultiByte);
+    out.bytes({0x89, 0xC0});  // mov eax, eax
+    out.bytes({0x48, 0xC7, 0x43, 0x08, 0x00, 0x00, 0x00, 0x00});  // mov qword ptr [rbx+8], 0
+    out.bytes({0x48, 0x89, 0x43, 0x10});  // mov qword ptr [rbx+16], rax
+    out.jump(finished);
 }
 
 // Answers with the next line of input, without its line ending, or "" when there's no more

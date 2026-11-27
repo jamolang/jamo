@@ -1,0 +1,6 @@
+lambda_unknown_type.jamo line 2: There's no type called Nope.
+        var f = func(x: Nope): int => 1
+                     ^
+lambda_unknown_type.jamo line 3: Input 1 of f must be a Nope, but this is an int.
+        print(f(1))
+                ^

@@ -85,6 +85,10 @@ DataSection build_data_section(uint32_t rva, const std::vector<std::string>& str
         {DataRef::GetCommandLineW, "GetCommandLineW"},
         {DataRef::MultiByteToWideChar, "MultiByteToWideChar"},
         {DataRef::HeapFree, "HeapFree"},
+        {DataRef::GetConsoleMode, "GetConsoleMode"},
+        {DataRef::WriteConsoleW, "WriteConsoleW"},
+        {DataRef::ReadConsoleW, "ReadConsoleW"},
+        {DataRef::WideCharToMultiByte, "WideCharToMultiByte"},
     };
     // Only a window program loads MessageBoxA, so only it imports these
     if (window) {
@@ -253,6 +257,22 @@ void write_section_header(Writer& out, const std::string& name, uint32_t real_si
 
 }  // namespace
 
+// The PE checksum: the file's 16-bit words added with their carries folded back in, plus the file's size. Windows
+// doesn't need it to run a program, but antivirus programs trust files that have one, and Windows Defender's machine
+// learning took Jamo programs without one for malware
+const size_t CHECKSUM_AT = DOS_HEADER_SIZE + 4 + 20 + 64;
+
+void write_checksum(std::vector<uint8_t>& file) {
+    uint64_t sum = 0;
+    for (size_t i = 0; i + 1 < file.size(); i += 2) {
+        sum += static_cast<uint64_t>(file[i]) | (static_cast<uint64_t>(file[i + 1]) << 8);
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    sum = (sum & 0xFFFF) + (sum >> 16);
+    const uint32_t checksum = static_cast<uint32_t>(sum + file.size());
+    for (size_t k = 0; k < 4; k++) file[CHECKSUM_AT + k] = static_cast<uint8_t>(checksum >> (8 * k));
+}
+
 std::vector<uint8_t> build_exe(const MachineCode& code) {
     const uint32_t text_size = static_cast<uint32_t>(code.bytes.size());
     const uint32_t data_rva = TEXT_RVA + round_up(text_size, SECTION_ALIGN);
@@ -312,7 +332,7 @@ std::vector<uint8_t> build_exe(const MachineCode& code) {
     out.u32(0);
     out.u32(image_size);
     out.u32(HEADERS_SIZE);
-    out.u32(0);                      // Checksum, which normal programs don't need
+    out.u32(0);                      // Checksum, filled in at the end
     out.u16(code.window ? 2 : 3);    // A window program, or one for the console
     out.u16(0x8100);                 // Data can't run as code, and it's aware of Terminal Server
     out.u64(STACK_RESERVE);
@@ -342,5 +362,6 @@ std::vector<uint8_t> build_exe(const MachineCode& code) {
     out.pad_to(data_file_at);
     out.bytes.insert(out.bytes.end(), data.bytes.begin(), data.bytes.end());
     out.pad_to(data_file_at + data_file_size);
+    write_checksum(out.bytes);
     return std::move(out.bytes);
 }

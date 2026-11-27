@@ -1,0 +1,3 @@
+lambda_wrong_answer.jamo line 2: This gives back an int, but the function says it gives back a string.
+        var f = func(x: int): string => x * 2
+                                        ^^^^^

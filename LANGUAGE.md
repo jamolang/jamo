@@ -106,7 +106,9 @@ print(change(4))
 - A variable, input, struct field or array item of a function type is called with `( )`, like `change(4)` or `button.on_click(4)`. A field holding a function is called like a method
 - Methods, generic functions and `extern` functions can't be values
 - Two function types are the same when their inputs and answers are. Function values can't be compared with `==` or `!=`, and print as their type
-- A function value holds only which function it is. It doesn't keep any variables from where it was made
+- `func(x: int, y: int): int => x * y` is a function written in place. The answer's type can be left out, and comes from the expression after `=>`, which is all it does
+- One written in place can use the variables and inputs around it. It keeps a copy of each one's value from when it was made (arrays and structs are shared, as always). Variables outside functions are used directly, not copied
+- `( )` after any value holding a function calls it, like `steps[0](3)` or `make_adder(5)(1)`
 
 ## Generics
 ```
@@ -289,7 +291,7 @@ end
 - Compile errors stop at the first mistake in a program's structure. Mistakes in types and names are all reported together, up to 20
 
 ## Printing
-`print(x)` takes an `int`, `float`, `bool` or `string`, then starts a new line. `print(true)` shows `true`.
+`print(x)` takes an `int`, `float`, `bool` or `string`, then starts a new line. `print(true)` shows `true`. Text is UTF-8: in a console window it shows, and can be typed, in any language, and files and pipes get the bytes unchanged.
 
 Floats show up to 6 decimals, rounded exactly, with extra zeros removed: `2.0`, `1234567.5`, `0.123457`. From `1.0e+16` up, they show in scientific form with up to 7 digits, like `1.234568e+29`. The special values show as `inf`, `-inf` and `nan`.
 

@@ -161,8 +161,11 @@ inline const std::string SETUP_NAME = "(setup)";
 // A try keeps this many slots: the try around it, rbp, rsp, where its catch is, and r12 to r15
 const int TRY_SLOTS = 8;
 
-// FunctionValue is a function's name used as a value (its name in text). CallValue calls the function value in left with inputs
-enum class ExprKind { Number, Float, Bool, String, Name, Negate, Binary, Call, Length, Convert, FString, Not, Index, ArrayLiteral, MethodCall, Field, StructLiteral, EnumValue, BuiltinCall, FunctionValue, CallValue };
+// FunctionValue is a function's name used as a value (its name in text). CallValue calls the function value in left with inputs.
+// Lambda is a function written in place: its inputs' names in field_names and types in type_args, its answer in convert_to
+// when truth says one was written, and what it gives back in left. The checker makes it a function named in text, with
+// the values it captures as inputs. Capture reads captured value number from inside one
+enum class ExprKind { Number, Float, Bool, String, Name, Negate, Binary, Call, Length, Convert, FString, Not, Index, ArrayLiteral, MethodCall, Field, StructLiteral, EnumValue, BuiltinCall, FunctionValue, CallValue, Lambda, Capture };
 enum class BinaryOp { Add, Subtract, Multiply, Divide, Remainder, Equal, NotEqual, Less, Greater, LessEqual, GreaterEqual, And, Or };
 
 struct Expr {
@@ -253,6 +256,7 @@ struct Function {
     std::vector<Type> type_params;    // A generic function's types, like T in first<T>, or a generic struct's for its method
     std::vector<Spot> type_param_spots;
     int slot_count = 0;               // Filled in by the checker: variables, including inputs
+    bool is_lambda = false;           // Made by the checker from a function written in place, whose first input is its block
 };
 
 struct StructDecl {

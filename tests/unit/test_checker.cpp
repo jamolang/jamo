@@ -95,7 +95,7 @@ int main() {
 
     // Mixed names
     bad("func f<T>(x: T): T\nreturn x\nend\nfunc main()\nprint(f)\nend", "is generic, so it can't be used as a value");
-    bad(in_main("var x = 1\nx()"), "is a variable");
+    bad(in_main("var x = 1\nx()"), "is an int, not a function");
 
     // Missing return
     bad("func f(): int\nend\nfunc main()\nend", "every path");

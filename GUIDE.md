@@ -1617,7 +1617,46 @@ Ana
 - A struct can hold a function, and calling it looks like calling a method: with `on_click: func(int): int` in a `Button`, `button.on_click(3)` calls whatever function is in it. That's handy for buttons and game events.
 - A generic function can take functions too, like `func best<T>(items: [T], better: func(T, T): bool): T`, and its types are worked out from them.
 - Only named Jamo functions can be values. Methods, generic functions and `extern` Windows functions can't, so write a small function that calls one, and use that. Function values can't be compared with `==`, and printing one shows its type.
-- A function value can't remember the variables around where it was made, the way some languages' closures do. Pass what it needs as inputs, or keep it in a struct.
+
+### Functions written in place
+
+A small function can be written right where it's needed: `func`, its inputs, then `=>` and what it gives back. It can use the variables around it, and keeps their values from when it was made:
+
+```jamo
+use "list.jamo"
+
+func make_adder(k: int): func(int): int
+    return func(x: int): int => x + k
+end
+
+func main()
+    var limit = 50
+    var prices = [10, 80, 45, 51, 3]
+    print(filtered(prices, func(p: int): bool => p < limit))
+    var add5 = make_adder(5)
+    print(add5(1))
+    var steps = [make_adder(1), make_adder(10)]
+    print(steps[1](2))
+    var say = func(name: string) => print_hello(name)
+    say("Sam")
+end
+
+func print_hello(name: string)
+    print("Hello, " + name)
+end
+```
+
+```output
+[10, 45, 3]
+6
+12
+Hello, Sam
+```
+
+- The answer's type after the `)` can be left out, and Jamo works it out from what's after `=>`.
+- What's after `=>` is one expression. For more steps, write a named function and use its name.
+- It keeps a copy of each variable it uses, made when the function is. Changing the variable afterwards doesn't change the function. Arrays and structs are shared as always, so adding to an array it uses works.
+- Any value holding a function can be called straight away, like `steps[1](2)` or `make_adder(5)(1)`.
 
 Try it: make an array of three functions that each change a number, and run a number through all of them in a loop.
 
@@ -1626,9 +1665,8 @@ Try it: make an array of three functions that each change a number, and run a nu
 Jamo is young, so it's better to know this up front:
 
 - It only runs on Windows.
-- Function values can't remember the variables around them (there are no closures), so pass what they need as inputs.
+- A function written in place holds one expression after `=>`. For more steps, write a named function.
 - `len` and `text[i]` count bytes. `letter_count` and `letters` count whole letters, and `upper` and `lower` change English, accented, Greek and Cyrillic letters, but not every language's.
-- Non-English text can look garbled in a console window, though files get it exactly right.
 
 ## Where to go next
 

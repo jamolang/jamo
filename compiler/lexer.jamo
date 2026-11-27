@@ -73,6 +73,7 @@ const TK_GREATER_EQUAL = 64
 # Keywords added after the rest, so the numbers above stay the same
 const TK_TRY = 65
 const TK_CATCH = 66
+const TK_ARROW = 67
 
 const MOST_ERRORS = 20
 const TEXT_CLOSED = 0
@@ -127,7 +128,7 @@ end
 
 # A line that ends with one of these carries on to the next line
 func leaves_line_open(kind: int): bool
-    return kind == TK_COMMA or kind == TK_ASSIGN or kind == TK_DOT_DOT or (kind >= TK_PLUS_ASSIGN and kind <= TK_GREATER_EQUAL) or kind == TK_AND or kind == TK_OR or kind == TK_NOT
+    return kind == TK_COMMA or kind == TK_ASSIGN or kind == TK_DOT_DOT or (kind >= TK_PLUS_ASSIGN and kind <= TK_GREATER_EQUAL) or kind == TK_AND or kind == TK_OR or kind == TK_NOT or kind == TK_ARROW
 end
 
 func kind_of_word(word: string): int
@@ -499,6 +500,9 @@ func Lexer.read_tokens()
             self.at += 2
         elif letter == 62 and next == 61
             self.add(TK_GREATER_EQUAL, self.at, 2)
+            self.at += 2
+        elif letter == 61 and next == 62
+            self.add(TK_ARROW, self.at, 2)
             self.at += 2
         else
             self.read_symbol(letter, next)

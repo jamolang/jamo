@@ -1,0 +1,26 @@
+# Calling any value that holds a function: a call's answer, an array item, a field's item, and a function written in place
+func make_adder(k: int): func(int): int
+    return func(x: int): int => x + k
+end
+
+struct Box
+    steps: [func(int): int]
+end
+
+# A function written in place inside a generic one, with T in its answer
+func first_getter<T>(items: [T]): func(): T
+    return func(): T => items[0]
+end
+
+func main()
+    print(make_adder(5)(1))
+    var fs = [make_adder(1), make_adder(10)]
+    print(fs[1](2))
+    var nest = func(a: int): func(int): int => func(b: int): int => a * b
+    print(nest(6)(7))
+    var box = Box{steps: fs}
+    print(box.steps[0](100))
+    print((func(x: int): int => x * 3)(4))
+    print(first_getter(["a", "b"])())
+    print(first_getter([4.5, 1.0])())
+end

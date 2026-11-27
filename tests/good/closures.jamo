@@ -1,0 +1,91 @@
+# Functions written in place, and the values they capture. Answers worked out by hand, and the stress part by Python
+use "list.jamo"
+
+struct Player
+    name: string
+    score: int
+end
+
+struct Button
+    label: string
+    on_click: func(int): int
+end
+
+func double(n: int): int
+    return n * 2
+end
+
+func make_adder(k: int): func(int): int
+    return func(x: int): int => x + k
+end
+
+func make_scaler(times: int, plus: int): func(int): int
+    return func(x: int) => x * times + plus
+end
+
+func apply(f: func(int): int, x: int): int
+    return f(x)
+end
+
+func shout(text: string)
+    print(text + "!")
+end
+
+var bonus = 1000
+
+func main()
+    var add5 = make_adder(5)
+    var add10 = make_adder(10)
+    print(add5(1))
+    print(add10(1))
+    print(add5(100))
+    print(apply(make_scaler(3, 1), 4))
+    print(apply(double, 4))
+    print(apply(func(x: int): int => x * x, 7))
+    var limit = 50
+    var prices = [10, 80, 45, 51, 50, 3]
+    print(filtered(prices, func(p: int): bool => p < limit))
+    var players = [Player{name: "Ana", score: 30}, Player{name: "Bo", score: 70}, Player{name: "Cy", score: 50}]
+    sort_with(players, func(a: Player, b: Player): bool => a.score > b.score)
+    print(mapped(players, func(p: Player): string => p.name))
+    var reversed_order = true
+    sort_with(players, func(a: Player, b: Player): bool => (a.score < b.score) == reversed_order)
+    print(mapped(players, func(p: Player): string => p.name))
+    # Captured by value: changing limit later doesn't change the function made before
+    var under = func(p: int): bool => p < limit
+    limit = 5
+    print(filtered(prices, under))
+    # A function written in place inside another, capturing from both levels
+    var outer = 7
+    var nest = func(a: int): func(int): int => func(b: int): int => a + b + outer
+    var inner = nest(1)
+    print(inner(2))
+    var b = Button{label: "Go", on_click: func(n: int): int => n + bonus}
+    print(b.on_click(5))
+    var say = func(t: string) => shout(t)
+    say("hey")
+    var names = ["x", "yy"]
+    var add_name = func(n: string) => names.add(n)
+    add_name("zzz")
+    print(names)
+    print(add5)
+
+    # Stress: 3000 functions each capturing its own new text and number, kept in an array while lots of other
+    # memory comes and goes, then all called. The memory cleaner must keep every captured value
+    var makers: [func(int): int] = []
+    for i in 0..3000
+        var word = "w" + string(i * 7)
+        var weight = i % 13
+        makers.add(func(x: int): int => len(word) * weight + x)
+        var junk: [string] = []
+        for k in 0..5
+            junk.add(string(k) + word)
+        end
+    end
+    var total = 0
+    for i in 0..len(makers)
+        var maker = makers[i]
+        total += maker(i)
+    end
+    print(total)
+end

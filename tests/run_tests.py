@@ -390,6 +390,33 @@ def test_warnings_and_calls(work):
 
 
 # --- The VS Code extension, without VS Code ---
+# --- Every .exe has the PE checksum Windows' own MapFileAndCheckSumW works out. Without one, Windows Defender's
+# machine learning took Jamo programs for malware ---
+def test_checksums(work):
+    folder = work / "checksums"
+    folder.mkdir()
+    (folder / "hello.jamo").write_text('func main()\n    print("hi")\nend\n', encoding="utf-8")
+    imagehlp = ctypes.WinDLL("imagehlp")
+    for compiler in (JAMO, CPP_JAMO):
+        for window in (False, True):
+            built = run([str(compiler), "build"] + (["--window"] if window else []) + [str(folder / "hello.jamo")])
+            in_file = ctypes.wintypes.DWORD()
+            worked_out = ctypes.wintypes.DWORD()
+            imagehlp.MapFileAndCheckSumW(str(folder / "hello.exe"), ctypes.byref(in_file), ctypes.byref(worked_out))
+            report(f"{compiler.name} writes the right checksum{' for a window program' if window else ''}", built.returncode == 0 and in_file.value != 0 and in_file.value == worked_out.value, f"{built.stderr} {in_file.value} {worked_out.value}")
+    in_file = ctypes.wintypes.DWORD()
+    worked_out = ctypes.wintypes.DWORD()
+    imagehlp.MapFileAndCheckSumW(str(JAMO), ctypes.byref(in_file), ctypes.byref(worked_out))
+    report("jamo.exe itself has the right checksum", in_file.value != 0 and in_file.value == worked_out.value, f"{in_file.value} {worked_out.value}")
+
+
+# --- Text in any language shows right in a real console, not only in pipes and files ---
+def test_console_text(work):
+    for compiler in (JAMO, CPP_JAMO):
+        result = run([sys.executable, str(ROOT / "tests" / "console_text.py"), str(compiler), str(work / f"console {compiler.stem}")], env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=120)
+        report(f"a real console shows accented, Greek, Cyrillic and Japanese text and long lines, and typing them works, from {compiler.name}", result.stdout.strip().endswith("ALL SHOWN RIGHT"), result.stdout[-600:] + result.stderr[-400:])
+
+
 # --- jamo get, from a stand-in for GitHub on 127.0.0.1 ---
 def test_get_command(work):
     site = work / "package site"
@@ -5315,6 +5342,8 @@ def main():
         test_windows_calls(work)
         test_docs(work)
         test_examples(work)
+        test_checksums(work)
+        test_console_text(work)
         test_get_command(work)
         test_vscode_extension(work)
         test_warnings_and_calls(work)

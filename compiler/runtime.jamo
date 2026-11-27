@@ -129,6 +129,10 @@ end
 func write_rt_write(out: Assembler, rt: [int], text: RuntimeText)
     var at_to_stream = out.new_label()
     var at_next_part = out.new_label()
+    var at_console = out.new_label()
+    var at_console_part = out.new_label()
+    var at_back_off = out.new_label()
+    var at_whole_letters = out.new_label()
     var at_finished = out.new_label()
     out.place(rt[R_WRITE])
     out.hex("4883f9f4")  # cmp rcx, -12
@@ -163,6 +167,11 @@ func write_rt_write(out: Assembler, rt: [int], text: RuntimeText)
     out.hex("4883ec30")  # sub rsp, 48
     out.call_windows(DATA_GET_STD_HANDLE)
     out.hex("4889c7")  # mov rdi, rax
+    out.hex("4889f9")  # mov rcx, rdi
+    out.hex("488d542428")  # lea rdx, [rsp+40]
+    out.call_windows(DATA_GET_CONSOLE_MODE)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_not_equal(at_console)
     out.place(at_next_part)
     out.hex("4885f6")  # test rsi, rsi
     out.jump_if_equal(at_finished)
@@ -183,6 +192,44 @@ func write_rt_write(out: Assembler, rt: [int], text: RuntimeText)
     out.hex("4801c3")  # add rbx, rax
     out.hex("4829c6")  # sub rsi, rax
     out.jump(at_next_part)
+    out.place(at_console)
+    out.hex("4881ec10080000")  # sub rsp, 2064
+    out.place(at_console_part)
+    out.hex("4885f6")  # test rsi, rsi
+    out.jump_if_equal(at_finished)
+    out.hex("4989f0")  # mov r8, rsi
+    out.hex("b8e8030000")  # mov eax, 1000
+    out.hex("4939c0")  # cmp r8, rax
+    out.jump_if_at_most(at_whole_letters)
+    out.hex("4989c0")  # mov r8, rax
+    out.place(at_back_off)
+    out.hex("420fb60403")  # movzx eax, byte ptr [rbx+r8]
+    out.hex("25c0000000")  # and eax, 192
+    out.hex("3d80000000")  # cmp eax, 128
+    out.jump_if_not_equal(at_whole_letters)
+    out.hex("49ffc8")  # dec r8
+    out.jump_if_not_equal(at_back_off)
+    out.hex("41b8e8030000")  # mov r8d, 1000
+    out.place(at_whole_letters)
+    out.hex("4c89842408080000")  # mov qword ptr [rsp+2056], r8
+    out.hex("b9e9fd0000")  # mov ecx, 65001
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4d89c1")  # mov r9, r8
+    out.hex("4989d8")  # mov r8, rbx
+    out.hex("488d442430")  # lea rax, [rsp+48]
+    out.hex("4889442420")  # mov qword ptr [rsp+32], rax
+    out.hex("48c7442428e8030000")  # mov qword ptr [rsp+40], 1000
+    out.call_windows(DATA_MULTI_BYTE_TO_WIDE_CHAR)
+    out.hex("4889f9")  # mov rcx, rdi
+    out.hex("488d542430")  # lea rdx, [rsp+48]
+    out.hex("4189c0")  # mov r8d, eax
+    out.hex("4c8d8c2400080000")  # lea r9, [rsp+2048]
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.call_windows(DATA_WRITE_CONSOLE_W)
+    out.hex("488b842408080000")  # mov rax, qword ptr [rsp+2056]
+    out.hex("4801c3")  # add rbx, rax
+    out.hex("4829c6")  # sub rsi, rax
+    out.jump(at_console_part)
     out.place(at_finished)
     out.hex("488d65e8")  # lea rsp, [rbp-24]
     out.hex("5f")  # pop rdi
@@ -1779,6 +1826,7 @@ func write_rt_stdin_refill(out: Assembler, rt: [int], text: RuntimeText)
     var at_has_buffer = out.new_label()
     var at_no_input = out.new_label()
     var at_finished = out.new_label()
+    var at_console_input = out.new_label()
     out.place(rt[R_STDIN_REFILL])
     out.hex("55")  # push rbp
     out.hex("4889e5")  # mov rbp, rsp
@@ -1794,7 +1842,13 @@ func write_rt_stdin_refill(out: Assembler, rt: [int], text: RuntimeText)
     out.place(at_has_buffer)
     out.hex("48c7c1f6ffffff")  # mov rcx, -10
     out.call_windows(DATA_GET_STD_HANDLE)
+    out.hex("4889442430")  # mov qword ptr [rsp+48], rax
     out.hex("4889c1")  # mov rcx, rax
+    out.hex("488d542428")  # lea rdx, [rsp+40]
+    out.call_windows(DATA_GET_CONSOLE_MODE)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_not_equal(at_console_input)
+    out.hex("488b4c2430")  # mov rcx, qword ptr [rsp+48]
     out.hex("488b13")  # mov rdx, qword ptr [rbx]
     out.hex("41b800100000")  # mov r8d, 4096
     out.hex("4c8d4c2438")  # lea r9, [rsp+56]
@@ -1814,6 +1868,31 @@ func write_rt_stdin_refill(out: Assembler, rt: [int], text: RuntimeText)
     out.hex("5b")  # pop rbx
     out.hex("5d")  # pop rbp
     out.hex("c3")  # ret
+    out.place(at_console_input)
+    out.hex("4881ec400a0000")  # sub rsp, 2624
+    out.hex("488b8c24700a0000")  # mov rcx, qword ptr [rsp+2672]
+    out.hex("488d542440")  # lea rdx, [rsp+64]
+    out.hex("41b814050000")  # mov r8d, 1300
+    out.hex("4c8d4c2438")  # lea r9, [rsp+56]
+    out.hex("48c744243800000000")  # mov qword ptr [rsp+56], 0
+    out.hex("48c744242000000000")  # mov qword ptr [rsp+32], 0
+    out.call_windows(DATA_READ_CONSOLE_W)
+    out.hex("85c0")  # test eax, eax
+    out.jump_if_equal(at_no_input)
+    out.hex("b9e9fd0000")  # mov ecx, 65001
+    out.hex("31d2")  # xor edx, edx
+    out.hex("4c8d442440")  # lea r8, [rsp+64]
+    out.hex("448b4c2438")  # mov r9d, dword ptr [rsp+56]
+    out.hex("488b03")  # mov rax, qword ptr [rbx]
+    out.hex("4889442420")  # mov qword ptr [rsp+32], rax
+    out.hex("48c744242800100000")  # mov qword ptr [rsp+40], 4096
+    out.hex("48c744243000000000")  # mov qword ptr [rsp+48], 0
+    out.hex("48c744243800000000")  # mov qword ptr [rsp+56], 0
+    out.call_windows(DATA_WIDE_CHAR_TO_MULTI_BYTE)
+    out.hex("89c0")  # mov eax, eax
+    out.hex("48c7430800000000")  # mov qword ptr [rbx+8], 0
+    out.hex("48894310")  # mov qword ptr [rbx+16], rax
+    out.jump(at_finished)
 end
 
 # Answers with the next line of input, without its line ending, or "" when there's no more

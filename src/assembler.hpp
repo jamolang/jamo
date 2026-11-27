@@ -15,6 +15,8 @@ enum class DataRef {
     HeapHandle, CurrentLine, Builder, VisitHead, Stdin, Cleaner, Letters, ErrorText, CallTable, String, Import,
     Globals,  // Where the variables outside functions are, set at startup
     TryFrame,  // The newest open try's record, or 0
+    GetConsoleMode, WriteConsoleW,  // For printing to a console in any language
+    ReadConsoleW, WideCharToMultiByte,  // and typing into one
 };
 
 // A 4-byte gap in the code, to be filled with the distance from the end of the gap to the thing
@@ -219,6 +221,10 @@ public:
         int32(offset);
     }
     void mov_rax_rbp() { bytes({0x48, 0x89, 0xE8}); }
+    void load_rax_from_rsp(int offset) {                                                      // mov rax, [rsp+offset]
+        bytes({0x48, 0x8B, 0x84, 0x24});
+        int32(offset);
+    }
     void store_rcx_data(DataRef target) {                                                     // mov [rip+target], rcx
         bytes({0x48, 0x89, 0x0D});
         data_gap(target);

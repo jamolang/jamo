@@ -41,6 +41,10 @@ const DATA_STRING = 23
 const DATA_IMPORT = 24
 const DATA_GLOBALS = 25
 const DATA_TRY_FRAME = 26
+const DATA_GET_CONSOLE_MODE = 27
+const DATA_WRITE_CONSOLE_W = 28
+const DATA_READ_CONSOLE_W = 29
+const DATA_WIDE_CHAR_TO_MULTI_BYTE = 30
 
 # Which entry in the program's string table holds each fixed text the runtime uses
 struct RuntimeText
@@ -377,6 +381,12 @@ end
 
 func Assembler.mov_rax_rbp()
     self.hex("4889e8")
+end
+
+# mov rax, [rsp+offset]
+func Assembler.load_rax_from_rsp(offset: int)
+    self.hex("488b8424")
+    self.int32(offset)
 end
 
 func Assembler.mov_rax_rsp()

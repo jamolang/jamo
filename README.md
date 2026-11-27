@@ -243,7 +243,7 @@ The extension colors Jamo code and underlines mistakes in red as you type. Hover
 ## What Jamo can't do yet
 
 - It only runs on Windows.
-- Function values can't remember the variables around them yet (no closures).
+- A function written in place holds one expression, like `func(x: int): int => x * 2`. For more, write a named function.
 
 The end of the [guide](GUIDE.md#what-jamo-cant-do-yet) has the full list.
 

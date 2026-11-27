@@ -1,0 +1,3 @@
+lambda_unknown_name.jamo line 2: nothing has this name: y
+        var f = func(x: int): int => y
+                                     ^

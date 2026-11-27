@@ -67,6 +67,11 @@ to_stream:
     sub rsp, 48
     ! out.call_windows(DataRef::GetStdHandle);
     mov rdi, rax
+    mov rcx, rdi
+    lea rdx, [rsp+40]
+    ! out.call_windows(DataRef::GetConsoleMode);
+    test eax, eax
+    jne console
 next_part:
     test rsi, rsi
     je finished
@@ -87,6 +92,44 @@ next_part:
     add rbx, rax
     sub rsi, rax
     jmp next_part
+console:
+    sub rsp, 2064
+console_part:
+    test rsi, rsi
+    je finished
+    mov r8, rsi
+    mov eax, 1000
+    cmp r8, rax
+    jbe whole_letters
+    mov r8, rax
+back_off:
+    movzx eax, byte ptr [rbx+r8]
+    and eax, 192
+    cmp eax, 128
+    jne whole_letters
+    dec r8
+    jne back_off
+    mov r8d, 1000
+whole_letters:
+    mov qword ptr [rsp+2056], r8
+    mov ecx, 65001
+    xor edx, edx
+    mov r9, r8
+    mov r8, rbx
+    lea rax, [rsp+48]
+    mov qword ptr [rsp+32], rax
+    mov qword ptr [rsp+40], 1000
+    ! out.call_windows(DataRef::MultiByteToWideChar);
+    mov rcx, rdi
+    lea rdx, [rsp+48]
+    mov r8d, eax
+    lea r9, [rsp+2048]
+    mov qword ptr [rsp+32], 0
+    ! out.call_windows(DataRef::WriteConsoleW);
+    mov rax, qword ptr [rsp+2056]
+    add rbx, rax
+    sub rsi, rax
+    jmp console_part
 finished:
     lea rsp, [rbp-24]
     pop rdi
@@ -1435,7 +1478,13 @@ failed:
 has_buffer:
     mov rcx, -10
     ! out.call_windows(DataRef::GetStdHandle);
+    mov qword ptr [rsp+48], rax
     mov rcx, rax
+    lea rdx, [rsp+40]
+    ! out.call_windows(DataRef::GetConsoleMode);
+    test eax, eax
+    jne console_input
+    mov rcx, qword ptr [rsp+48]
     mov rdx, qword ptr [rbx]
     mov r8d, 4096
     lea r9, [rsp+56]
@@ -1455,6 +1504,31 @@ finished:
     pop rbx
     pop rbp
     ret
+console_input:
+    sub rsp, 2624
+    mov rcx, qword ptr [rsp+2672]
+    lea rdx, [rsp+64]
+    mov r8d, 1300
+    lea r9, [rsp+56]
+    mov qword ptr [rsp+56], 0
+    mov qword ptr [rsp+32], 0
+    ! out.call_windows(DataRef::ReadConsoleW);
+    test eax, eax
+    je no_input
+    mov ecx, 65001
+    xor edx, edx
+    lea r8, [rsp+64]
+    mov r9d, dword ptr [rsp+56]
+    mov rax, qword ptr [rbx]
+    mov qword ptr [rsp+32], rax
+    mov qword ptr [rsp+40], 4096
+    mov qword ptr [rsp+48], 0
+    mov qword ptr [rsp+56], 0
+    ! out.call_windows(DataRef::WideCharToMultiByte);
+    mov eax, eax
+    mov qword ptr [rbx+8], 0
+    mov qword ptr [rbx+16], rax
+    jmp finished
 
 @ read_line Answers with the next line of input, without its line ending, or "" when there's no more
     ! out.lea_data(RBX, DataRef::Stdin);

@@ -81,6 +81,7 @@ struct Variable {
     bool used = false;
     bool warn_if_unused = false;  // Only a var, since inputs and loop variables are often left unused on purpose
     Spot spot;
+    int capture = -1;             // Inside a function written in place, which of its captured values this is
 };
 
 class Checker {
@@ -130,6 +131,8 @@ public:
         for (size_t i = 0; i < program.functions.size(); i++) {
             if (program.functions[i].get() == setup) {
                 check_setup();
+            } else if (program.functions[i]->is_lambda) {
+                continue;  // Checked where it's written
             } else {
                 check_function(*program.functions[i]);
             }
@@ -579,7 +582,7 @@ private:
         copy->field_names = from->field_names;
         copy->field_spots = from->field_spots;
         copy->op = from->op;
-        copy->convert_to = from->convert_to;
+        copy->convert_to = substitute(from->convert_to, params, args);
         copy->depth = from->depth;
         for (const Type type : from->type_args) copy->type_args.push_back(substitute(type, params, args));
         copy->left = copy_expr(from->left.get(), params, args);
@@ -1226,8 +1229,25 @@ private:
             case ExprKind::EnumValue:
             case ExprKind::BuiltinCall:
             case ExprKind::FunctionValue:
-            case ExprKind::CallValue:
+            case ExprKind::Capture:
                 return expr.type;
+            case ExprKind::CallValue: {
+                if (!expr.truth) return expr.type;
+                expr.truth = false;
+                const Type callee = check_expression(*expr.left);
+                if (callee == Type::Unknown) {
+                    for (auto& input : expr.inputs) check_expression(*input);
+                    return Type::Unknown;
+                }
+                if (!program.types.is_function(callee)) {
+                    for (auto& input : expr.inputs) check_expression(*input);
+                    errors.add(expr.spot, "This is " + with_article(callee) + ", not a function, so it can't be called.");
+                    return Type::Unknown;
+                }
+                return check_value_call(expr, callee);
+            }
+            case ExprKind::Lambda:
+                return check_lambda(expr);
             case ExprKind::Index:
                 return check_index(expr);
             case ExprKind::Length:
@@ -1251,6 +1271,11 @@ private:
 
     Type check_name(Expr& expr) {
         const Variable* variable = find_variable(expr.name);
+        if (variable && variable->capture >= 0) {
+            expr.kind = ExprKind::Capture;
+            expr.number = static_cast<uint64_t>(variable->capture);
+            return variable->type;
+        }
         if (variable) {
             mark_used(expr.name);
             expr.slot = variable->slot;
@@ -1649,7 +1674,9 @@ private:
             given.push_back(check_wanting(*expr.inputs[i], has_wanted ? named->second->inputs[i].type : Type::Nothing));
         }
         if (find_variable(expr.name)) {
-            errors.add(expr.spot, expr.name + " is a variable, so it can't be called like a function.", expr.type_args.empty() ? "" : "A < with a > and ( after it reads as types, like first<int>(...). To compare, take away the ( ) after the >.");
+            const Type held = find_variable(expr.name)->type;
+            const std::string words = program.types.is_function(held) ? expr.name + " holds a function, which can't be given types." : expr.name + " is " + with_article(held) + ", not a function, so it can't be called.";
+            errors.add(expr.spot, words, expr.type_args.empty() ? "" : "A < with a > and ( after it reads as types, like first<int>(...). To compare, take away the ( ) after the >.");
             return Type::Unknown;
         }
         if (expr.name == "hash_of") return check_hash_of(expr, given);
@@ -1681,7 +1708,8 @@ private:
         const std::vector<Type> inputs = program.types.inputs_of(function);
         std::vector<Type> given;
         for (size_t i = 0; i < expr.inputs.size(); i++) given.push_back(check_wanting(*expr.inputs[i], i < inputs.size() ? inputs[i] : Type::Nothing));
-        const std::string what = expr.left->kind == ExprKind::Field ? "The field " + expr.name : expr.name;
+        const std::string what = expr.name.empty() ? "This function" : expr.left->kind == ExprKind::Field ? "The field " + expr.name : expr.name;
+        const std::string whose = expr.name.empty() ? "this function" : expr.name;
         if (given.size() != inputs.size()) {
             errors.add(expr.spot, what + " takes " + count_words(inputs.size()) + ", but this gives it " + std::to_string(given.size()) + ".");
             return program.types.answer_of(function);
@@ -1690,7 +1718,7 @@ private:
             if (given[i] == Type::Nothing) {
                 errors.add(expr.inputs[i]->spot, "This doesn't give back a value, so it can't be an input.");
             } else if (given[i] != Type::Unknown && given[i] != inputs[i]) {
-                errors.add(expr.inputs[i]->spot, "Input " + std::to_string(i + 1) + " of " + expr.name + " must be " + with_article(inputs[i]) + ", but this is " + with_article(given[i]) + ".");
+                errors.add(expr.inputs[i]->spot, "Input " + std::to_string(i + 1) + " of " + whose + " must be " + with_article(inputs[i]) + ", but this is " + with_article(given[i]) + ".");
             }
         }
         return program.types.answer_of(function);
@@ -1810,10 +1838,13 @@ private:
         }
     }
 
-    const Variable* find_variable(const std::string& name) const {
+    const Variable* find_variable(const std::string& name) {
         for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope) {
             const auto found = scope->find(name);
             if (found != scope->end()) return &found->second;
+        }
+        if (!lambdas.empty()) {
+            if (const Variable* captured = capture_into(lambdas.size() - 1, name)) return captured;
         }
         const auto global = global_places.find(name);
         if (global != global_places.end()) return &global_vars[global->second];
@@ -1881,6 +1912,124 @@ private:
     std::map<std::string, std::vector<int>> globals_read_by;
     bool quiet = false;                                  // A later copy of a generic, which gives no warnings
     std::vector<std::map<std::string, Variable>> scopes;
+    // --- Functions written in place ---
+    // Checking one puts aside the scopes around it. A name it doesn't have itself is looked for there, and if it's a
+    // variable, the function captures its value: the name joins the function's first scope with its capture number
+    struct LambdaFrame {
+        std::vector<std::map<std::string, Variable>> scopes;  // The scopes around the function
+        Function* current = nullptr;
+        std::string user;
+        int next_slot = 0;
+        int loops_open = 0;
+        std::vector<std::string> captured;
+    };
+    std::vector<LambdaFrame> lambdas;
+    int lambda_count = 0;
+
+    // The scopes of function written in place number level: the ones being checked, or those put aside by the one inside it
+    std::vector<std::map<std::string, Variable>>& scopes_of(size_t level) { return level + 1 == lambdas.size() ? scopes : lambdas[level + 1].scopes; }
+
+    // Captures the variable name from around function written in place number level, answering its capture there
+    const Variable* capture_into(size_t level, const std::string& name) {
+        LambdaFrame& frame = lambdas[level];
+        Variable* outer = nullptr;
+        for (auto scope = frame.scopes.rbegin(); scope != frame.scopes.rend() && !outer; ++scope) {
+            const auto found = scope->find(name);
+            if (found != scope->end()) outer = &found->second;
+        }
+        if (!outer && level > 0) outer = const_cast<Variable*>(capture_into(level - 1, name));
+        if (!outer) return nullptr;
+        outer->used = true;
+        Variable captured;
+        captured.type = outer->type;
+        captured.slot = -1;
+        captured.read_only = true;
+        captured.used = true;
+        captured.spot = outer->spot;
+        captured.capture = static_cast<int>(frame.captured.size());
+        frame.captured.push_back(name);
+        auto& place = scopes_of(level).front();
+        place[name] = captured;
+        return &place[name];
+    }
+
+    Type check_lambda(Expr& expr) {
+        if (!expr.text.empty()) return expr.type;
+        auto function = std::make_unique<Function>();
+        function->name = "(lambda " + std::to_string(++lambda_count) + ")";
+        function->spot = expr.spot;
+        function->is_lambda = true;
+        function->inputs.push_back({"(block)", expr.spot, Type::Int});
+        for (size_t i = 0; i < expr.field_names.size(); i++) {
+            check_type_exists(expr.type_args[i], expr.field_spots[i]);
+            function->inputs.push_back({expr.field_names[i], expr.field_spots[i], expr.type_args[i]});
+        }
+        LambdaFrame frame;
+        frame.scopes = std::move(scopes);
+        frame.current = current;
+        frame.user = user;
+        frame.next_slot = next_slot;
+        frame.loops_open = loops_open;
+        lambdas.push_back(std::move(frame));
+        current = function.get();
+        user = function->name;
+        next_slot = 0;
+        loops_open = 0;
+        scopes.clear();
+        scopes.emplace_back();
+        scopes.emplace_back();
+        for (const Input& input : function->inputs) {
+            if (scopes.back().count(input.name)) {
+                errors.add(input.spot, "There's already an input called " + input.name + ".");
+            } else {
+                scopes.back()[input.name] = {input.type, next_slot, false, false, false, input.spot};
+            }
+            next_slot++;
+        }
+        const Type wanted = expr.truth ? expr.convert_to : Type::Nothing;
+        const Type got = check_wanting(*expr.left, wanted);
+        Type answer = expr.truth ? expr.convert_to : got;
+        if (expr.truth && got != Type::Unknown && got != expr.convert_to) {
+            if (got == Type::Nothing) {
+                errors.add(expr.left->spot, "This doesn't give back a value, but the function says it gives back " + with_article(expr.convert_to) + ".");
+            } else if (expr.convert_to == Type::Nothing) {
+                errors.add(expr.left->spot, "This gives back " + with_article(got) + ", but the function says it gives back nothing.");
+            } else {
+                errors.add(expr.left->spot, "This gives back " + with_article(got) + ", but the function says it gives back " + with_article(expr.convert_to) + ".");
+            }
+        }
+        if (answer == Type::Unknown) answer = Type::Nothing;
+        auto stmt = std::make_unique<Stmt>();
+        stmt->kind = answer == Type::Nothing ? StmtKind::Call : StmtKind::Return;
+        stmt->spot = expr.spot;
+        stmt->value = std::move(expr.left);
+        function->body.push_back(std::move(stmt));
+        function->return_type = answer;
+        function->slot_count = next_slot;
+        const std::vector<std::string> captured = lambdas.back().captured;
+        scopes = std::move(lambdas.back().scopes);
+        current = lambdas.back().current;
+        user = lambdas.back().user;
+        next_slot = lambdas.back().next_slot;
+        loops_open = lambdas.back().loops_open;
+        lambdas.pop_back();
+        // Each captured value is read where the function is written, as a variable there
+        for (const std::string& name : captured) {
+            auto source = std::make_unique<Expr>();
+            source->kind = ExprKind::Name;
+            source->spot = expr.spot;
+            source->name = name;
+            source->type = check_expression(*source);
+            expr.inputs.push_back(std::move(source));
+        }
+        std::vector<Type> inputs(expr.type_args.begin(), expr.type_args.end());
+        expr.text = function->name;
+        note_call(function->name);
+        functions[function->name] = function.get();
+        program.functions.push_back(std::move(function));
+        return program.types.function_of(inputs, answer);
+    }
+
     Function* current = nullptr;
     int next_slot = 0;
     int loops_open = 0;

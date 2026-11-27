@@ -24,6 +24,7 @@ enum class TokenKind {
     Equal, NotEqual, Less, Greater, LessEqual, GreaterEqual,
     // Keywords added after the rest, so the numbers above stay the same
     Try, Catch,
+    Arrow,  // => in a function written in place
 };
 
 struct Token {

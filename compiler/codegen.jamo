@@ -326,7 +326,7 @@ func Generator.find_calls(place: int, called: [string])
     if e.kind == EX_BUILTIN_CALL and e.name == "callback"
         called.add(e.text)
     end
-    if e.kind == EX_FUNCTION_VALUE
+    if e.kind == EX_FUNCTION_VALUE or e.kind == EX_LAMBDA
         called.add(e.text)
     end
     if e.kind == EX_METHOD_CALL and self.is_struct(self.ex(e.left).type)
@@ -1854,21 +1854,37 @@ func Generator.write_expression(place: int)
         if len(e.inputs) > 0
             out.add_rsp(len(e.inputs) * WORD_SIZE)
         end
-    elif kind == EX_FUNCTION_VALUE
+    elif kind == EX_FUNCTION_VALUE or kind == EX_LAMBDA
+        # A block with the code's address, then any captured values
+        out.note_line(expr_place(e))
+        out.mov_rcx_number((1 + len(e.inputs)) * WORD_SIZE)
+        out.call(self.rt[R_ALLOC])
+        out.push_rax()
         out.lea_rax_label(self.function_labels.get(e.text))
+        out.store_rax_in_new_struct(0)
+        for i in 0..len(e.inputs)
+            self.write_expression(e.inputs[i])
+            out.store_rax_in_new_struct(i + 1)
+        end
+        out.pop_rax()
+    elif kind == EX_CAPTURE
+        self.load_slot_rax(0)
+        out.load_rax_field(e.number + 1)
     elif kind == EX_CALL_VALUE
-        # The same as a call by name, but to the address the value holds. r11 holds nothing in Jamo code
+        # The block goes first, under the inputs, where a function written in place finds it as its first input.
+        # Named functions never look that far. r11 holds nothing in Jamo code
+        self.write_expression(e.left)
+        out.push_rax()
         for input in e.inputs
             self.write_expression(input)
             out.push_rax()
         end
-        self.write_expression(e.left)
+        out.load_rax_from_rsp(len(e.inputs) * WORD_SIZE)
+        out.load_rax_field(0)
         out.mov_r11_rax()
         out.call_r11()
         self.note_call_site(e)
-        if len(e.inputs) > 0
-            out.add_rsp(len(e.inputs) * WORD_SIZE)
-        end
+        out.add_rsp((len(e.inputs) + 1) * WORD_SIZE)
     end
 end
 

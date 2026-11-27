@@ -29,7 +29,7 @@ bool leaves_line_open(TokenKind kind) {
         case TokenKind::Plus: case TokenKind::Minus: case TokenKind::Star: case TokenKind::Slash: case TokenKind::Percent:
         case TokenKind::Equal: case TokenKind::NotEqual: case TokenKind::Less: case TokenKind::Greater:
         case TokenKind::LessEqual: case TokenKind::GreaterEqual:
-        case TokenKind::And: case TokenKind::Or: case TokenKind::Not:
+        case TokenKind::And: case TokenKind::Or: case TokenKind::Not: case TokenKind::Arrow:
             return true;
         default:
             return false;
@@ -272,6 +272,9 @@ std::vector<Token> read_tokens(const std::string& source, Errors& errors) {
             at += 2;
         } else if (letter == '>' && next == '=') {
             add(TokenKind::GreaterEqual, at, 2);
+            at += 2;
+        } else if (letter == '=' && next == '>') {
+            add(TokenKind::Arrow, at, 2);
             at += 2;
         } else {
             TokenKind kind = TokenKind::End;

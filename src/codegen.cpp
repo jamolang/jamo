@@ -194,7 +194,7 @@ private:
         if (!expr) return;
         if (expr->kind == ExprKind::Call) called.push_back(expr->name);
         if (expr->kind == ExprKind::BuiltinCall && expr->name == "callback") called.push_back(expr->text);
-        if (expr->kind == ExprKind::FunctionValue) called.push_back(expr->text);
+        if (expr->kind == ExprKind::FunctionValue || expr->kind == ExprKind::Lambda) called.push_back(expr->text);
         if (expr->kind == ExprKind::MethodCall && program.types.is_struct(expr->left->type)) called.push_back(program.types.name(expr->left->type) + "." + expr->name);
         find_calls(expr->left.get(), called);
         find_calls(expr->right.get(), called);
@@ -1360,20 +1360,42 @@ private:
                 if (!expr.inputs.empty()) out.add_rsp(static_cast<int>(expr.inputs.size()) * WORD_SIZE);
                 break;
             case ExprKind::FunctionValue:
+            case ExprKind::Lambda: {
+                // A block with the code's address, then any captured values
+                out.note_line(place_of(expr.spot));
+                out.mov_rcx_number(static_cast<int>(1 + expr.inputs.size()) * WORD_SIZE);
+                out.call(runtime.alloc);
+                out.push_rax();
                 out.lea_rax_label(function_labels.at(expr.text));
+                out.store_rax_in_new_struct(0);
+                for (size_t i = 0; i < expr.inputs.size(); i++) {
+                    write_expression(*expr.inputs[i]);
+                    out.store_rax_in_new_struct(static_cast<int>(i) + 1);
+                }
+                out.pop_rax();
                 break;
-            case ExprKind::CallValue:
-                // The same as a call by name, but to the address the value holds. r11 holds nothing in Jamo code
+            }
+            case ExprKind::Capture:
+                load_slot_rax(0);
+                out.load_rax_field(static_cast<int>(expr.number) + 1);
+                break;
+            case ExprKind::CallValue: {
+                // The block goes first, under the inputs, where a function written in place finds it as its first
+                // input. Named functions never look that far. r11 holds nothing in Jamo code
+                write_expression(*expr.left);
+                out.push_rax();
                 for (const auto& input : expr.inputs) {
                     write_expression(*input);
                     out.push_rax();
                 }
-                write_expression(*expr.left);
+                out.load_rax_from_rsp(static_cast<int>(expr.inputs.size()) * WORD_SIZE);
+                out.load_rax_field(0);
                 out.mov_r11_rax();
                 out.call_r11();
                 note_call_site(expr.spot);
-                if (!expr.inputs.empty()) out.add_rsp(static_cast<int>(expr.inputs.size()) * WORD_SIZE);
+                out.add_rsp(static_cast<int>(expr.inputs.size() + 1) * WORD_SIZE);
                 break;
+            }
         }
     }
 

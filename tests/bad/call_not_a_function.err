@@ -1,0 +1,12 @@
+call_not_a_function.jamo line 4: n is an int, not a function, so it can't be called.
+        print(n(1))
+              ^^^^
+call_not_a_function.jamo line 6: This is an int, not a function, so it can't be called.
+        print(items[0](5))
+              ^^^^^^^^^^^
+call_not_a_function.jamo line 8: Input 1 of f must be an int, but this is a string.
+        print(f("a"))
+                ^^^
+call_not_a_function.jamo line 9: f takes 1 input, but this gives it 2.
+        print(f(1, 2))
+              ^^^^^^^

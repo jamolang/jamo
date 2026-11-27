@@ -15,7 +15,11 @@ const MOST_CALLBACK_INPUTS = 4
 const MOST_GENERIC_COPIES = 500
 const MATCH_NUMBERS = "Use float(x) or int(x) to make them match."
 
+# A captured value's slot, so it counts as found, unlike -1
+const CAPTURE_SLOT = -1000000
+
 struct Variable
+    capture: int           # Inside a function written in place, which of its captured values this is, or -1
     type: int
     slot: int
     read_only: bool
@@ -78,6 +82,20 @@ struct Checker
     call_lists: [[string]]
     reads_by: Dict
     read_lists: [[int]]
+    lambdas: [LambdaFrame]
+    lambda_count: int
+end
+
+# Checking a function written in place puts aside the scopes around it. A name it doesn't have itself is looked for
+# there, and if it's a variable, the function captures its value: the name joins the function's first scope with its
+# capture number
+struct LambdaFrame
+    scopes: [Scope]
+    current: Function
+    user: string
+    next_slot: int
+    loops_open: int
+    captured: [string]
 end
 
 func new_scope(): Scope
@@ -210,7 +228,7 @@ end
 # --- Starting ---
 
 func check_program(program: Program, errors: Errors)
-    var c = Checker{program: program, errors: errors, names: new_dict(), claims: [], function_places: new_dict(), function_list: [], constants: new_dict(), constant_state: new_dict(), structs: new_dict(), enums: new_dict(), scopes: [], current: new_function(), next_slot: 0, loops_open: 0, generic_structs: new_dict(), generic_functions: new_dict(), generic_methods: new_dict(), generic_list: [], copy_of: new_dict(), warned_patterns: [], copies_made: 0, quiet: false, made_from: new_dict(), made_by: [], made_lines: [], made_columns: [], made_lengths: [], made_files: [], pointed_at: [], global_vars: [], global_places: new_dict(), global_order: new_dict(), setting_up: -1, user: "", calls_by: new_dict(), call_lists: [], reads_by: new_dict(), read_lists: []}
+    var c = Checker{program: program, errors: errors, names: new_dict(), claims: [], function_places: new_dict(), function_list: [], constants: new_dict(), constant_state: new_dict(), structs: new_dict(), enums: new_dict(), scopes: [], current: new_function(), next_slot: 0, loops_open: 0, generic_structs: new_dict(), generic_functions: new_dict(), generic_methods: new_dict(), generic_list: [], copy_of: new_dict(), warned_patterns: [], copies_made: 0, quiet: false, made_from: new_dict(), made_by: [], made_lines: [], made_columns: [], made_lengths: [], made_files: [], pointed_at: [], global_vars: [], global_places: new_dict(), global_order: new_dict(), setting_up: -1, user: "", calls_by: new_dict(), call_lists: [], reads_by: new_dict(), read_lists: [], lambdas: [], lambda_count: 0}
     c.check()
 end
 
@@ -325,7 +343,8 @@ func Checker.check()
         if function.name == SETUP_NAME
             setup = function
             self.check_setup(function)
-        else
+        elif not function.is_lambda
+            # A function written in place is checked where it's written
             self.check_function(function)
         end
     end
@@ -421,7 +440,7 @@ func Checker.check_setup(setup: Function)
         if not self.global_order.has(s.name) or self.global_order.get(s.name) != i
             continue
         end
-        self.global_vars.add(Variable{type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: false, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+        self.global_vars.add(Variable{capture: -1, type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: false, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
         self.global_places.set(s.name, len(self.global_vars) - 1)
     end
     self.setting_up = -1
@@ -1029,7 +1048,7 @@ func Checker.copy_expr(place: int, params: [int], args: [int]): int
     e.field_columns = copy_ints(from.field_columns)
     e.field_lengths = copy_ints(from.field_lengths)
     e.op = from.op
-    e.convert_to = from.convert_to
+    e.convert_to = self.substitute(from.convert_to, params, args)
     e.depth = from.depth
     for type in from.type_args
         e.type_args.add(self.substitute(type, params, args))
@@ -1418,7 +1437,7 @@ func Checker.check_function(function: Function)
         if scope.places.has(input.name)
             self.add(input.line, input.column, input.length, function.file, "There's already an input called " + input.name + ".", "")
         else
-            self.declare(input.name, Variable{type: input.type, slot: self.next_slot, read_only: function.owner != TYPE_NOTHING and self.next_slot == 0, used: false, warn_if_unused: false, line: input.line, column: input.column, length: input.length, file: function.file})
+            self.declare(input.name, Variable{capture: -1, type: input.type, slot: self.next_slot, read_only: function.owner != TYPE_NOTHING and self.next_slot == 0, used: false, warn_if_unused: false, line: input.line, column: input.column, length: input.length, file: function.file})
         end
         self.next_slot += 1
     end
@@ -1634,7 +1653,7 @@ func Checker.check_var(s: Stmt)
     end
     s.slot = self.next_slot
     self.next_slot += 1
-    self.declare(s.name, Variable{type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+    self.declare(s.name, Variable{capture: -1, type: type, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
 end
 
 # The try part, then the catch part with its variable holding the error's words. A try keeps 8 slots for
@@ -1650,7 +1669,7 @@ func Checker.check_try(s: Stmt)
         if self.constants.has(s.name)
             self.add(s.name_line, s.name_column, s.name_length, s.file, s.name + " is already a constant, so a catch can't use that name.", "Pick a different name.")
         else
-            self.declare(s.name, Variable{type: TYPE_STRING, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+            self.declare(s.name, Variable{capture: -1, type: TYPE_STRING, slot: s.slot, read_only: false, used: false, warn_if_unused: true, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
         end
     end
     self.check_statements(s.other_body)
@@ -1760,7 +1779,7 @@ func Checker.check_for(s: Stmt)
     s.end_slot = self.next_slot
     self.next_slot += 1
     self.scopes.add(new_scope())
-    self.declare(s.name, Variable{type: item_type, slot: s.slot, read_only: true, used: false, warn_if_unused: false, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
+    self.declare(s.name, Variable{capture: -1, type: item_type, slot: s.slot, read_only: true, used: false, warn_if_unused: false, line: s.name_line, column: s.name_column, length: s.name_length, file: s.file})
     self.loops_open += 1
     self.check_statements(s.body)
     self.warn_about_unused_variables()
@@ -1980,8 +1999,30 @@ func Checker.work_out_type(place: int): int
         return self.check_field(place)
     elif kind == EX_STRUCT_LITERAL
         return self.check_struct_literal(place)
-    elif kind == EX_ENUM_VALUE or kind == EX_BUILTIN_CALL or kind == EX_FUNCTION_VALUE or kind == EX_CALL_VALUE
+    elif kind == EX_ENUM_VALUE or kind == EX_BUILTIN_CALL or kind == EX_FUNCTION_VALUE or kind == EX_CAPTURE
         return e.type
+    elif kind == EX_CALL_VALUE
+        if not e.truth
+            return e.type
+        end
+        e.truth = false
+        var callee = self.check_expression(e.left)
+        if callee == TYPE_UNKNOWN
+            for input in e.inputs
+                self.check_expression(input)
+            end
+            return TYPE_UNKNOWN
+        end
+        if not self.program.types.is_function(callee)
+            for input in e.inputs
+                self.check_expression(input)
+            end
+            self.add_at(e, "This is " + self.with_article(callee) + ", not a function, so it can't be called.", "")
+            return TYPE_UNKNOWN
+        end
+        return self.check_value_call(place, callee)
+    elif kind == EX_LAMBDA
+        return self.check_lambda(place)
     elif kind == EX_INDEX
         return self.check_index(place)
     elif kind == EX_LENGTH
@@ -2006,6 +2047,11 @@ end
 func Checker.check_name(place: int): int
     var e = self.ex(place)
     var found = self.find_variable(e.name)
+    if found.capture >= 0
+        e.kind = EX_CAPTURE
+        e.number = found.capture
+        return found.type
+    end
     if found.slot != -1
         self.mark_used(e.name)
         e.slot = found.slot
@@ -2536,7 +2582,12 @@ func Checker.check_call(place: int): int
         if len(e.type_args) > 0
             hint = "A < with a > and ( after it reads as types, like first<int>(...). To compare, take away the ( ) after the >."
         end
-        self.add_at(e, e.name + " is a variable, so it can't be called like a function.", hint)
+        var held = self.find_variable(e.name).type
+        var words = e.name + " is " + self.with_article(held) + ", not a function, so it can't be called."
+        if self.program.types.is_function(held)
+            words = e.name + " holds a function, which can't be given types."
+        end
+        self.add_at(e, words, hint)
         return TYPE_UNKNOWN
     end
     if e.name == "hash_of"
@@ -2580,7 +2631,11 @@ func Checker.check_value_call(place: int, function: int): int
         given.add(self.check_wanting(e.inputs[i], wanted))
     end
     var what = e.name
-    if self.ex(e.left).kind == EX_FIELD
+    var whose = e.name
+    if e.name == ""
+        what = "This function"
+        whose = "this function"
+    elif self.ex(e.left).kind == EX_FIELD
         what = "The field " + e.name
     end
     if len(given) != len(inputs)
@@ -2591,7 +2646,7 @@ func Checker.check_value_call(place: int, function: int): int
         if given[i] == TYPE_NOTHING
             self.add_at(self.ex(e.inputs[i]), "This doesn't give back a value, so it can't be an input.", "")
         elif given[i] != TYPE_UNKNOWN and given[i] != inputs[i]
-            self.add_at(self.ex(e.inputs[i]), "Input " + string(i + 1) + " of " + e.name + " must be " + self.with_article(inputs[i]) + ", but this is " + self.with_article(given[i]) + ".", "")
+            self.add_at(self.ex(e.inputs[i]), "Input " + string(i + 1) + " of " + whose + " must be " + self.with_article(inputs[i]) + ", but this is " + self.with_article(given[i]) + ".", "")
         end
     end
     return entry.element
@@ -2741,10 +2796,154 @@ func Checker.find_variable(name: string): Variable
         end
         i -= 1
     end
+    if len(self.lambdas) > 0
+        var captured = self.capture_into(len(self.lambdas) - 1, name)
+        if captured.slot != -1
+            return captured
+        end
+    end
     if self.global_places.has(name)
         return self.global_vars[self.global_places.get(name)]
     end
-    return Variable{type: TYPE_NOTHING, slot: -1, read_only: false, used: false, warn_if_unused: false, line: 0, column: 0, length: 1, file: -1}
+    return Variable{capture: -1, type: TYPE_NOTHING, slot: -1, read_only: false, used: false, warn_if_unused: false, line: 0, column: 0, length: 1, file: -1}
+end
+
+# --- Functions written in place ---
+
+# The scopes of function written in place number level: the ones being checked, or those put aside by the one inside it
+func Checker.scopes_of(level: int): [Scope]
+    if level + 1 == len(self.lambdas)
+        return self.scopes
+    end
+    return self.lambdas[level + 1].scopes
+end
+
+# Captures the variable name from around function written in place number level, answering its capture there.
+# Not found has slot -1; a capture has slot CAPTURE_SLOT
+func Checker.capture_into(level: int, name: string): Variable
+    var frame = self.lambdas[level]
+    var outer = Variable{capture: -1, type: TYPE_NOTHING, slot: -1, read_only: false, used: false, warn_if_unused: false, line: 0, column: 0, length: 1, file: -1}
+    var i = len(frame.scopes) - 1
+    while i >= 0 and outer.slot == -1
+        var scope = frame.scopes[i]
+        if scope.places.has(name)
+            outer = scope.variables[scope.places.get(name)]
+        end
+        i -= 1
+    end
+    if outer.slot == -1 and level > 0
+        outer = self.capture_into(level - 1, name)
+    end
+    if outer.slot == -1
+        return outer
+    end
+    outer.used = true
+    var captured = Variable{capture: len(frame.captured), type: outer.type, slot: CAPTURE_SLOT, read_only: true, used: true, warn_if_unused: false, line: outer.line, column: outer.column, length: outer.length, file: outer.file}
+    frame.captured.add(name)
+    var place = self.scopes_of(level)[0]
+    if place.places.has(name)
+        place.variables[place.places.get(name)] = captured
+    else
+        place.places.set(name, len(place.variables))
+        place.names.add(name)
+        place.variables.add(captured)
+    end
+    return captured
+end
+
+func Checker.check_lambda(place: int): int
+    var e = self.ex(place)
+    if e.text != ""
+        return e.type
+    end
+    self.lambda_count += 1
+    var function = new_function()
+    function.name = "(lambda " + string(self.lambda_count) + ")"
+    function.line = e.line
+    function.column = e.column
+    function.length = e.length
+    function.file = e.file
+    function.is_lambda = true
+    function.inputs.add(Input{name: "(block)", line: e.line, column: e.column, length: e.length, type: TYPE_INT})
+    for i in 0..len(e.field_names)
+        self.check_type_exists(e.type_args[i], e.field_lines[i], e.field_columns[i], e.field_lengths[i], e.file)
+        function.inputs.add(Input{name: e.field_names[i], line: e.field_lines[i], column: e.field_columns[i], length: e.field_lengths[i], type: e.type_args[i]})
+    end
+    self.lambdas.add(LambdaFrame{scopes: self.scopes, current: self.current, user: self.user, next_slot: self.next_slot, loops_open: self.loops_open, captured: []})
+    self.current = function
+    self.user = function.name
+    self.next_slot = 0
+    self.loops_open = 0
+    self.scopes = [new_scope(), new_scope()]
+    for input in function.inputs
+        var scope = self.scopes[len(self.scopes) - 1]
+        if scope.places.has(input.name)
+            self.add(input.line, input.column, input.length, e.file, "There's already an input called " + input.name + ".", "")
+        else
+            self.declare(input.name, Variable{capture: -1, type: input.type, slot: self.next_slot, read_only: false, used: false, warn_if_unused: false, line: input.line, column: input.column, length: input.length, file: e.file})
+        end
+        self.next_slot += 1
+    end
+    var wanted = TYPE_NOTHING
+    if e.truth
+        wanted = e.convert_to
+    end
+    var got = self.check_wanting(e.left, wanted)
+    var answer = got
+    if e.truth
+        answer = e.convert_to
+    end
+    if e.truth and got != TYPE_UNKNOWN and got != e.convert_to
+        var body = self.ex(e.left)
+        if got == TYPE_NOTHING
+            self.add_at(body, "This doesn't give back a value, but the function says it gives back " + self.with_article(e.convert_to) + ".", "")
+        elif e.convert_to == TYPE_NOTHING
+            self.add_at(body, "This gives back " + self.with_article(got) + ", but the function says it gives back nothing.", "")
+        else
+            self.add_at(body, "This gives back " + self.with_article(got) + ", but the function says it gives back " + self.with_article(e.convert_to) + ".", "")
+        end
+    end
+    if answer == TYPE_UNKNOWN
+        answer = TYPE_NOTHING
+    end
+    var stmt_kind = ST_RETURN
+    if answer == TYPE_NOTHING
+        stmt_kind = ST_CALL
+    end
+    var stmt = self.program.new_stmt(stmt_kind, e.line, e.column, e.length)
+    var s = self.st(stmt)
+    s.file = e.file
+    s.value = e.left
+    e.left = -1
+    function.body.add(stmt)
+    function.return_type = answer
+    function.slot_count = self.next_slot
+    var frame = self.lambdas.pop()
+    var captured = frame.captured
+    self.scopes = frame.scopes
+    self.current = frame.current
+    self.user = frame.user
+    self.next_slot = frame.next_slot
+    self.loops_open = frame.loops_open
+    # Each captured value is read where the function is written, as a variable there
+    for name in captured
+        var source = self.program.new_expr(EX_NAME, e.line, e.column, e.length)
+        var src = self.ex(source)
+        src.file = e.file
+        src.name = name
+        src.type = self.check_expression(source)
+        e.inputs.add(source)
+    end
+    var inputs: [int] = []
+    for type in e.type_args
+        inputs.add(type)
+    end
+    e.text = function.name
+    self.note_call(function.name)
+    self.function_places.set(function.name, len(self.function_list))
+    self.function_list.add(function)
+    self.program.functions.add(function)
+    return self.program.types.function_of(inputs, answer)
 end
 
 func Checker.report_unknown_name(name: string, line: int, column: int, length: int, file: int, fallback: string)

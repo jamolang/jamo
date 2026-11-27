@@ -36,6 +36,9 @@ const EX_BUILTIN_CALL = 18
 # A function's name used as a value (its name in text), and a call through a function value in left
 const EX_FUNCTION_VALUE = 19
 const EX_CALL_VALUE = 20
+# A function written in place, and a captured value read inside one. See src/ast.hpp
+const EX_LAMBDA = 21
+const EX_CAPTURE = 22
 
 # Operators, numbered like BinaryOp
 const OP_ADD = 0
@@ -191,6 +194,7 @@ struct Function
     type_param_columns: [int]
     type_param_lengths: [int]
     slot_count: int
+    is_lambda: bool        # Made by the checker from a function written in place, whose first input is its block
 end
 
 struct StructDecl
@@ -394,5 +398,5 @@ func Program.new_stmt(kind: int, line: int, column: int, length: int): int
 end
 
 func new_function(): Function
-    return Function{name: "", line: 0, column: 0, length: 1, file: -1, owner: TYPE_NOTHING, owner_line: 0, owner_column: 0, owner_length: 1, inputs: [], return_type: TYPE_NOTHING, dll: "", input_is_i32: [], input_is_f32: [], returns_i32: false, returns_f32: false, body: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: [], slot_count: 0}
+    return Function{name: "", line: 0, column: 0, length: 1, file: -1, owner: TYPE_NOTHING, owner_line: 0, owner_column: 0, owner_length: 1, inputs: [], return_type: TYPE_NOTHING, dll: "", input_is_i32: [], input_is_f32: [], returns_i32: false, returns_f32: false, body: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: [], slot_count: 0, is_lambda: false}
 end

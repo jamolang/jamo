@@ -23,7 +23,7 @@ const CLEANER_SIZE = 432
 const LETTER_SIZE = 16
 # A window program's run error, kept for its message box: the length, then the text
 const ERROR_TEXT_SIZE = 4104
-const DATA_PLACES = 27
+const DATA_PLACES = 31
 
 func round_up(value: int, step: int): int
     return (value + step - 1) / step * step
@@ -68,8 +68,8 @@ struct DataSection
 end
 
 func build_data_section(rva: int, g: Generator): DataSection
-    var names = ["GetStdHandle", "WriteFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "CreateFileW", "ReadFile", "CloseHandle", "GetFileAttributesW", "GetCommandLineW", "MultiByteToWideChar", "HeapFree"]
-    var refs = [DATA_GET_STD_HANDLE, DATA_WRITE_FILE, DATA_EXIT_PROCESS, DATA_GET_PROCESS_HEAP, DATA_HEAP_ALLOC, DATA_CREATE_FILE_W, DATA_READ_FILE, DATA_CLOSE_HANDLE, DATA_GET_FILE_ATTRIBUTES_W, DATA_GET_COMMAND_LINE_W, DATA_MULTI_BYTE_TO_WIDE_CHAR, DATA_HEAP_FREE]
+    var names = ["GetStdHandle", "WriteFile", "ExitProcess", "GetProcessHeap", "HeapAlloc", "CreateFileW", "ReadFile", "CloseHandle", "GetFileAttributesW", "GetCommandLineW", "MultiByteToWideChar", "HeapFree", "GetConsoleMode", "WriteConsoleW", "ReadConsoleW", "WideCharToMultiByte"]
+    var refs = [DATA_GET_STD_HANDLE, DATA_WRITE_FILE, DATA_EXIT_PROCESS, DATA_GET_PROCESS_HEAP, DATA_HEAP_ALLOC, DATA_CREATE_FILE_W, DATA_READ_FILE, DATA_CLOSE_HANDLE, DATA_GET_FILE_ATTRIBUTES_W, DATA_GET_COMMAND_LINE_W, DATA_MULTI_BYTE_TO_WIDE_CHAR, DATA_HEAP_FREE, DATA_GET_CONSOLE_MODE, DATA_WRITE_CONSOLE_W, DATA_READ_CONSOLE_W, DATA_WIDE_CHAR_TO_MULTI_BYTE]
     # Only a window program loads MessageBoxA, so only it imports these
     var window = g.cleaner_mode / WINDOW_PROGRAM % 2 == 1
     if window
@@ -357,5 +357,23 @@ func build_exe(g: Generator): Bytes
     fill_to(out, data_file_at)
     out.add_text(data.bytes.text())
     fill_to(out, data_file_at + data_file_size)
+    write_checksum(out)
     return out
+end
+
+# The PE checksum: the file's 16-bit words added with their carries folded back in, plus the file's size. Windows
+# doesn't need it to run a program, but antivirus programs trust files that have one, and Windows Defender's machine
+# learning took Jamo programs without one for malware
+const CHECKSUM_AT = 152
+
+func write_checksum(file: Bytes)
+    var sum = 0
+    var i = 0
+    while i + 1 < file.used
+        sum += peek_u16(file.buffer, i)
+        sum = sum % 65536 + sum / 65536
+        i += 2
+    end
+    sum = sum % 65536 + sum / 65536
+    file.set_u32(CHECKSUM_AT, sum + file.used)
 end

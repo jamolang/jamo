@@ -1,0 +1,3 @@
+lambda_same_input.jamo line 2: There's already an input called x.
+        var f = func(x: int, x: int): int => x
+                             ^

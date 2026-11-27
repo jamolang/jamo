@@ -1,0 +1,8 @@
+func show(x: int)
+    print(x)
+end
+
+func main()
+    var f = func(x: int): int => show(x)
+    print(f(1))
+end
