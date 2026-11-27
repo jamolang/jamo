@@ -2,7 +2,7 @@
 
 What changed in each version of Jamo.
 
-## Not released yet
+## 0.7.0
 
 - **A debugger.** `jamo debug game.jamo` stops at breakpoints, steps line by line, into calls and out of them, and shows the calls the program is in and every variable, including what's inside structs, arrays and enums. In VS Code, click by a line number and press F5 for the same thing with the variables panel and step buttons. A program built with `--debug` runs a little slower, only while debugging.
 - A file used with `as` owns its structs and enums too, so two files can each have an `Enemy`. Other files write `foes.Enemy` as a type, `foes.Enemy{hp: 3}` to make one, and `foes.Mood.CALM`.
