@@ -1665,6 +1665,7 @@ func Parser.parse_nested_function(): int
         return -1
     end
     var value = self.program.new_expr(EX_LAMBDA, keyword.line, keyword.column, keyword.length)
+    self.ex(value).name = name.text
     if self.parse_lambda_inputs(value) < 0
         return -1
     end

@@ -446,7 +446,7 @@ private:
         for (int touched = PAGE_SIZE; touched < local_bytes; touched += PAGE_SIZE) out.touch_stack_below(touched);
         if (local_bytes > 0) out.sub_rsp(local_bytes);
         if (tracing && traced(function)) {
-            out.lea_rax_string(string_number(function.name == SETUP_NAME ? "(setting up the variables outside functions)" : function.name));
+            out.lea_rax_string(string_number(function.name == SETUP_NAME ? "(setting up the variables outside functions)" : shown_name(function.name)));
             out.call(runtime.trace_call);
         }
         for (const auto& [slot, reg] : slot_registers) {
@@ -454,6 +454,12 @@ private:
         }
         write_block(function.body);
         if (!always_leaves(function.body)) write_return();
+    }
+
+    // A function written inside another with func name(...) is hidden as "name (lambda N)": the program sees just name
+    static std::string shown_name(const std::string& name) {
+        const size_t cut = name.find(" (lambda ");
+        return cut == std::string::npos || cut == 0 ? name : name.substr(0, cut);
     }
 
     // --trace leaves out the built-in libraries' functions, so only the program's own show
@@ -1413,7 +1419,7 @@ private:
 
     void note_call_site(Spot spot) {
         const std::string& file = program.file_names.empty() ? file_name : program.file_names[static_cast<size_t>(spot.file < 0 ? 0 : spot.file)];
-        const std::string caller = current_function == SETUP_NAME ? "setting up the variables outside functions" : current_function;
+        const std::string caller = current_function == SETUP_NAME ? "setting up the variables outside functions" : shown_name(current_function);
         out.note_call_site(string_number("    called from " + caller + ", " + file + " line " + std::to_string(spot.line) + "\n"));
     }
 

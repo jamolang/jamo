@@ -911,6 +911,7 @@ private:
         const Token& name = expect_name("a function name");
         auto value = std::make_unique<Expr>();
         value->spot = keyword.spot;
+        value->name = name.text;
         parse_lambda_inputs(*value);
         if (next_is(TokenKind::Arrow)) {
             take();

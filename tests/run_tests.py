@@ -394,11 +394,17 @@ def test_warnings_and_calls(work):
 def test_trace(work):
     folder = work / "trace"
     folder.mkdir()
-    (folder / "t.jamo").write_text('use "text.jamo"\n\nvar start = setup_value()\n\nfunc setup_value(): int\n    return 1\nend\n\nfunc leaf(n: int): int\n    return n + 1\nend\n\nfunc middle(n: int): int\n    return leaf(n) + leaf(n)\nend\n\nfunc main()\n    print(middle(start))\n    var twice = func(x: int): int => leaf(x) * 2\n    print(twice(3))\n    print(upper("done"))\nend\n', encoding="utf-8")
-    want = "(setting up the variables outside functions)\n  setup_value\nmain\n  middle\n    leaf\n    leaf\n  (lambda 1)\n    leaf\n"
+    (folder / "t.jamo").write_text('use "text.jamo"\n\nvar start = setup_value()\n\nfunc setup_value(): int\n    return 1\nend\n\nfunc leaf(n: int): int\n    return n + 1\nend\n\nfunc middle(n: int): int\n    return leaf(n) + leaf(n)\nend\n\nfunc main()\n    print(middle(start))\n    var twice = func(x: int): int => leaf(x) * 2\n    print(twice(3))\n    func bump(n: int): int\n        return leaf(n) + 10\n    end\n    print(bump(1))\n    print(upper("done"))\nend\n', encoding="utf-8")
+    want = "(setting up the variables outside functions)\n  setup_value\nmain\n  middle\n    leaf\n    leaf\n  (lambda 1)\n    leaf\n  bump\n    leaf\n"
     for compiler in (JAMO, CPP_JAMO):
         ran = run([str(compiler), "run", "--trace", str(folder / "t.jamo")], cwd=folder)
-        report(f"--trace shows the program's own functions, indented, from {compiler.name}", ran.returncode == 0 and clean(ran.stderr) == want and clean(ran.stdout) == "4\n8\nDONE\n", ran.stdout + ran.stderr)
+        report(f"--trace shows the program's own functions, indented, from {compiler.name}", ran.returncode == 0 and clean(ran.stderr) == want and clean(ran.stdout) == "4\n8\n12\nDONE\n", ran.stdout + ran.stderr)
+    # A run error inside a function written inside another names it the way the program does
+    (folder / "inner.jamo").write_text("func divide(a: int, b: int): int\n    return a / b\nend\nfunc main()\n    func split_up(n: int): int\n        return divide(10, n)\n    end\n    print(split_up(0))\nend\n", encoding="utf-8")
+    for compiler in (JAMO, CPP_JAMO):
+        ran = run([str(compiler), "run", str(folder / "inner.jamo")], cwd=folder)
+        want = "inner.jamo line 2: Error: division by zero\n    called from split_up, inner.jamo line 6\n    called from main, inner.jamo line 8\n"
+        report(f"a run error in a function inside a function, from {compiler.name}", ran.returncode == 1 and clean(ran.stderr) == want, ran.stderr)
     plain = run([str(JAMO), "run", str(folder / "t.jamo")], cwd=folder)
     report("without --trace nothing extra is written", plain.returncode == 0 and plain.stderr == "", plain.stderr)
 

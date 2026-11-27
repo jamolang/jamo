@@ -2868,6 +2868,9 @@ func Checker.check_lambda(place: int): int
     self.lambda_count += 1
     var function = new_function()
     function.name = "(lambda " + string(self.lambda_count) + ")"
+    if e.name != ""
+        function.name = e.name + " " + function.name
+    end
     function.line = e.line
     function.column = e.column
     function.length = e.length

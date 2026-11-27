@@ -2,6 +2,10 @@
 
 What changed in each version of Jamo.
 
+## Not released yet
+
+- A function written inside another with `func name(...)` shows by its own name in `--trace` and in a run error's list of calls, where it used to show as `(lambda 1)`.
+
 ## 0.5.0
 
 - **Star Guard** (`examples/star_guard.jamo`): an arena shooter against waves of three kinds of drone, with keyboard and mouse or a controller. It uses sprites drawn from text, particles, functions made in place for how each drone moves, `try` for the saved best score, and `fixed` and `commas`. Checked with a bot over 32 runs: standing still lasts about 5 waves, dodging about 10. Drones never appear right next to the ship.

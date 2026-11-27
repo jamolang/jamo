@@ -720,6 +720,15 @@ end
 
 # --- Jamo code ---
 
+# A function written inside another with func name(...) is hidden as "name (lambda N)": the program sees just name
+func shown_name(name: string): string
+    var cut = find(name, " (lambda ")
+    if cut <= 0
+        return name
+    end
+    return slice(name, 0, cut)
+end
+
 # --trace leaves out the built-in libraries' functions, so only the program's own show
 func Generator.traced(function: Function): bool
     if len(self.program.file_names) == 0
@@ -762,7 +771,7 @@ func Generator.write_function(function: Function)
         if name == SETUP_NAME
             name = "(setting up the variables outside functions)"
         end
-        out.lea_rax_string(self.string_number(name))
+        out.lea_rax_string(self.string_number(shown_name(name)))
         out.call(self.rt[R_TRACE_CALL])
     end
     for slot in 0..len(self.slot_registers)
@@ -1919,7 +1928,7 @@ func Generator.note_call_site(e: Expr)
         end
         file = self.program.file_names[which]
     end
-    var caller = self.current_function
+    var caller = shown_name(self.current_function)
     if caller == SETUP_NAME
         caller = "setting up the variables outside functions"
     end

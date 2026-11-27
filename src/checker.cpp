@@ -1965,7 +1965,7 @@ private:
     Type check_lambda(Expr& expr) {
         if (!expr.text.empty()) return expr.type;
         auto function = std::make_unique<Function>();
-        function->name = "(lambda " + std::to_string(++lambda_count) + ")";
+        function->name = (expr.name.empty() ? "" : expr.name + " ") + "(lambda " + std::to_string(++lambda_count) + ")";
         function->spot = expr.spot;
         function->is_lambda = true;
         function->inputs.push_back({"(block)", expr.spot, Type::Int});
