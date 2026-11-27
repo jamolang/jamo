@@ -28,7 +28,7 @@ const FAILED = 1
 const CLEANER_CHECKS = 2
 const CLEANER_OFF = 4
 const VERSION = "0.5.0"
-const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
+const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo doc file.jamo     Writes a web page of its functions, structs and comments. Works on gfx.jamo and the other libraries too\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
 # The game jamo new --game starts from: a player that moves, a coin to catch, and a score
 const NEW_GAME = "use \"gfx.jamo\"\nuse \"math.jamo\"\n\nconst WIDTH = 640\nconst HEIGHT = 480\nconst SIZE = 32.0\nconst SPEED = 4.0\n\n# Everything the game keeps track of lives in one struct, passed to the functions that need it\nstruct Game\n    x: float\n    y: float\n    coin_x: float\n    coin_y: float\n    score: int\nend\n\nfunc Game.move(window: Window)\n    if window.key_down(\"left\")\n        self.x -= SPEED\n    end\n    if window.key_down(\"right\")\n        self.x += SPEED\n    end\n    if window.key_down(\"up\")\n        self.y -= SPEED\n    end\n    if window.key_down(\"down\")\n        self.y += SPEED\n    end\n    self.x = clamp(self.x, 0.0, float(WIDTH) - SIZE)\n    self.y = clamp(self.y, 0.0, float(HEIGHT) - SIZE)\nend\n\n# Touching the coin scores a point, and the coin jumps somewhere new\nfunc Game.catch_coin()\n    if abs(self.x + SIZE / 2.0 - self.coin_x) < 24.0 and abs(self.y + SIZE / 2.0 - self.coin_y) < 24.0\n        self.score += 1\n        self.coin_x = 20.0 + random_float() * float(WIDTH - 40)\n        self.coin_y = 60.0 + random_float() * float(HEIGHT - 80)\n    end\nend\n\nfunc Game.draw(screen: Gfx)\n    screen.clear(rgb(24, 28, 44))\n    screen.circle(self.coin_x, self.coin_y, 10.0, rgb(255, 210, 60))\n    screen.rect(self.x, self.y, SIZE, SIZE, rgb(90, 200, 255))\n    screen.text(f\"Coins: {self.score}\", 16.0, 16.0, 24.0, rgb(255, 255, 255))\nend\n\nfunc main()\n    var window = open_window(\"My game\", WIDTH, HEIGHT)\n    var screen = start_gfx(window)\n    var game = Game{x: 300.0, y: 220.0, coin_x: 120.0, coin_y: 120.0, score: 0}\n    while window.is_open()\n        if window.key_pressed(\"escape\")\n            window.close()\n        end\n        game.move(window)\n        game.catch_coin()\n        game.draw(screen)\n        screen.show()\n        window.wait_frame(60)\n    end\nend\n"
 const NEW_PROGRAM = "func main()\n    print(\"Hello from Jamo!\")\nend\n"
@@ -638,6 +638,227 @@ func test_command(place: string): int
     return FAILED
 end
 
+# --- jamo doc: a web page of everything in the program's own files ---
+
+struct DocItem
+    kind: string       # func, struct, interface, enum or const
+    name: string
+    line: string       # The line that makes it
+    body: [string]     # A struct's fields, an interface's functions or an enum's members
+    notes: [string]    # The # comment lines just above it
+end
+
+struct DocFile
+    name: string
+    about: [string]    # The comment at the top of the file
+    items: [DocItem]
+end
+
+func doc_escape(text: string): string
+    return replace(replace(replace(text, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
+end
+
+# The name a line makes: Box.get for func Box<T>.get(), MAX for const MAX = 3
+func doc_name(kind: string, line: string): string
+    var rest = trim(slice(line, len(kind), len(line)))
+    var name = ""
+    var inside = 0
+    for i in 0..len(rest)
+        var c = rest[i]
+        if c == "<"
+            inside += 1
+        elif c == ">"
+            inside -= 1
+        elif inside == 0
+            if c == "(" or c == ":" or c == "=" or c == " "
+                return name
+            end
+            name += c
+        end
+    end
+    return name
+end
+
+func doc_is_end(line: string): bool
+    return trim(line) == "end" and not starts_with(line, " ")
+end
+
+# Reads one file's comments and the things it makes, top to bottom
+func doc_read(name: string, source: string): DocFile
+    var lines = split(replace(source, "\r", ""), "\n")
+    var file = DocFile{name: name, about: [], items: []}
+    var notes: [string] = []
+    var at_top = true
+    var i = 0
+    while i < len(lines)
+        var line = lines[i]
+        if starts_with(line, "#")
+            var note = slice(line, 1, len(line))
+            if starts_with(note, " ")
+                note = slice(note, 1, len(note))
+            end
+            notes.add(note)
+            i += 1
+            continue
+        end
+        if trim(line) == ""
+            if at_top and len(notes) > 0 and len(file.about) == 0
+                file.about = notes
+            end
+            notes = []
+            i += 1
+            continue
+        end
+        if starts_with(line, " ")
+            notes = []
+            i += 1
+            continue
+        end
+        at_top = false
+        var rest = line
+        var first = tidy_first_word(line)
+        var hidden = false
+        if first == "private"
+            hidden = true
+            rest = trim(slice(line, len("private"), len(line)))
+            first = tidy_first_word(rest)
+        end
+        var body: [string] = []
+        if first == "struct" or first == "enum" or first == "interface"
+            i += 1
+            while i < len(lines) and not doc_is_end(lines[i])
+                var part = lines[i]
+                if starts_with(part, "    ")
+                    part = slice(part, 4, len(part))
+                end
+                if trim(part) != ""
+                    body.add(part)
+                end
+                i += 1
+            end
+        elif first == "func" and not contains(line, "=>")
+            i += 1
+            while i < len(lines) and not doc_is_end(lines[i])
+                i += 1
+            end
+        end
+        if not hidden and (first == "func" or first == "struct" or first == "enum" or first == "interface" or first == "const")
+            file.items.add(DocItem{kind: first, name: doc_name(first, rest), line: trim(rest), body: body, notes: notes})
+        end
+        notes = []
+        i += 1
+    end
+    return file
+end
+
+# Comment lines as HTML: lines starting with 4 spaces are code, a blank line starts a new paragraph
+func doc_notes(notes: [string], kind: string): string
+    var out = ""
+    var words = ""
+    var code = ""
+    for note in notes
+        if starts_with(note, "    ")
+            if words != ""
+                out += "<p class=\"" + kind + "\">" + doc_escape(words) + "</p>"
+                words = ""
+            end
+            code += doc_escape(slice(note, 4, len(note))) + "\n"
+            continue
+        end
+        if code != ""
+            out += "<pre>" + code + "</pre>"
+            code = ""
+        end
+        if trim(note) == ""
+            if words != ""
+                out += "<p class=\"" + kind + "\">" + doc_escape(words) + "</p>"
+                words = ""
+            end
+        elif words == ""
+            words = trim(note)
+        else
+            words += " " + trim(note)
+        end
+    end
+    if code != ""
+        out += "<pre>" + code + "</pre>"
+    end
+    if words != ""
+        out += "<p class=\"" + kind + "\">" + doc_escape(words) + "</p>"
+    end
+    return out
+end
+
+func doc_page(title: string, files: [DocFile]): string
+    var side = ""
+    var main_part = ""
+    var number = 0
+    for file in files
+        side += "<h2>" + doc_escape(file.name) + "</h2>"
+        main_part += "<section><h2>" + doc_escape(file.name) + "</h2>" + doc_notes(file.about, "about")
+        for item in file.items
+            number += 1
+            var key = doc_escape(lower(item.name))
+            side += "<a href=\"#item" + string(number) + "\" data-name=\"" + key + "\">" + doc_escape(item.name) + "</a>"
+            var shown = item.line
+            for part in item.body
+                shown += "\n    " + part
+            end
+            if len(item.body) > 0
+                shown += "\nend"
+            end
+            main_part += "<article id=\"item" + string(number) + "\" data-name=\"" + key + "\"><h3><span class=\"kind\">" + item.kind + "</span>" + doc_escape(item.name) + "</h3>"
+            main_part += "<pre>" + doc_escape(shown) + "</pre>" + doc_notes(item.notes, "note") + "</article>"
+        end
+        main_part += "</section>"
+    end
+    var page = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+    page += "<title>" + doc_escape(title) + " docs</title>\n<style>:root{--plum:#1a0f22;--plum2:#2a1834;--jam:#d6245a;--pink:#f2557f;--cream:#fff3e6;--soft:#e9dcef;--dim:#bfa9c9}*{box-sizing:border-box}body{margin:0;background:var(--plum);color:var(--soft);font:16px/1.6 'Segoe UI',system-ui,sans-serif;display:flex}aside{position:sticky;top:0;height:100vh;overflow:auto;width:280px;flex:none;background:var(--plum2);padding:24px 16px}aside h1{color:var(--cream);font-size:22px;margin:0 0 16px}aside h2{color:var(--pink);font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin:24px 0 8px}aside a{display:block;color:var(--soft);text-decoration:none;padding:2px 8px;border-radius:6px;font-family:Consolas,monospace;font-size:14px}aside a:hover{background:var(--plum);color:var(--cream)}#find{width:100%;padding:8px 12px;border-radius:8px;border:1px solid #4a2f57;background:var(--plum);color:var(--cream);font-size:15px}main{padding:32px 48px;max-width:900px;min-width:0}main>section>h2{color:var(--cream);font-size:28px;border-bottom:2px solid var(--jam);padding-bottom:8px}article{background:var(--plum2);border-radius:12px;padding:16px 24px;margin:16px 0}h3{margin:0 0 8px;color:var(--cream);font-family:Consolas,monospace;font-size:18px}.kind{color:var(--pink);font-weight:normal;margin-right:8px}pre{background:#0f0814;border-radius:8px;padding:12px 16px;overflow:auto;font:14px/1.5 Consolas,monospace;color:var(--soft)}.about{color:var(--dim)}footer{color:var(--dim);font-size:13px;margin-top:48px}</style>\n</head>\n<body>\n"
+    page += "<aside><h1>" + doc_escape(title) + "</h1><input id=\"find\" placeholder=\"Search\" aria-label=\"Search\">" + side + "</aside>\n"
+    page += "<main>" + main_part + "<footer>Made with jamo doc</footer></main>\n"
+    page += "<script>document.getElementById('find').addEventListener('input',function(e){var q=e.target.value.toLowerCase();document.querySelectorAll('article').forEach(function(a){a.style.display=a.dataset.name.indexOf(q)>=0?'':'none'});document.querySelectorAll('aside a').forEach(function(a){a.style.display=a.dataset.name.indexOf(q)>=0?'':'none'})})</script>\n</body>\n</html>\n"
+    return page
+end
+
+# jamo doc file.jamo writes file_doc.html beside it. jamo doc gfx.jamo, for a built-in library with no file of that
+# name here, writes gfx_doc.html in this folder
+func make_docs(path: string): int
+    var files: [DocFile] = []
+    var out = ""
+    if file_kind(path) != 0 and builtin_library(path) != ""
+        files.add(doc_read(path + " (built in)", builtin_library(path)))
+        out = slice(path, 0, len(path) - len(".jamo")) + "_doc.html"
+    else
+        if path_extension(path) != ".jamo"
+            complain(path + " isn't a Jamo file. Jamo files end in .jamo.\n")
+            return FAILED
+        end
+        var program = new_program()
+        var errors = new_errors()
+        if not load_program(path, errors, program)
+            complain("I can't read a file called " + path + ".\n")
+            return FAILED
+        end
+        if errors.any()
+            complain(errors.text())
+            return FAILED
+        end
+        var root = parent_path(canonical_path(path))
+        for name in program.file_names
+            if not ends_with(name, " (built in)")
+                files.add(doc_read(name, read_file(join_path(root, name))))
+            end
+        end
+        out = slice(path, 0, len(path) - len(".jamo")) + "_doc.html"
+    end
+    if not save_text(out, doc_page(file_name(path), files))
+        complain("I couldn't save " + out + ".\n")
+        return FAILED
+    end
+    say("Wrote " + out + ". Open it in a web browser to read it.\n")
+    return 0
+end
+
 # --- The command ---
 
 func command_answer(words: [string]): int
@@ -674,6 +895,9 @@ func command_answer(words: [string]): int
             paths.add(words[i])
         end
         return tidy_files(paths)
+    end
+    if count == 3 and command == "doc"
+        return make_docs(words[1])
     end
     if count == 3 and command == "get"
         return get_package(words[1])

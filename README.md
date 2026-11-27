@@ -240,6 +240,7 @@ The compiler is written in Jamo too. A second copy written in C++ lives in [src]
 | `jamo new name` | Makes a folder with a program to start from (`--game` for a small game) |
 | `jamo run --trace file.jamo` | Runs it, showing each of your own functions as it starts, indented by how deep the calls go |
 | `jamo fmt file.jamo` | Tidies the indentation and spacing, without changing what the program does |
+| `jamo doc file.jamo` | Writes a web page of every function, struct and interface in your program, with your comments. `jamo doc gfx.jamo` does it for a built-in library |
 | `jamo get someone/project` | Downloads a library someone shared on GitHub into `packages`, and says the `use` line for it |
 | `jamo version`, `jamo help` | What they say |
 

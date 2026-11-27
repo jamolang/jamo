@@ -4,6 +4,7 @@ What changed in each version of Jamo.
 
 ## Not released yet
 
+- `jamo doc file.jamo` writes a web page of every function, struct, interface, enum and constant in the program's own files, with the `#` comments above them, code examples shown as code, and a search box. `private` things are left out. `jamo doc gfx.jamo` makes one for any built-in library.
 - **Interfaces.** `interface Drawable` lists the functions a struct needs, and any struct that has them can go wherever a `Drawable` is wanted, like a `[Drawable]` holding enemies, coins and bullets together. Nothing extra to write in the struct. A struct that's missing one gets an error naming the function and the type it needs.
 - `use "enemies.jamo" as foes` gives a file its own names: its functions, constants and variables are reached as `foes.spawn()` and `foes.MAX`, so two files can each have a `spawn` and a `MAX`. A name you forgot the `foes.` on gets "Did you mean foes.MAX?".
 - `private` before a function, method, constant or variable outside functions keeps it to its own file. Another file that uses it gets a clear error naming the file it belongs to.

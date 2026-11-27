@@ -32,6 +32,8 @@ When a program does something you didn't expect, `jamo run --trace hello.jamo` s
 
 `jamo fmt hello.jamo` tidies a program's indentation: 4 spaces for each block, and the same for each line that carries on. It never changes what the program does, so it's safe to run any time.
 
+`jamo doc hello.jamo` writes `hello_doc.html`, a web page listing every function, struct and interface in your program with the `#` comment above each one, and a search box. It works on the built-in libraries too: `jamo doc gfx.jamo` shows everything you can draw with.
+
 **Try it:** make it print your name on a second line.
 
 ## 2. Values and variables

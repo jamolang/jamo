@@ -442,6 +442,40 @@ def test_test_command(work):
         ran = run([str(compiler), "test", "nowhere"], cwd=elsewhere)
         report(f"jamo test says when the folder or file isn't there, from {compiler.name}", ran.returncode == 1 and clean(ran.stderr) == "I can't find nowhere.\n", ran.stderr)
 
+# --- jamo doc: a web page of the program's own functions, structs and comments ---
+def test_doc(work):
+    folder = work / "doc"
+    folder.mkdir()
+    (folder / "shapes.jamo").write_text(
+        "# shapes: boxes and dots for a game.\n#\n# Make one with new_box.\n#\n#     var b = new_box(2.0)\n\n"
+        "# A thing that can be measured\ninterface Shape\n    func area(): float\nend\n\n"
+        "struct Box\n    side: float   # how wide, in pixels\nend\n\n"
+        "enum Mood\n    CALM\n    ANGRY\nend\n\n"
+        "const MOST = 10\n\n"
+        "# Makes a box & checks the side is < MOST\nfunc new_box(side: float): Box\n    return Box{side: side}\nend\n\n"
+        "func Box.area(): float\n    return self.side * self.side\nend\n\n"
+        "# The first item, for any list\nfunc first<T>(items: [T]): T\n    return items[0]\nend\n\n"
+        "# Not for other files\nprivate func secret_helper(): int\n    return 1\nend\n", encoding="utf-8")
+    (folder / "main.jamo").write_text('use "shapes.jamo"\n\nfunc main()\n    print(new_box(1.0).area())\nend\n', encoding="utf-8")
+    ran = run([str(JAMO), "doc", "main.jamo"], cwd=folder)
+    page = (folder / "main_doc.html").read_text(encoding="utf-8") if (folder / "main_doc.html").exists() else ""
+    report("jamo doc writes the page and says where", ran.returncode == 0 and clean(ran.stdout) == "Wrote main_doc.html. Open it in a web browser to read it.\n" and page.startswith("<!doctype html>"), ran.stdout + ran.stderr)
+    names = re.findall(r'<a href="#item\d+" data-name="[^"]*">([^<]*)</a>', page)
+    report("jamo doc lists each file's things in order, leaving out private ones", names == ["main", "Shape", "Box", "Mood", "MOST", "new_box", "Box.area", "first"], str(names))
+    kinds = re.findall(r'<span class="kind">(\w+)</span>', page)
+    report("jamo doc says what each thing is", kinds == ["func", "interface", "struct", "enum", "const", "func", "func", "func"], str(kinds))
+    report("jamo doc shows the comment above each thing, made safe for the page", '<p class="note">Makes a box &amp; checks the side is &lt; MOST</p>' in page and '<p class="note">The first item, for any list</p>' in page, page[:2000])
+    report("jamo doc shows a file's top comment, with its code lines as code", '<p class="about">shapes: boxes and dots for a game.</p><p class="about">Make one with new_box.</p><pre>var b = new_box(2.0)\n</pre>' in page, page[:2000])
+    report("jamo doc shows a struct's fields and generic types", "<pre>struct Box\n    side: float   # how wide, in pixels\nend</pre>" in page and "<pre>func first&lt;T&gt;(items: [T]): T</pre>" in page, page[:3000])
+    report("jamo doc leaves out private things and their comments", "secret_helper" not in page and "Not for other files" not in page)
+    ran = run([str(JAMO), "doc", "sprite.jamo"], cwd=folder)
+    page = (folder / "sprite_doc.html").read_text(encoding="utf-8") if (folder / "sprite_doc.html").exists() else ""
+    report("jamo doc works on a built-in library", ran.returncode == 0 and "<h2>sprite.jamo (built in)</h2>" in page and ">Animation.update</a>" in page and ">sheet</a>" in page, ran.stdout + ran.stderr)
+    ran = run([str(JAMO), "doc", "nothing_here.jamo"], cwd=folder)
+    report("jamo doc says when there's no such file", ran.returncode == 1 and clean(ran.stderr) == "I can't read a file called nothing_here.jamo.\n", ran.stderr)
+    ran = run([str(CPP_JAMO), "doc", "main.jamo"], cwd=folder)
+    report("the C++ backup says to use jamo.exe for jamo doc", ran.returncode == 1 and "Use jamo.exe" in ran.stderr, ran.stderr)
+
 # --- jamo run --trace: each of the program's own functions writes its name as it starts, indented by depth ---
 def test_trace(work):
     folder = work / "trace"
@@ -5444,6 +5478,7 @@ def main():
         test_examples(work)
         test_trace(work)
         test_test_command(work)
+        test_doc(work)
         test_fmt(work)
         test_checksums(work)
         test_console_text(work)

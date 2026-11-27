@@ -45,6 +45,7 @@ const char* const USAGE =
     "  jamo new name          Makes a folder called name, with a program to start from\n"
     "  jamo new --game name   Makes it with a small window game to start from instead\n"
     "  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n"
+    "  jamo doc file.jamo     Writes a web page of its functions, structs and comments. Works on gfx.jamo and the other libraries too\n"
     "  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n"
     "  jamo version           Shows which Jamo this is\n"
     "  jamo help              Shows this\n";
@@ -787,6 +788,10 @@ int wmain(int count, wchar_t** words) {
         if (count == 4 && command == L"code") return print_code(fs::path(words[3]), _wtoi(words[2]));
         if (count >= 3 && command == L"fmt") {
             std::fputs("The C++ backup can't tidy files. Use jamo.exe, the compiler written in Jamo, for jamo fmt.\n", stderr);
+            return FAILED;
+        }
+        if (count == 3 && command == L"doc") {
+            std::fputs("The C++ backup can't make docs. Use jamo.exe, the compiler written in Jamo, for jamo doc.\n", stderr);
             return FAILED;
         }
         if (count == 3 && command == L"get") {
