@@ -168,7 +168,7 @@ const BUILT_IN = {
     byte: "byte(text, i): int\nThe number of the byte at place i, from 0 to 255.",
     hash_of: "hash_of(x): int\nA number from an int, string, bool or enum that's never below 0 and always the same for the same value.",
 };
-const KEYWORDS = ["func", "end", "var", "const", "if", "elif", "else", "while", "for", "in", "break", "continue", "return", "and", "or", "not", "struct", "enum", "match", "case", "use", "try", "catch", "true", "false"];
+const KEYWORDS = ["func", "end", "var", "const", "if", "elif", "else", "while", "for", "in", "break", "continue", "return", "and", "or", "not", "struct", "enum", "match", "case", "use", "try", "catch", "true", "false", "private", "interface"];
 
 // --- Files a program uses: libraries come with the extension, other files sit beside the program ---
 function resolve_use(name, from_file) {
