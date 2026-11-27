@@ -6524,6 +6524,14 @@ end
 #     t.finish()
 #
 # finish shows how many passed, and ends the program with exit code 1 when any failed, so other tools can tell.
+#
+# For jamo test, which runs each test_ function in a file whose name ends in _test.jamo, there are expect checks.
+# Each one stops the test with a run error when it's wrong, and the line after the error says where in the test:
+#
+#     func test_adding()
+#         expect_equal(add(2, 3), 5)
+#         expect(enemy.is_alive())
+#     end
 
 extern "kernel32.dll" func ExitProcess(code: i32)
 
@@ -6579,6 +6587,37 @@ func Tests.finish()
     end
     print(f"{self.failed} of {total} checks failed.")
     ExitProcess(1)
+end
+
+# --- expect: for jamo test ---
+
+func expect(ok: bool)
+    if not ok
+        fail("This should be true, but it's false.")
+    end
+end
+
+func expect_equal(got: int, want: int)
+    if got != want
+        fail(f"got {got}, wanted {want}")
+    end
+end
+
+func expect_text(got: string, want: string)
+    if got != want
+        fail(f"got \"{got}\", wanted \"{want}\"")
+    end
+end
+
+# Floats rarely come out exactly, so this passes when got is within close of want
+func expect_near(got: float, want: float, close: float)
+    var gap = got - want
+    if gap < 0.0
+        gap = 0.0 - gap
+    end
+    if gap > close
+        fail(f"got {got}, wanted {want}")
+    end
 end
 )JAMOLIBRARY";
     if (name == "text.jamo") return R"JAMOLIBRARY(# text: splitting, searching, cutting, changing and joining text, checking numbers, and sorting arrays. use "text.jamo"

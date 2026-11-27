@@ -390,6 +390,58 @@ def test_warnings_and_calls(work):
 
 
 # --- The VS Code extension, without VS Code ---
+# --- jamo test: runs each test_ function of every _test.jamo file as its own program, and shows a failed one's output ---
+def test_test_command(work):
+    folder = work / "testing"
+    (folder / "sub").mkdir(parents=True)
+    (folder / ".hidden").mkdir()
+    (folder / "calc.jamo").write_text("func add(a: int, b: int): int\n    return a + b\nend\n\nfunc divide(a: int, b: int): int\n    return a / b\nend\n", encoding="utf-8")
+    (folder / "math_test.jamo").write_text(
+        'use "calc.jamo"\nuse "test.jamo"\n\nfunc test_adding()\n    expect_equal(add(2, 3), 5)\nend\n\n'
+        'func test_wrong()\n    print("some output")\n    expect_equal(add(2, 2), 5)\nend\n\n'
+        'func test_crash()\n    print(divide(1, 0))\nend\n\n'
+        'func test_text()\n    expect_text("hi", "hi")\n    expect_near(0.1 + 0.2, 0.3, 0.0001)\n    expect(true)\nend\n\n'
+        'func helper(x: int): int\n    return x\nend\n', encoding="utf-8")
+    # Its test reads a file beside it, so this also shows each test runs in its own file's folder
+    (folder / "sub" / "other_test.jamo").write_text('use "test.jamo"\nuse "text.jamo"\n\nfunc test_one()\n    expect_text(trim(read_file("data.txt")), "hello")\nend\n', encoding="utf-8")
+    (folder / "sub" / "data.txt").write_text("hello\n", encoding="utf-8")
+    (folder / "sub" / "none_test.jamo").write_text("func helper()\nend\n", encoding="utf-8")
+    (folder / ".hidden" / "skipped_test.jamo").write_text("func test_never()\n    print(1)\nend\n", encoding="utf-8")
+    (folder / "sub" / "tests_of_mine.jamo").write_text("func test_never()\nend\n", encoding="utf-8")
+    want_out = (
+        "math_test.jamo\n"
+        "  ok    test_adding\n"
+        "  FAIL  test_wrong\n"
+        "        some output\n"
+        "        Error: got 4, wanted 5\n"
+        "            called from test_wrong, math_test.jamo line 10\n"
+        "  FAIL  test_crash\n"
+        "        calc.jamo line 6: Error: division by zero\n"
+        "            called from test_crash, math_test.jamo line 14\n"
+        "  ok    test_text\n"
+        "sub\\none_test.jamo\n"
+        "sub\\other_test.jamo\n"
+        "  ok    test_one\n"
+        "\n"
+        "5 tests: 3 passed, 2 failed. 1 test file has mistakes, so its tests didn't run.\n"
+    )
+    want_err = "sub\\none_test.jamo has no tests. A test is a function with no inputs whose name starts with test_, like func test_adding().\n"
+    elsewhere = work / "testing elsewhere"
+    elsewhere.mkdir()
+    for compiler in (JAMO, CPP_JAMO):
+        ran = run([str(compiler), "test"], cwd=folder)
+        report(f"jamo test runs every test file in the folder and its folders, from {compiler.name}", ran.returncode == 1 and clean(ran.stdout) == want_out and clean(ran.stderr) == want_err, f"{ran.returncode}\n{ran.stdout}\n{ran.stderr}")
+        ran = run([str(compiler), "test", str(folder / "sub" / "other_test.jamo")], cwd=elsewhere)
+        report(f"jamo test with one file runs it in its own folder, from {compiler.name}", ran.returncode == 0 and clean(ran.stdout) == "other_test.jamo\n  ok    test_one\n\n1 test passed.\n" and ran.stderr == "", f"{ran.returncode}\n{ran.stdout}\n{ran.stderr}")
+        ran = run([str(compiler), "test"], cwd=elsewhere)
+        report(f"jamo test with no test files says how to name one, from {compiler.name}", ran.returncode == 1 and ran.stdout == "" and clean(ran.stderr) == "There are no test files here. A test file's name ends in _test.jamo, like math_test.jamo.\n", f"{ran.returncode}\n{ran.stdout}\n{ran.stderr}")
+        (elsewhere / "main_test.jamo").write_text("func main()\nend\n\nfunc test_x()\nend\n", encoding="utf-8")
+        ran = run([str(compiler), "test", "main_test.jamo"], cwd=elsewhere)
+        report(f"jamo test says a test file doesn't need main, from {compiler.name}", ran.returncode == 1 and clean(ran.stdout) == "main_test.jamo\n\nNo tests ran. 1 test file has mistakes, so its tests didn't run.\n" and clean(ran.stderr) == "main_test.jamo has a main function, but a test file doesn't need one: jamo test makes its own, which runs each test_ function.\n", f"{ran.returncode}\n{ran.stdout}\n{ran.stderr}")
+        (elsewhere / "main_test.jamo").unlink()
+        ran = run([str(compiler), "test", "nowhere"], cwd=elsewhere)
+        report(f"jamo test says when the folder or file isn't there, from {compiler.name}", ran.returncode == 1 and clean(ran.stderr) == "I can't find nowhere.\n", ran.stderr)
+
 # --- jamo run --trace: each of the program's own functions writes its name as it starts, indented by depth ---
 def test_trace(work):
     folder = work / "trace"
@@ -5391,6 +5443,7 @@ def main():
         test_docs(work)
         test_examples(work)
         test_trace(work)
+        test_test_command(work)
         test_fmt(work)
         test_checksums(work)
         test_console_text(work)

@@ -1,6 +1,7 @@
 // jamo: compiles Jamo source into real Windows programs. jamo build file.jamo, or jamo run file.jamo.
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -40,6 +41,7 @@ const char* const USAGE =
     "  jamo build --window file.jamo   Writes a window program, with no console behind it\n"
     "  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n"
     "  jamo check file.jamo   Finds mistakes without writing an .exe\n"
+    "  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n"
     "  jamo new name          Makes a folder called name, with a program to start from\n"
     "  jamo new --game name   Makes it with a small window game to start from instead\n"
     "  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n"
@@ -565,6 +567,199 @@ int watch(const fs::path& main_file, int cleaner_mode, const std::vector<std::ws
     }
 }
 
+// --- jamo test ---
+// Each file whose name ends in _test.jamo is built with a main that jamo test makes: it runs the one test_ function
+// named on its command line. Then each test runs as its own program, so one that stops with a run error can't stop
+// the others. Only a failed test's output is shown, without the lines about the made-up main
+const char* const TEST_RUNNER = "jamo test (built in)";
+const char* const TEST_ENDING = "_test.jamo";
+
+bool is_test_file(const std::string& name) {
+    std::string lower;
+    for (const char letter : name) lower.push_back(letter >= 'A' && letter <= 'Z' ? static_cast<char>(letter + 32) : letter);
+    const size_t size = std::strlen(TEST_ENDING);
+    return lower.size() > size && lower.compare(lower.size() - size, size, TEST_ENDING) == 0;
+}
+
+// The test files in a folder and the folders inside it, as paths from that folder, in order. Folders whose names
+// start with . are left out
+void find_test_files(const fs::path& folder, const std::string& from, std::vector<std::string>& found) {
+    std::error_code problem;
+    for (const fs::directory_entry& entry : fs::directory_iterator(folder, problem)) {
+        const std::string name = as_text(entry.path().filename());
+        const std::string shown = from.empty() ? name : from + "\\" + name;
+        if (entry.is_directory(problem)) {
+            if (name.empty() || name[0] != '.') find_test_files(entry.path(), shown, found);
+        } else if (is_test_file(name)) {
+            found.push_back(shown);
+        }
+    }
+}
+
+// Loads the test file, adds the made-up main, and checks it all. Answers false, having said why, if it can't be built
+bool load_tests(const fs::path& path, const std::string& shown, Program& program, std::vector<std::string>& tests) {
+    Errors errors;
+    if (!load_program(path, errors, program)) {
+        std::fprintf(stderr, "I can't read a file called %s.\n", shown.c_str());
+        return false;
+    }
+    if (!errors.any()) {
+        for (const auto& function : program.functions) {
+            if (function->name == "main") {
+                std::fprintf(stderr, "%s has a main function, but a test file doesn't need one: jamo test makes its own, which runs each test_ function.\n", shown.c_str());
+                return false;
+            }
+            if (function->spot.file == 0 && function->name.rfind("test_", 0) == 0 && function->inputs.empty() && function->owner == Type::Nothing &&
+                function->type_params.empty() && function->dll.empty()) {
+                tests.push_back(function->name);
+            }
+        }
+        if (tests.empty()) {
+            std::fprintf(stderr, "%s has no tests. A test is a function with no inputs whose name starts with test_, like func test_adding().\n", shown.c_str());
+            return false;
+        }
+        std::string source = "func main()\n    var which = args()\n    if len(which) != 1\n        return\n    end\n";
+        for (const std::string& test : tests) source += "    if which[0] == \"" + test + "\"\n        " + test + "()\n    end\n";
+        source += "end\n";
+        load_extra_file(TEST_RUNNER, source, errors, program);
+        if (!errors.any()) check_program(program, errors);
+    }
+    if (errors.any()) {
+        std::fputs(errors.text().c_str(), stderr);
+        return false;
+    }
+    std::fputs(errors.warnings_text().c_str(), stderr);
+    return true;
+}
+
+// Runs a test program in the test file's folder, keeping everything it writes. Answers its exit code
+int run_test(const fs::path& exe_path, const std::string& test, const fs::path& folder, std::string& output) {
+    SECURITY_ATTRIBUTES security = {};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    HANDLE reading = nullptr;
+    HANDLE writing = nullptr;
+    if (!CreatePipe(&reading, &writing, &security, 0)) {
+        output = "Windows wouldn't make a pipe to read the test's output.\n";
+        return FAILED;
+    }
+    SetHandleInformation(reading, HANDLE_FLAG_INHERIT, 0);
+    std::wstring command = L"\"" + exe_path.wstring() + L"\"";
+    add_to_command(command, std::wstring(test.begin(), test.end()));
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = writing;
+    startup.hStdError = writing;
+    PROCESS_INFORMATION process = {};
+    const std::wstring where = folder.wstring();
+    const BOOL started = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, where.c_str(), &startup, &process);
+    CloseHandle(writing);
+    if (!started) {
+        CloseHandle(reading);
+        output = "Windows wouldn't start the test (error " + std::to_string(GetLastError()) + ").\n";
+        return FAILED;
+    }
+    char buffer[4096];
+    DWORD got = 0;
+    while (ReadFile(reading, buffer, sizeof(buffer), &got, nullptr) && got > 0) output.append(buffer, got);
+    CloseHandle(reading);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = FAILED;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hProcess);
+    CloseHandle(process.hThread);
+    return static_cast<int>(exit_code);
+}
+
+// A failed test's output, each line moved in under its name. A run error from inside a library shows just the
+// error, since the lines after it say where in the test it came from
+std::string test_output(const std::string& output) {
+    std::string out;
+    std::string line;
+    const auto finish_line = [&]() {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.find(TEST_RUNNER) == std::string::npos) {
+            const size_t built_in = line.find(" (built in) line ");
+            const size_t error = built_in == std::string::npos ? std::string::npos : line.find(": Error: ", built_in);
+            if (error != std::string::npos) line = "Error: " + line.substr(error + 9);
+            out += "        " + line + "\n";
+        }
+        line.clear();
+    };
+    for (const char letter : output) {
+        if (letter == '\n') finish_line();
+        else line.push_back(letter);
+    }
+    if (!line.empty()) finish_line();
+    return out;
+}
+
+std::string count_of(int count, const char* what) {
+    return std::to_string(count) + " " + what + (count == 1 ? "" : "s");
+}
+
+int test_command(const fs::path& place) {
+    std::error_code problem;
+    std::vector<std::string> files;
+    fs::path folder = place;
+    if (fs::is_directory(place, problem)) {
+        find_test_files(place, "", files);
+    } else if (fs::is_regular_file(place, problem)) {
+        folder = place.parent_path();
+        if (folder.empty()) folder = L".";
+        files.push_back(as_text(place.filename()));
+    } else {
+        std::fprintf(stderr, "I can't find %s.\n", as_text(place).c_str());
+        return FAILED;
+    }
+    std::sort(files.begin(), files.end());
+    if (files.empty()) {
+        std::fputs("There are no test files here. A test file's name ends in _test.jamo, like math_test.jamo.\n", stderr);
+        return FAILED;
+    }
+    int passed = 0;
+    int failed = 0;
+    int broken = 0;
+    const fs::path exe_folder = fs::temp_directory_path(problem) / L"jamo test";
+    fs::create_directories(exe_folder, problem);
+    for (const std::string& shown : files) {
+        const fs::path path = folder / fs::path(std::u8string(shown.begin(), shown.end()));
+        std::printf("%s\n", shown.c_str());
+        std::fflush(stdout);
+        Program program;
+        std::vector<std::string> tests;
+        if (!load_tests(path, shown, program, tests)) {
+            broken++;
+            continue;
+        }
+        const fs::path exe_path = exe_folder / (path.stem().wstring() + L".exe");
+        if (!write_exe(exe_path, build_exe(generate_code(program, as_text(path.filename()), 0)))) {
+            std::fprintf(stderr, "I can't write %s.\n", as_text(exe_path).c_str());
+            broken++;
+            continue;
+        }
+        for (const std::string& test : tests) {
+            std::string output;
+            const int code = run_test(exe_path, test, path.parent_path(), output);
+            if (code == 0) {
+                passed++;
+                std::printf("  ok    %s\n", test.c_str());
+            } else {
+                failed++;
+                std::printf("  FAIL  %s\n%s", test.c_str(), test_output(output).c_str());
+            }
+            std::fflush(stdout);
+        }
+    }
+    std::string summary = failed == 0 ? count_of(passed, "test") + " passed." : count_of(passed + failed, "test") + ": " + std::to_string(passed) + " passed, " + std::to_string(failed) + " failed.";
+    if (passed + failed == 0) summary = "No tests ran.";
+    if (broken > 0) summary += " " + count_of(broken, "test file") + (broken == 1 ? " has" : " have") + " mistakes, so " + (broken == 1 ? "its" : "their") + " tests didn't run.";
+    std::printf("\n%s\n", summary.c_str());
+    return failed == 0 && broken == 0 ? 0 : FAILED;
+}
+
 }  // namespace
 
 int wmain(int count, wchar_t** words) {
@@ -598,6 +793,7 @@ int wmain(int count, wchar_t** words) {
             std::fputs("The C++ backup can't download packages. Use jamo.exe, the compiler written in Jamo, for jamo get.\n", stderr);
             return FAILED;
         }
+        if (count <= 3 && command == L"test") return test_command(count == 3 ? fs::path(words[2]) : fs::path(L"."));
         if (count == 3 && command == L"check") {
             Program program;
             return load_and_check(fs::path(words[2]), program) ? 0 : FAILED;

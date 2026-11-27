@@ -388,3 +388,10 @@ func load_program(main_file: string, errors: Errors, program: Program): bool
     errors.current = 0
     return true
 end
+
+# Reads one more file from text, like the main that jamo test makes. It uses nothing
+func load_extra_file(name: string, source: string, errors: Errors, program: Program)
+    var loader = new_loader("", errors, program)
+    loader.read(name, source)
+    errors.current = 0
+end

@@ -177,3 +177,14 @@ bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
     errors.use_file(0);
     return true;
 }
+
+void load_extra_file(const std::string& name, const std::string& source, Errors& errors, Program& program) {
+    errors.add_file(name, source);
+    program.file_names.push_back(name);
+    const std::vector<Token> tokens = read_tokens(source, errors);
+    if (!errors.any()) {
+        program.uses.clear();
+        parse_into(tokens, errors, program);
+    }
+    errors.use_file(0);
+}

@@ -1848,6 +1848,46 @@ from -2 to 9
 
 `some(value)` holds a value and `none<int>()` holds nothing (its type has to be given). `has()` says which, `get()` gives the value (and stops with a clear error when there isn't one), and `or_else(fallback)` gives the value or the fallback. `find_first(items, keep)` gives the first item `keep` says yes to. `pair(a, b)` and `triple(a, b, c)` bundle values into a `Pair` or `Triple`, read with `.first`, `.second` and `.third`.
 
+## 31. Testing with jamo test
+
+As a program grows, a change in one place can break something somewhere else. Tests catch that. Put them in a file whose name ends in `_test.jamo`, next to the code they check. Each test is a function whose name starts with `test_`, and it has no `main`:
+
+```jamo file=score_test.jamo
+use "test.jamo"
+
+func points_for(hits: int): int
+    return hits * 100
+end
+
+func test_points()
+    expect_equal(points_for(3), 300)
+end
+
+func test_no_hits()
+    expect_equal(points_for(0), 0)
+end
+```
+
+Then type `jamo test`. It finds every `_test.jamo` file in the folder and the folders inside it, and runs each test as its own little program, so one that crashes can't stop the rest:
+
+```output
+score_test.jamo
+  ok    test_points
+  ok    test_no_hits
+
+2 tests passed.
+```
+
+When a test fails, you see what went wrong and the line it happened on, along with anything the test printed:
+
+```output
+  FAIL  test_points
+        Error: got 200, wanted 300
+            called from test_points, score_test.jamo line 8
+```
+
+The checks are `expect(ok)`, `expect_equal(got, want)` for whole numbers, `expect_text(got, want)` and `expect_near(got, want, close)` for floats. `jamo test some_folder` tests just that folder, and `jamo test score_test.jamo` just that file. Each test runs in its own file's folder, so it can read files that sit beside it.
+
 ## What Jamo can't do yet
 
 Jamo is young, so it's better to know this up front:

@@ -236,6 +236,7 @@ The compiler is written in Jamo too. A second copy written in C++ lives in [src]
 | `jamo build file.jamo` | Writes `file.exe` beside the code |
 | `jamo build --window file.jamo` | Writes a window program with no console, for sharing games |
 | `jamo check file.jamo` | Finds mistakes without making an `.exe` |
+| `jamo test` | Runs the `test_` functions in every `_test.jamo` file here, each as its own program, and shows which passed |
 | `jamo new name` | Makes a folder with a program to start from (`--game` for a small game) |
 | `jamo run --trace file.jamo` | Runs it, showing each of your own functions as it starts, indented by how deep the calls go |
 | `jamo fmt file.jamo` | Tidies the indentation and spacing, without changing what the program does |

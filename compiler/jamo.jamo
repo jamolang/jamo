@@ -28,7 +28,7 @@ const FAILED = 1
 const CLEANER_CHECKS = 2
 const CLEANER_OFF = 4
 const VERSION = "0.5.0"
-const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
+const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
 # The game jamo new --game starts from: a player that moves, a coin to catch, and a score
 const NEW_GAME = "use \"gfx.jamo\"\nuse \"math.jamo\"\n\nconst WIDTH = 640\nconst HEIGHT = 480\nconst SIZE = 32.0\nconst SPEED = 4.0\n\n# Everything the game keeps track of lives in one struct, passed to the functions that need it\nstruct Game\n    x: float\n    y: float\n    coin_x: float\n    coin_y: float\n    score: int\nend\n\nfunc Game.move(window: Window)\n    if window.key_down(\"left\")\n        self.x -= SPEED\n    end\n    if window.key_down(\"right\")\n        self.x += SPEED\n    end\n    if window.key_down(\"up\")\n        self.y -= SPEED\n    end\n    if window.key_down(\"down\")\n        self.y += SPEED\n    end\n    self.x = clamp(self.x, 0.0, float(WIDTH) - SIZE)\n    self.y = clamp(self.y, 0.0, float(HEIGHT) - SIZE)\nend\n\n# Touching the coin scores a point, and the coin jumps somewhere new\nfunc Game.catch_coin()\n    if abs(self.x + SIZE / 2.0 - self.coin_x) < 24.0 and abs(self.y + SIZE / 2.0 - self.coin_y) < 24.0\n        self.score += 1\n        self.coin_x = 20.0 + random_float() * float(WIDTH - 40)\n        self.coin_y = 60.0 + random_float() * float(HEIGHT - 80)\n    end\nend\n\nfunc Game.draw(screen: Gfx)\n    screen.clear(rgb(24, 28, 44))\n    screen.circle(self.coin_x, self.coin_y, 10.0, rgb(255, 210, 60))\n    screen.rect(self.x, self.y, SIZE, SIZE, rgb(90, 200, 255))\n    screen.text(f\"Coins: {self.score}\", 16.0, 16.0, 24.0, rgb(255, 255, 255))\nend\n\nfunc main()\n    var window = open_window(\"My game\", WIDTH, HEIGHT)\n    var screen = start_gfx(window)\n    var game = Game{x: 300.0, y: 220.0, coin_x: 120.0, coin_y: 120.0, score: 0}\n    while window.is_open()\n        if window.key_pressed(\"escape\")\n            window.close()\n        end\n        game.move(window)\n        game.catch_coin()\n        game.draw(screen)\n        screen.show()\n        window.wait_frame(60)\n    end\nend\n"
 const NEW_PROGRAM = "func main()\n    print(\"Hello from Jamo!\")\nend\n"
@@ -337,6 +337,307 @@ func watch(main_file: string, cleaner_mode: int, inputs: [string]): int
     return 0
 end
 
+# --- jamo test ---
+# Each file whose name ends in _test.jamo is built with a main that jamo test makes: it runs the one test_ function
+# named on its command line. Then each test runs as its own program, so one that stops with a run error can't stop
+# the others. Only a failed test's output is shown, without the lines about the made-up main
+
+extern "kernel32.dll" func CreatePipe(reading: int, writing: int, security: int, size: i32): bool
+extern "kernel32.dll" func SetHandleInformation(handle: int, mask: i32, flags: i32): bool
+extern "kernel32.dll" func ReadFile(file: int, data: int, size: i32, done: int, overlapped: int): bool
+extern "kernel32.dll" func FindFirstFileW(pattern: int, data: int): int
+extern "kernel32.dll" func FindNextFileW(handle: int, data: int): bool
+extern "kernel32.dll" func FindClose(handle: int): bool
+extern "kernel32.dll" func GetTempPathW(size: i32, place: int): i32
+
+const TEST_RUNNER = "jamo test (built in)"
+const TEST_ENDING = "_test.jamo"
+const STANDARD_INPUT = -10
+const USE_STANDARD_HANDLES = 256
+const FIND_DATA_SIZE = 592
+const FIND_NAME_AT = 44
+
+# UTF-16 from Windows as text, the way full_path reads it
+func text_from_wide(place: int, units: int): string
+    var out = new_bytes()
+    for i in 0..units
+        var unit = peek_u16(place, i * 2)
+        if unit < 128
+            out.add_u8(unit)
+        elif unit < 2048
+            out.add_u8(192 + unit / 64)
+            out.add_u8(128 + unit % 64)
+        else
+            out.add_u8(224 + unit / 4096)
+            out.add_u8(128 + unit / 64 % 64)
+            out.add_u8(128 + unit % 64)
+        end
+    end
+    return out.text()
+end
+
+func is_test_file(name: string): bool
+    var low = lower(name)
+    return len(low) > len(TEST_ENDING) and ends_with(low, TEST_ENDING)
+end
+
+# The test files in a folder and the folders inside it, as paths from that folder. Folders whose names start with .
+# are left out
+func find_test_files(folder: string, from: string, found: [string])
+    var data = memory(FIND_DATA_SIZE)
+    var handle = FindFirstFileW(wide(join_path(folder, "*")), data)
+    if handle == -1
+        return
+    end
+    var going = true
+    while going
+        var units = 0
+        while peek_u16(data, FIND_NAME_AT + units * 2) != 0
+            units += 1
+        end
+        var name = text_from_wide(data + FIND_NAME_AT, units)
+        var shown = name
+        if from != ""
+            shown = from + "\\" + name
+        end
+        if name != "." and name != ".."
+            if peek_i32(data, 0) / 16 % 2 == 1
+                if not starts_with(name, ".")
+                    find_test_files(join_path(folder, name), shown, found)
+                end
+            elif is_test_file(name)
+                found.add(shown)
+            end
+        end
+        going = FindNextFileW(handle, data)
+    end
+    FindClose(handle)
+end
+
+# Loads the test file, adds the made-up main, and checks it all. Answers false, having said why, if it can't be built
+func load_tests(path: string, shown: string, program: Program, tests: [string]): bool
+    var errors = new_errors()
+    if not load_program(path, errors, program)
+        complain(f"I can't read a file called {shown}.\n")
+        return false
+    end
+    if not errors.any()
+        for function in program.functions
+            if function.name == "main"
+                complain(f"{shown} has a main function, but a test file doesn't need one: jamo test makes its own, which runs each test_ function.\n")
+                return false
+            end
+            if function.file == 0 and starts_with(function.name, "test_") and len(function.inputs) == 0 and function.owner == TYPE_NOTHING and len(function.type_params) == 0 and function.dll == ""
+                tests.add(function.name)
+            end
+        end
+        if len(tests) == 0
+            complain(f"{shown} has no tests. A test is a function with no inputs whose name starts with test_, like func test_adding().\n")
+            return false
+        end
+        var source = "func main()\n    var which = args()\n    if len(which) != 1\n        return\n    end\n"
+        for test in tests
+            source += "    if which[0] == \"" + test + "\"\n        " + test + "()\n    end\n"
+        end
+        source += "end\n"
+        load_extra_file(TEST_RUNNER, source, errors, program)
+        if not errors.any()
+            check_program(program, errors)
+        end
+    end
+    if errors.any()
+        complain(errors.text())
+        return false
+    end
+    complain(errors.warnings_text())
+    return true
+end
+
+struct TestRun
+    code: int
+    output: string
+end
+
+# Runs a test program in the test file's folder, keeping everything it writes
+func run_test(exe_path: string, test: string, folder: string): TestRun
+    var security = memory(24)
+    poke_i32(security, 0, 24)
+    poke_i32(security, 16, 1)
+    var ends = memory(16)
+    if not CreatePipe(ends, ends + 8, security, 0)
+        return TestRun{code: FAILED, output: "Windows wouldn't make a pipe to read the test's output.\n"}
+    end
+    var reading = peek_i64(ends, 0)
+    var writing = peek_i64(ends, 8)
+    SetHandleInformation(reading, 1, 0)
+    var command = add_to_command("\"" + exe_path + "\"", test)
+    var startup = memory(STARTUP_INFO_SIZE)
+    poke_i32(startup, 0, STARTUP_INFO_SIZE)
+    poke_i32(startup, 60, USE_STANDARD_HANDLES)
+    poke_i64(startup, 80, GetStdHandle(STANDARD_INPUT))
+    poke_i64(startup, 88, writing)
+    poke_i64(startup, 96, writing)
+    var process = memory(PROCESS_INFO_SIZE)
+    var started = CreateProcessW(0, wide(command), 0, 0, true, 0, 0, wide(folder), startup, process)
+    CloseHandle(writing)
+    if not started
+        CloseHandle(reading)
+        return TestRun{code: FAILED, output: f"Windows wouldn't start the test (error {GetLastError()}).\n"}
+    end
+    var output = ""
+    var buffer = memory(4096)
+    var got = memory(8)
+    while true
+        poke_i32(got, 0, 0)
+        if not ReadFile(reading, buffer, 4096, got, 0) or peek_i32(got, 0) <= 0
+            break
+        end
+        output += memory_text(buffer, peek_i32(got, 0))
+    end
+    CloseHandle(reading)
+    var handle = peek_i64(process, 0)
+    WaitForSingleObject(handle, WAIT_FOREVER)
+    var exit_code = memory(8)
+    poke_i32(exit_code, 0, FAILED)
+    GetExitCodeProcess(handle, exit_code)
+    CloseHandle(handle)
+    CloseHandle(peek_i64(process, 8))
+    return TestRun{code: peek_i32(exit_code, 0), output: output}
+end
+
+# One line of a failed test's output, moved in under its name, or nothing for a line about the made-up main. A run
+# error from inside a library shows just the error, since the lines after it say where in the test it came from
+func test_output_line(line: string): string
+    if ends_with(line, "\r")
+        line = slice(line, 0, len(line) - 1)
+    end
+    if contains(line, TEST_RUNNER)
+        return ""
+    end
+    var built_in = find(line, " (built in) line ")
+    if built_in >= 0
+        var rest = slice(line, built_in, len(line))
+        var error = find(rest, ": Error: ")
+        if error >= 0
+            line = "Error: " + slice(rest, error + 9, len(rest))
+        end
+    end
+    return "        " + line + "\n"
+end
+
+func test_output(output: string): string
+    var out = ""
+    var start = 0
+    for i in 0..len(output)
+        if byte(output, i) == 10
+            out += test_output_line(slice(output, start, i))
+            start = i + 1
+        end
+    end
+    if start < len(output)
+        out += test_output_line(slice(output, start, len(output)))
+    end
+    return out
+end
+
+func count_of(count: int, what: string): string
+    if count == 1
+        return f"{count} {what}"
+    end
+    return f"{count} {what}s"
+end
+
+func temp_folder(): string
+    var place = memory(65536)
+    var size = GetTempPathW(32767, place)
+    if size <= 0 or size >= 32767
+        return "."
+    end
+    return text_from_wide(place, size)
+end
+
+func test_command(place: string): int
+    var files: [string] = []
+    var folder = place
+    var kind = file_kind(place)
+    if kind == 16
+        find_test_files(place, "", files)
+    elif kind == 0
+        folder = parent_path(place)
+        if folder == ""
+            folder = "."
+        end
+        files.add(file_name(place))
+    else
+        complain(f"I can't find {place}.\n")
+        return FAILED
+    end
+    # Sorted the way std::sort sorts std::strings
+    for i in 1..len(files)
+        var j = i
+        while j > 0 and text_before(files[j], files[j - 1])
+            var held = files[j]
+            files[j] = files[j - 1]
+            files[j - 1] = held
+            j -= 1
+        end
+    end
+    if len(files) == 0
+        complain("There are no test files here. A test file's name ends in _test.jamo, like math_test.jamo.\n")
+        return FAILED
+    end
+    var passed = 0
+    var failed = 0
+    var broken = 0
+    var exe_folder = join_path(temp_folder(), "jamo test")
+    make_folders(exe_folder)
+    for shown in files
+        var path = join_path(folder, shown)
+        say(shown + "\n")
+        var program = new_program()
+        var tests: [string] = []
+        if not load_tests(path, shown, program, tests)
+            broken += 1
+            continue
+        end
+        var name = file_name(path)
+        var exe_path = join_path(exe_folder, slice(name, 0, len(name) - len(".jamo")) + ".exe")
+        if not write_exe(exe_path, build_exe(generate_code(program, name, 0)))
+            complain(f"I can't write {exe_path}.\n")
+            broken += 1
+            continue
+        end
+        var test_folder = parent_path(path)
+        for test in tests
+            var ran = run_test(exe_path, test, test_folder)
+            if ran.code == 0
+                passed += 1
+                say(f"  ok    {test}\n")
+            else
+                failed += 1
+                say(f"  FAIL  {test}\n" + test_output(ran.output))
+            end
+        end
+    end
+    var summary = count_of(passed + failed, "test") + ": " + string(passed) + " passed, " + string(failed) + " failed."
+    if failed == 0
+        summary = count_of(passed, "test") + " passed."
+    end
+    if passed + failed == 0
+        summary = "No tests ran."
+    end
+    if broken == 1
+        summary += " 1 test file has mistakes, so its tests didn't run."
+    elif broken > 1
+        summary += f" {broken} test files have mistakes, so their tests didn't run."
+    end
+    say("\n" + summary + "\n")
+    if failed == 0 and broken == 0
+        return 0
+    end
+    return FAILED
+end
+
 # --- The command ---
 
 func command_answer(words: [string]): int
@@ -376,6 +677,12 @@ func command_answer(words: [string]): int
     end
     if count == 3 and command == "get"
         return get_package(words[1])
+    end
+    if count <= 3 and command == "test"
+        if count == 3
+            return test_command(words[1])
+        end
+        return test_command(".")
     end
     if count == 3 and command == "check"
         var program = new_program()
