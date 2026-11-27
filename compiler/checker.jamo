@@ -218,6 +218,8 @@ func is_builtin(name: string): bool
             return true
         case "hash_of"
             return true
+        case "jamo_frame"
+            return true
     end
     return false
 end
@@ -2640,6 +2642,9 @@ func Checker.check_call(place: int): int
     if local.slot == -1 or local.slot <= FIRST_GLOBAL_SLOT
         e.name = self.own_name(e.name, e.file)
     end
+    if e.name == "jamo_debug_line" and len(e.inputs) == 3 and self.ex(e.inputs[1]).kind == EX_STRING and self.ex(e.inputs[1]).text == ""
+        self.ex(e.inputs[1]).text = self.debug_info(e.file)
+    end
     var variable = self.find_variable(e.name)
     if variable.slot != -1 and self.program.types.is_function(variable.type) and len(e.type_args) == 0
         var callee = self.program.new_expr(EX_NAME, e.line, e.column, e.length)
@@ -2843,6 +2848,9 @@ func Checker.check_builtin(place: int, given: [int]): int
     if name == "memory"
         wanted = ["bytes"]
         types = [TYPE_INT]
+        answer = TYPE_INT
+    end
+    if name == "jamo_frame"
         answer = TYPE_INT
     end
     var is_float = len(name) > 7 and slice(name, len(name) - 3, len(name) - 2) == "f"
@@ -3098,6 +3106,111 @@ func Checker.report_unknown_name(name: string, line: int, column: int, length: i
         close = closest(name, options)
     end
     self.add(line, column, length, file, "nothing has this name: " + name, did_you_mean(close, fallback))
+end
+
+# --- --debug ---
+# For each line: its function, its file, and each variable it can see, with its place from the frame and its kind
+func Checker.debug_info(file: int): string
+    if file < 0
+        return ""
+    end
+    var name = without_file(self.current.name)
+    var lambda = find(name, " (lambda ")
+    if lambda > 0
+        name = slice(name, 0, lambda)
+    end
+    var out = name + "|" + self.program.file_names[file]
+    var inputs = len(self.current.inputs)
+    var seen: [string] = []
+    var rests: [string] = []
+    var level = len(self.scopes) - 1
+    while level >= 0
+        var scope = self.scopes[level]
+        for i in 0..len(scope.names)
+            var variable_name = scope.names[i]
+            var variable = scope.variables[scope.places.get(variable_name)]
+            var known = false
+            for done in seen
+                if done == variable_name
+                    known = true
+                end
+            end
+            if not known and variable.slot >= 0 and variable.capture < 0 and variable_name != "" and not starts_with(variable_name, "(")
+                var offset = 0 - (variable.slot - inputs + 1) * 8
+                if variable.slot < inputs
+                    offset = 16 + (inputs - 1 - variable.slot) * 8
+                end
+                seen.add(variable_name)
+                rests.add(string(offset) + ":" + self.debug_kind(variable.type, true))
+            end
+        end
+        level -= 1
+    end
+    var names: [string] = []
+    for done in seen
+        names.add(done)
+    end
+    sort_strings(names)
+    for variable_name in names
+        for i in 0..len(seen)
+            if seen[i] == variable_name
+                out += "|" + variable_name + ":" + rests[i]
+            end
+        end
+    end
+    return out
+end
+
+# i, f, b, s, x for a function, aKIND for an array, eNAME{A,B} for an enum, tNAME{FIELD=KIND;...} for a struct
+func Checker.debug_kind(type: int, with_fields: bool): string
+    if type == TYPE_INT
+        return "i"
+    elif type == TYPE_FLOAT
+        return "f"
+    elif type == TYPE_BOOL
+        return "b"
+    elif type == TYPE_STRING
+        return "s"
+    end
+    if not type_is_custom(type)
+        return "?"
+    end
+    var entry = self.program.types.entry(type)
+    if entry.is_array
+        return "a" + self.debug_kind(entry.element, false)
+    end
+    if entry.is_function
+        return "x"
+    end
+    var name = without_file(self.type_name(type))
+    if entry.is_enum
+        var out = "e" + name + "{"
+        if self.enums.has(self.type_name(type))
+            var members = self.program.enums[self.enums.get(self.type_name(type))].members
+            for i in 0..len(members)
+                if i > 0
+                    out += ","
+                end
+                out += members[i]
+            end
+        end
+        return out + "}"
+    end
+    if entry.is_struct
+        if not with_fields
+            return "t" + name
+        end
+        var out = "t" + name + "{"
+        var fields = self.fields_of(type)
+        for i in 0..len(fields)
+            if i > 0
+                out += ";"
+            end
+            out += fields[i].name + "=" + self.debug_kind(fields[i].type, false)
+        end
+        return out + "}"
+    end
+    return "?"
 end
 
 # --- Interfaces ---

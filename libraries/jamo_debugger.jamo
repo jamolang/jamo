@@ -1,0 +1,442 @@
+# jamo_debugger: built into a program made with --debug, never used by hand. Before each line of the program's own
+# files, jamo_debug_line keeps track of the calls, checks breakpoints and stepping, and when it stops, talks to
+# jamo debug or VS Code over the named pipe in JAMO_DEBUG_PIPE, one line of text at a time:
+#
+#     program says: hello, stopped REASON LINE FILE, frame NAME|FILE|LINE ... end, var NAME|TYPE|VALUE ... end
+#     debugger says: continue, step, next, out, pause, break LINE FILE, clear, frames, vars FRAME
+#
+# Each line's info, written by the compiler, is FUNCTION|FILE|NAME:OFFSET:KIND|..., where OFFSET is the variable's
+# place from the frame and KIND is i, f, b or s for int, float, bool and string, eNAME{A,B} for an enum, aKIND for an
+# array, x for a function, and tNAME{FIELD=KIND;...} for a struct. Without JAMO_DEBUG_PIPE it does nothing.
+
+extern "kernel32.dll" func CreateFileW(name: int, access: i32, share: i32, security: int, how: i32, flags: i32, template: int): int
+extern "kernel32.dll" func ReadFile(file: int, data: int, size: i32, done: int, overlapped: int): bool
+extern "kernel32.dll" func WriteFile(file: int, data: int, size: i32, written: int, overlapped: int): bool
+extern "kernel32.dll" func PeekNamedPipe(pipe: int, buffer: int, size: i32, read: int, available: int, left: int): bool
+extern "kernel32.dll" func GetEnvironmentVariableW(name: int, buffer: int, size: i32): i32
+
+const JAMO_DEBUG_RUN = 0
+const JAMO_DEBUG_STEP = 1
+const JAMO_DEBUG_NEXT = 2
+const JAMO_DEBUG_OUT = 3
+const JAMO_DEBUG_LOOK_EVERY = 1000
+const JAMO_DEBUG_MOST_TEXT = 200
+const JAMO_DEBUG_MOST_ITEMS = 10
+
+var jamo_debug_pipe = -2              # -2 not tried yet, -1 not debugging, or the pipe
+var jamo_debug_mode = JAMO_DEBUG_STEP
+var jamo_debug_goal = 0               # How many calls deep next and out stop at
+var jamo_debug_frames: [int] = []     # Each call the program is in, deepest last: its frame, its line's info, its line
+var jamo_debug_infos: [string] = []
+var jamo_debug_lines: [int] = []
+var jamo_debug_marks: [bool] = []     # By line number: whether any file has a breakpoint on it
+var jamo_debug_points: [string] = []  # LINE FILE for each breakpoint
+var jamo_debug_count = 0
+var jamo_debug_inbox = ""
+
+# --- Talking over the pipe ---
+
+func jamo_debug_connect()
+    var buffer = memory(2048)
+    var size = GetEnvironmentVariableW(wide("JAMO_DEBUG_PIPE"), buffer, 1000)
+    jamo_debug_pipe = -1
+    if size <= 0 or size >= 1000
+        return
+    end
+    var place = memory(size + 1)
+    for i in 0..size
+        poke_u8(place, i, peek_u16(buffer, i * 2))
+    end
+    var handle = CreateFileW(wide(memory_text(place, size)), -1073741824, 0, 0, 3, 0, 0)
+    if handle == -1
+        return
+    end
+    jamo_debug_pipe = handle
+    jamo_debug_send("hello")
+    jamo_debug_commands()
+end
+
+func jamo_debug_send(line: string)
+    if jamo_debug_pipe < 0
+        return
+    end
+    var text = line + "\n"
+    var place = memory(len(text) + 1)
+    for i in 0..len(text)
+        poke_u8(place, i, byte(text, i))
+    end
+    var written = memory(8)
+    if not WriteFile(jamo_debug_pipe, place, len(text), written, 0)
+        jamo_debug_pipe = -1
+    end
+end
+
+# The next line from the debugger, or "" once it has gone
+func jamo_debug_read_line(): string
+    while jamo_debug_pipe >= 0
+        for i in 0..len(jamo_debug_inbox)
+            if byte(jamo_debug_inbox, i) == 10
+                var line = slice_debug(jamo_debug_inbox, 0, i)
+                jamo_debug_inbox = slice_debug(jamo_debug_inbox, i + 1, len(jamo_debug_inbox))
+                if len(line) > 0 and byte(line, len(line) - 1) == 13
+                    line = slice_debug(line, 0, len(line) - 1)
+                end
+                return line
+            end
+        end
+        var buffer = memory(4096)
+        var got = memory(8)
+        poke_i64(got, 0, 0)
+        if not ReadFile(jamo_debug_pipe, buffer, 4096, got, 0) or peek_i32(got, 0) <= 0
+            jamo_debug_pipe = -1
+            return ""
+        end
+        jamo_debug_inbox += memory_text(buffer, peek_i32(got, 0))
+    end
+    return ""
+end
+
+func jamo_debug_waiting(): bool
+    if len(jamo_debug_inbox) > 0
+        return true
+    end
+    var available = memory(8)
+    poke_i64(available, 0, 0)
+    if not PeekNamedPipe(jamo_debug_pipe, 0, 0, 0, available, 0)
+        jamo_debug_pipe = -1
+        return false
+    end
+    return peek_i32(available, 0) > 0
+end
+
+# --- Small text helpers, since this library uses no others ---
+
+func slice_debug(text: string, from: int, to: int): string
+    var out = ""
+    for i in from..to
+        out += text[i]
+    end
+    return out
+end
+
+func split_debug(text: string, mark: string): [string]
+    var parts: [string] = []
+    var part = ""
+    for i in 0..len(text)
+        if text[i] == mark
+            parts.add(part)
+            part = ""
+        else
+            part += text[i]
+        end
+    end
+    parts.add(part)
+    return parts
+end
+
+func number_debug(text: string): int
+    var value = 0
+    for i in 0..len(text)
+        var digit = byte(text, i) - 48
+        if digit < 0 or digit > 9
+            return -1
+        end
+        value = value * 10 + digit
+    end
+    if len(text) == 0
+        return -1
+    end
+    return value
+end
+
+func signed_debug(text: string): int
+    if len(text) > 0 and text[0] == "-"
+        return 0 - number_debug(slice_debug(text, 1, len(text)))
+    end
+    return number_debug(text)
+end
+
+func one_line_debug(text: string): string
+    var out = ""
+    for i in 0..len(text)
+        var c = byte(text, i)
+        if c == 10
+            out += "\\n"
+        elif c == 13
+            out += "\\r"
+        elif c == 9
+            out += "\\t"
+        else
+            out += text[i]
+        end
+    end
+    return out
+end
+
+# --- Commands while stopped ---
+
+func jamo_debug_commands()
+    while jamo_debug_pipe >= 0
+        var command = jamo_debug_read_line()
+        if command == "continue"
+            jamo_debug_mode = JAMO_DEBUG_RUN
+            return
+        elif command == "step"
+            jamo_debug_mode = JAMO_DEBUG_STEP
+            return
+        elif command == "next"
+            jamo_debug_mode = JAMO_DEBUG_NEXT
+            jamo_debug_goal = len(jamo_debug_frames)
+            return
+        elif command == "out"
+            jamo_debug_mode = JAMO_DEBUG_OUT
+            jamo_debug_goal = len(jamo_debug_frames)
+            return
+        elif command == "frames"
+            var depth = len(jamo_debug_frames)
+            for i in 0..depth
+                var parts = split_debug(jamo_debug_infos[depth - 1 - i], "|")
+                jamo_debug_send("frame " + parts[0] + "|" + parts[1] + "|" + string(jamo_debug_lines[depth - 1 - i]))
+            end
+            jamo_debug_send("end")
+        elif len(command) > 5 and slice_debug(command, 0, 5) == "vars "
+            jamo_debug_send_vars(number_debug(slice_debug(command, 5, len(command))))
+        elif len(command) > 6 and slice_debug(command, 0, 6) == "break "
+            jamo_debug_add_point(slice_debug(command, 6, len(command)))
+        elif command == "clear"
+            jamo_debug_points = []
+            jamo_debug_marks = []
+        elif command != "" and command != "pause"
+            jamo_debug_send("error I don't know " + command)
+        end
+    end
+end
+
+# A breakpoint, written LINE FILE
+func jamo_debug_add_point(point: string)
+    var space = 0
+    while space < len(point) and point[space] != " "
+        space += 1
+    end
+    var line = number_debug(slice_debug(point, 0, space))
+    if line < 0
+        return
+    end
+    while len(jamo_debug_marks) <= line
+        jamo_debug_marks.add(false)
+    end
+    jamo_debug_marks[line] = true
+    jamo_debug_points.add(point)
+end
+
+func jamo_debug_send_vars(frame: int)
+    var depth = len(jamo_debug_frames)
+    if frame < 0 or frame >= depth
+        jamo_debug_send("end")
+        return
+    end
+    var base = jamo_debug_frames[depth - 1 - frame]
+    var parts = split_debug(jamo_debug_infos[depth - 1 - frame], "|")
+    for i in 2..len(parts)
+        var bits = split_debug(parts[i], ":")
+        if len(bits) >= 3
+            var kind = bits[2]
+            for k in 3..len(bits)
+                kind += ":" + bits[k]
+            end
+            var address = base + signed_debug(bits[1])
+            jamo_debug_send("var " + bits[0] + "|" + jamo_debug_type(kind) + "|" + one_line_debug(jamo_debug_value(address, kind, 0)))
+        end
+    end
+    jamo_debug_send("end")
+end
+
+# --- Values ---
+
+# The part of a kind before its { }, and the part inside
+func jamo_debug_kind_name(kind: string): string
+    var at = 1
+    while at < len(kind) and kind[at] != "{"
+        at += 1
+    end
+    return slice_debug(kind, 1, at)
+end
+
+func jamo_debug_kind_inside(kind: string): string
+    var at = 1
+    while at < len(kind) and kind[at] != "{"
+        at += 1
+    end
+    if at >= len(kind) - 1
+        return ""
+    end
+    return slice_debug(kind, at + 1, len(kind) - 1)
+end
+
+func jamo_debug_type(kind: string): string
+    if len(kind) == 0
+        return "?"
+    end
+    var k = kind[0]
+    if k == "i"
+        return "int"
+    elif k == "f"
+        return "float"
+    elif k == "b"
+        return "bool"
+    elif k == "s"
+        return "string"
+    elif k == "x"
+        return "function"
+    elif k == "a"
+        return "[" + jamo_debug_type(slice_debug(kind, 1, len(kind))) + "]"
+    end
+    return jamo_debug_kind_name(kind)
+end
+
+# The value at address, as text. depth stops it looking inside structs and arrays inside others
+func jamo_debug_value(address: int, kind: string, depth: int): string
+    if len(kind) == 0
+        return "?"
+    end
+    var k = kind[0]
+    if k == "i"
+        return string(peek_i64(address, 0))
+    elif k == "f"
+        return string(peek_f64(address, 0))
+    elif k == "b"
+        if peek_i64(address, 0) != 0
+            return "true"
+        end
+        return "false"
+    elif k == "x"
+        return "a function"
+    elif k == "s"
+        var text = peek_i64(address, 0)
+        if text == 0
+            return "\"\""
+        end
+        var size = peek_i64(text, 0)
+        if size > JAMO_DEBUG_MOST_TEXT
+            return "\"" + memory_text(text + 8, JAMO_DEBUG_MOST_TEXT) + "...\""
+        end
+        return "\"" + memory_text(text + 8, size) + "\""
+    elif k == "e"
+        var members = split_debug(jamo_debug_kind_inside(kind), ",")
+        var which = peek_i64(address, 0)
+        if which >= 0 and which < len(members)
+            return jamo_debug_kind_name(kind) + "." + members[which]
+        end
+        return string(which)
+    elif k == "a"
+        var array = peek_i64(address, 0)
+        if array == 0
+            return "[]"
+        end
+        var count = peek_i64(array, 0)
+        if depth > 0
+            return "[" + string(count) + " items]"
+        end
+        var items = peek_i64(array, 16)
+        var out = "["
+        for i in 0..count
+            if i == JAMO_DEBUG_MOST_ITEMS
+                out += ", ..."
+                break
+            end
+            if i > 0
+                out += ", "
+            end
+            out += jamo_debug_value(items + i * 8, slice_debug(kind, 1, len(kind)), depth + 1)
+        end
+        return out + "]"
+    elif k == "t"
+        var item = peek_i64(address, 0)
+        var name = jamo_debug_kind_name(kind)
+        if item == 0 or depth > 0
+            return name
+        end
+        var fields = split_debug(jamo_debug_kind_inside(kind), ";")
+        var out = name + "{"
+        for i in 0..len(fields)
+            var field = split_debug(fields[i], "=")
+            if len(field) == 2
+                if i > 0
+                    out += ", "
+                end
+                out += field[0] + ": " + jamo_debug_value(item + i * 8, field[1], depth + 1)
+            end
+        end
+        return out + "}"
+    end
+    return "?"
+end
+
+# --- Each line ---
+
+func jamo_debug_has_point(info: string, line: int): bool
+    var parts = split_debug(info, "|")
+    var wanted = string(line) + " " + parts[1]
+    for point in jamo_debug_points
+        if point == wanted
+            return true
+        end
+    end
+    return false
+end
+
+func jamo_debug_line(line: int, info: string, frame: int)
+    if jamo_debug_pipe == -1
+        return
+    end
+    if jamo_debug_pipe == -2
+        jamo_debug_connect()
+        if jamo_debug_pipe == -1
+            return
+        end
+    end
+    # Calls deeper than this one have returned
+    var depth = len(jamo_debug_frames)
+    while depth > 0 and jamo_debug_frames[depth - 1] < frame
+        jamo_debug_frames.pop()
+        jamo_debug_infos.pop()
+        jamo_debug_lines.pop()
+        depth -= 1
+    end
+    if depth > 0 and jamo_debug_frames[depth - 1] == frame
+        jamo_debug_infos[depth - 1] = info
+        jamo_debug_lines[depth - 1] = line
+    else
+        jamo_debug_frames.add(frame)
+        jamo_debug_infos.add(info)
+        jamo_debug_lines.add(line)
+        depth += 1
+    end
+    var reason = ""
+    if jamo_debug_mode == JAMO_DEBUG_STEP or (jamo_debug_mode == JAMO_DEBUG_NEXT and depth <= jamo_debug_goal) or (jamo_debug_mode == JAMO_DEBUG_OUT and depth < jamo_debug_goal)
+        reason = "step"
+    elif line < len(jamo_debug_marks) and jamo_debug_marks[line] and jamo_debug_has_point(info, line)
+        reason = "breakpoint"
+    else
+        jamo_debug_count += 1
+        if jamo_debug_count >= JAMO_DEBUG_LOOK_EVERY
+            jamo_debug_count = 0
+            while jamo_debug_pipe >= 0 and jamo_debug_waiting()
+                var command = jamo_debug_read_line()
+                if command == "pause"
+                    reason = "pause"
+                elif len(command) > 6 and slice_debug(command, 0, 6) == "break "
+                    jamo_debug_add_point(slice_debug(command, 6, len(command)))
+                elif command == "clear"
+                    jamo_debug_points = []
+                    jamo_debug_marks = []
+                end
+            end
+        end
+    end
+    if reason == "" or jamo_debug_pipe < 0
+        return
+    end
+    jamo_debug_send("stopped " + reason + " " + string(line) + " " + split_debug(info, "|")[1])
+    jamo_debug_commands()
+end

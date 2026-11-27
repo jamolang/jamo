@@ -1,0 +1,28 @@
+enum Mood
+    CALM
+    ANGRY
+end
+
+struct Enemy
+    name: string
+    hp: int
+    speed: float
+    mood: Mood
+end
+
+func hurt(e: Enemy, amount: int): int
+    var left = e.hp - amount
+    e.hp = left
+    return left
+end
+
+func main()
+    var count = 3
+    var names = ["orc", "slime"]
+    var e = Enemy{name: "orc", hp: 10, speed: 1.5, mood: Mood.ANGRY}
+    var alive = true
+    var total = hurt(e, 4)
+    print(total)
+    var double = func(x: int): int => x * 2
+    print(double(count))
+end

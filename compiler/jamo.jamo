@@ -28,7 +28,7 @@ const FAILED = 1
 const CLEANER_CHECKS = 2
 const CLEANER_OFF = 4
 const VERSION = "0.6.0"
-const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo doc file.jamo     Writes a web page of its functions, structs and comments. Works on gfx.jamo and the other libraries too\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
+const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo debug file.jamo   Runs it with breakpoints, stepping and a look at its variables\n  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo doc file.jamo     Writes a web page of its functions, structs and comments. Works on gfx.jamo and the other libraries too\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
 # The game jamo new --game starts from: a player that moves, a coin to catch, and a score
 const NEW_GAME = "use \"gfx.jamo\"\nuse \"math.jamo\"\n\nconst WIDTH = 640\nconst HEIGHT = 480\nconst SIZE = 32.0\nconst SPEED = 4.0\n\n# Everything the game keeps track of lives in one struct, passed to the functions that need it\nstruct Game\n    x: float\n    y: float\n    coin_x: float\n    coin_y: float\n    score: int\nend\n\nfunc Game.move(window: Window)\n    if window.key_down(\"left\")\n        self.x -= SPEED\n    end\n    if window.key_down(\"right\")\n        self.x += SPEED\n    end\n    if window.key_down(\"up\")\n        self.y -= SPEED\n    end\n    if window.key_down(\"down\")\n        self.y += SPEED\n    end\n    self.x = clamp(self.x, 0.0, float(WIDTH) - SIZE)\n    self.y = clamp(self.y, 0.0, float(HEIGHT) - SIZE)\nend\n\n# Touching the coin scores a point, and the coin jumps somewhere new\nfunc Game.catch_coin()\n    if abs(self.x + SIZE / 2.0 - self.coin_x) < 24.0 and abs(self.y + SIZE / 2.0 - self.coin_y) < 24.0\n        self.score += 1\n        self.coin_x = 20.0 + random_float() * float(WIDTH - 40)\n        self.coin_y = 60.0 + random_float() * float(HEIGHT - 80)\n    end\nend\n\nfunc Game.draw(screen: Gfx)\n    screen.clear(rgb(24, 28, 44))\n    screen.circle(self.coin_x, self.coin_y, 10.0, rgb(255, 210, 60))\n    screen.rect(self.x, self.y, SIZE, SIZE, rgb(90, 200, 255))\n    screen.text(f\"Coins: {self.score}\", 16.0, 16.0, 24.0, rgb(255, 255, 255))\nend\n\nfunc main()\n    var window = open_window(\"My game\", WIDTH, HEIGHT)\n    var screen = start_gfx(window)\n    var game = Game{x: 300.0, y: 220.0, coin_x: 120.0, coin_y: 120.0, score: 0}\n    while window.is_open()\n        if window.key_pressed(\"escape\")\n            window.close()\n        end\n        game.move(window)\n        game.catch_coin()\n        game.draw(screen)\n        screen.show()\n        window.wait_frame(60)\n    end\nend\n"
 const NEW_PROGRAM = "func main()\n    print(\"Hello from Jamo!\")\nend\n"
@@ -117,6 +117,9 @@ func file_name(path: string): string
     return parts[len(parts) - 1]
 end
 
+# --debug: the program comes with jamo_debugger.jamo and a call to it before each line
+var debug_build = false
+
 func load_and_check(source_path: string, program: Program): bool
     if path_extension(source_path) != ".jamo"
         complain(source_path + " isn't a Jamo file. Jamo files end in .jamo.\n")
@@ -126,6 +129,15 @@ func load_and_check(source_path: string, program: Program): bool
     if not load_program(source_path, errors, program)
         complain("I can't read a file called " + source_path + ".\n")
         return false
+    end
+    if not errors.any() and debug_build
+        load_extra_file("jamo_debugger.jamo (built in)", builtin_library("jamo_debugger.jamo"), errors, program)
+        var order = [len(program.file_names) - 1]
+        for file in program.setup_order
+            order.add(file)
+        end
+        program.setup_order = order
+        add_debug_lines(program)
     end
     if not errors.any()
         check_program(program, errors)
@@ -859,6 +871,275 @@ func make_docs(path: string): int
     return 0
 end
 
+# --- jamo debug: runs a program built with --debug, and talks to it over a named pipe ---
+
+extern "kernel32.dll" func CreateNamedPipeW(name: int, open_mode: i32, pipe_mode: i32, most: i32, out_size: i32, in_size: i32, wait: i32, security: int): int
+extern "kernel32.dll" func ConnectNamedPipe(pipe: int, overlapped: int): bool
+extern "kernel32.dll" func CreateEventW(security: int, manual: bool, initial: bool, name: int): int
+extern "kernel32.dll" func WaitForMultipleObjects(count: i32, handles: int, all: bool, milliseconds: i32): i32
+extern "kernel32.dll" func GetOverlappedResult(file: int, overlapped: int, done: int, wait: bool): bool
+extern "kernel32.dll" func SetEnvironmentVariableW(name: int, value: int): bool
+extern "kernel32.dll" func GetCurrentProcessId(): i32
+
+const PIPE_DUPLEX_OVERLAPPED = 1073741827
+const IO_PENDING = 997
+const PIPE_CONNECTED = 535
+const DEBUG_HELP = "Commands:\n  c   continue until a breakpoint          n   next line, stepping over calls\n  s   step into a call                     o   out of this function\n  b 12, b enemy.jamo:12   a breakpoint     clear   take every breakpoint away\n  v   the variables here, v 1 one call up  p name  one variable\n  w   where: the calls it's in             q   quit, stopping the program\n  Enter on its own does the last c, n, s or o again\n"
+
+struct DebugLink
+    pipe: int
+    process: int
+    overlapped: int
+    waits: int         # The pipe's event, then the program
+    inbox: string
+    open: bool
+end
+
+# Waits for the pipe's last read, write or connect, or for the program to end. Answers how many bytes moved, or -1
+func DebugLink.finish(started: bool): int
+    var error = GetLastError()
+    if not started and error != IO_PENDING
+        if error == PIPE_CONNECTED
+            return 0
+        end
+        self.open = false
+        return -1
+    end
+    var done = memory(8)
+    poke_i64(done, 0, 0)
+    if WaitForMultipleObjects(2, self.waits, false, WAIT_FOREVER) != 0
+        self.open = false
+        return -1
+    end
+    if not GetOverlappedResult(self.pipe, self.overlapped, done, false)
+        self.open = false
+        return -1
+    end
+    return peek_i32(done, 0)
+end
+
+func DebugLink.send(line: string)
+    if not self.open
+        return
+    end
+    var text = line + "\n"
+    var place = memory(len(text) + 1)
+    for i in 0..len(text)
+        poke_u8(place, i, byte(text, i))
+    end
+    self.finish(WriteFile(self.pipe, place, len(text), 0, self.overlapped))
+end
+
+# The program's next line, or "" once it has finished
+func DebugLink.read_line(): string
+    while self.open
+        var at = find(self.inbox, "\n")
+        if at >= 0
+            var line = slice(self.inbox, 0, at)
+            self.inbox = slice(self.inbox, at + 1, len(self.inbox))
+            return line
+        end
+        var buffer = memory(4096)
+        var got = self.finish(ReadFile(self.pipe, buffer, 4096, 0, self.overlapped))
+        if got <= 0
+            self.open = false
+            return ""
+        end
+        self.inbox += memory_text(buffer, got)
+    end
+    return ""
+end
+
+# The lines up to end, after asking a question like frames or vars 0
+func DebugLink.ask(question: string): [string]
+    self.send(question)
+    var answer: [string] = []
+    while self.open
+        var line = self.read_line()
+        if line == "end" or not self.open
+            return answer
+        end
+        answer.add(line)
+    end
+    return answer
+end
+
+func debug_source_line(root: string, label: string, line: int): string
+    var path = join_path(root, replace(label, "/", "\\"))
+    if file_kind(path) != 0
+        return ""
+    end
+    var lines = split(replace(read_file(path), "\r", ""), "\n")
+    if line < 1 or line > len(lines)
+        return ""
+    end
+    return trim(lines[line - 1])
+end
+
+func debug_show_vars(link: DebugLink, frame: int, only: string)
+    var found = false
+    for line in link.ask("vars " + string(frame))
+        var parts = split(slice(line, 4, len(line)), "|")
+        if len(parts) >= 3 and (only == "" or parts[0] == only)
+            say("  " + parts[0] + ": " + parts[1] + " = " + parts[2] + "\n")
+            found = true
+        end
+    end
+    if not found and only != ""
+        say("  There's no variable called " + only + " here.\n")
+    elif not found
+        say("  No variables here.\n")
+    end
+end
+
+func debug_program(path: string, inputs: [string]): int
+    if path_extension(path) != ".jamo"
+        complain(path + " isn't a Jamo file. Jamo files end in .jamo.\n")
+        return FAILED
+    end
+    debug_build = true
+    var program = new_program()
+    if not load_and_check(path, program)
+        return FAILED
+    end
+    var folder = join_path(temp_folder(), "jamo debug")
+    make_folders(folder)
+    var name = file_name(path)
+    var exe_path = join_path(folder, slice(name, 0, len(name) - len(".jamo")) + ".exe")
+    if not write_exe(exe_path, build_exe(generate_code(program, name, NO_OPTIMIZING)))
+        complain("I can't write " + exe_path + ".\n")
+        return FAILED
+    end
+    var root = parent_path(canonical_path(path))
+    var pipe_name = "\\\\.\\pipe\\jamo-debug-" + string(GetCurrentProcessId())
+    var pipe = CreateNamedPipeW(wide(pipe_name), PIPE_DUPLEX_OVERLAPPED, 0, 1, 65536, 65536, 0, 0)
+    if pipe == -1
+        complain("Windows wouldn't make the pipe the debugger talks over (error " + string(GetLastError()) + ").\n")
+        return FAILED
+    end
+    SetEnvironmentVariableW(wide("JAMO_DEBUG_PIPE"), wide(pipe_name))
+    var process = start_program(exe_path, inputs)
+    SetEnvironmentVariableW(wide("JAMO_DEBUG_PIPE"), 0)
+    if process == 0
+        CloseHandle(pipe)
+        return FAILED
+    end
+    var overlapped = memory(32)
+    var event = CreateEventW(0, true, false, 0)
+    poke_i64(overlapped, 24, event)
+    var waits = memory(16)
+    poke_i64(waits, 0, event)
+    poke_i64(waits, 8, process)
+    var link = DebugLink{pipe: pipe, process: process, overlapped: overlapped, waits: waits, inbox: "", open: true}
+    link.finish(ConnectNamedPipe(pipe, overlapped))
+    if link.open and link.read_line() == "hello"
+        say("Debugging " + name + ". It stops at its first line. Type help for the commands.\n")
+        link.send("step")
+    end
+    var last = "c"
+    while link.open
+        var event_line = link.read_line()
+        if not link.open
+            break
+        end
+        if not starts_with(event_line, "stopped ")
+            if starts_with(event_line, "error ")
+                say(slice(event_line, 6, len(event_line)) + "\n")
+            end
+            continue
+        end
+        var parts = split(event_line, " ")
+        var line = int(parts[2])
+        var label = slice(event_line, len(parts[0]) + len(parts[1]) + len(parts[2]) + 3, len(event_line))
+        var why = ""
+        if parts[1] == "breakpoint"
+            why = " (breakpoint)"
+        elif parts[1] == "pause"
+            why = " (paused)"
+        end
+        say("Stopped at " + label + " line " + string(line) + why + "\n")
+        var text = debug_source_line(root, label, line)
+        if text != ""
+            say("  " + string(line) + " | " + text + "\n")
+        end
+        var resumed = false
+        while not resumed and link.open
+            say("(jamo) ")
+            var typed = trim(input())
+            if typed == ""
+                typed = last
+            end
+            var word = typed
+            var rest = ""
+            var space = find(typed, " ")
+            if space > 0
+                word = slice(typed, 0, space)
+                rest = trim(slice(typed, space + 1, len(typed)))
+            end
+            if word == "c" or word == "continue"
+                link.send("continue")
+                last = "c"
+                resumed = true
+            elif word == "n" or word == "next"
+                link.send("next")
+                last = "n"
+                resumed = true
+            elif word == "s" or word == "step"
+                link.send("step")
+                last = "s"
+                resumed = true
+            elif word == "o" or word == "out"
+                link.send("out")
+                last = "o"
+                resumed = true
+            elif word == "b" or word == "break"
+                var where = label
+                var number = rest
+                var colon = find(rest, ":")
+                if colon > 0
+                    where = replace(slice(rest, 0, colon), "\\", "/")
+                    number = slice(rest, colon + 1, len(rest))
+                end
+                if number == "" or int_or(number, -1) <= 0
+                    say("  Like this: b 12, or b enemy.jamo:12\n")
+                else
+                    link.send("break " + string(int_or(number, -1)) + " " + where)
+                    say("  Breakpoint at " + where + " line " + string(int_or(number, -1)) + ".\n")
+                end
+            elif word == "clear"
+                link.send("clear")
+                say("  No more breakpoints.\n")
+            elif word == "v" or word == "vars"
+                debug_show_vars(link, int_or(rest, 0), "")
+            elif word == "p" or word == "print"
+                debug_show_vars(link, 0, rest)
+            elif word == "w" or word == "where"
+                var frames = link.ask("frames")
+                for i in 0..len(frames)
+                    var bits = split(slice(frames[i], 6, len(frames[i])), "|")
+                    if len(bits) >= 3
+                        say("  " + string(i) + "  " + bits[0] + "  " + bits[1] + " line " + bits[2] + "\n")
+                    end
+                end
+            elif word == "q" or word == "quit"
+                TerminateProcess(process, FAILED)
+                link.open = false
+            else
+                say(DEBUG_HELP)
+            end
+        end
+    end
+    WaitForSingleObject(process, WAIT_FOREVER)
+    var exit_code = memory(8)
+    poke_i32(exit_code, 0, FAILED)
+    GetExitCodeProcess(process, exit_code)
+    CloseHandle(process)
+    CloseHandle(pipe)
+    CloseHandle(event)
+    say("The program finished with exit code " + string(peek_i32(exit_code, 0)) + ".\n")
+    return peek_i32(exit_code, 0)
+end
+
 # --- The command ---
 
 func command_answer(words: [string]): int
@@ -895,6 +1176,13 @@ func command_answer(words: [string]): int
             paths.add(words[i])
         end
         return tidy_files(paths)
+    end
+    if count >= 3 and command == "debug"
+        var debug_inputs: [string] = []
+        for i in 2..len(words)
+            debug_inputs.add(words[i])
+        end
+        return debug_program(words[1], debug_inputs)
     end
     if count == 3 and command == "doc"
         return make_docs(words[1])
@@ -942,6 +1230,11 @@ func command_answer(words: [string]): int
             if cleaner_mode / TRACING % 2 == 0
                 cleaner_mode += TRACING
             end
+        elif word == "--debug"
+            if cleaner_mode / 8 % 2 == 0
+                cleaner_mode += NO_OPTIMIZING
+            end
+            debug_build = true
         else
             break
         end

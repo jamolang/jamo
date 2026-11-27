@@ -2178,6 +2178,10 @@ func Generator.write_builtin_call(e: Expr)
         out.mix_hash_rax()
         return
     end
+    if name == "jamo_frame"
+        out.hex("4889e8")
+        return
+    end
     if name == "memory"
         self.write_expression(e.inputs[0])
         out.mov_rcx_rax()

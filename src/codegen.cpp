@@ -1610,6 +1610,10 @@ private:
             out.mix_hash_rax();
             return;
         }
+        if (name == "jamo_frame") {
+            out.bytes({0x48, 0x89, 0xE8});  // mov rax, rbp
+            return;
+        }
         if (name == "memory") {
             write_expression(*expr.inputs[0]);
             out.mov_rcx_rax();

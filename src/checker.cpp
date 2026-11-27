@@ -1725,6 +1725,9 @@ private:
 
     Type check_call(Expr& expr) {
         if (const Variable* local = find_variable(expr.name); !local || local->slot <= FIRST_GLOBAL_SLOT) expr.name = own_name(expr.name, expr.spot.file);
+        if (expr.name == "jamo_debug_line" && expr.inputs.size() == 3 && expr.inputs[1]->kind == ExprKind::String && expr.inputs[1]->text.empty()) {
+            expr.inputs[1]->text = debug_info(expr.spot);
+        }
         if (const Variable* variable = find_variable(expr.name); variable && program.types.is_function(variable->type) && expr.type_args.empty()) {
             auto callee = std::make_unique<Expr>();
             callee->kind = ExprKind::Name;
@@ -1810,7 +1813,7 @@ private:
 
     static bool is_builtin(const std::string& name) {
         static const char* const names[] = {"input", "args", "read_file", "write_file", "exists", "fail", "byte", "callback", "wide", "memory", "memory_text",
-            "peek_i64", "peek_i32", "peek_u16", "peek_u8", "peek_f64", "peek_f32", "poke_i64", "poke_i32", "poke_u16", "poke_u8", "poke_f64", "poke_f32", "hash_of"};
+            "peek_i64", "peek_i32", "peek_u16", "peek_u8", "peek_f64", "peek_f32", "poke_i64", "poke_i32", "poke_u16", "poke_u8", "poke_f64", "poke_f32", "hash_of", "jamo_frame"};
         return std::find(std::begin(names), std::end(names), name) != std::end(names);
     }
 
@@ -1875,6 +1878,7 @@ private:
             types = std::vector<Type>{Type::Int};
             answer = Type::Int;
         }
+        if (name == "jamo_frame") answer = Type::Int;
         const bool is_float = name.size() > 7 && name.substr(name.size() - 3, 1) == "f";
         if (name.rfind("peek_", 0) == 0) {
             wanted = {"address", "offset"};
@@ -1946,6 +1950,54 @@ private:
         const std::string through = alias_hint(name, spot.file);
         const std::string close = through.empty() ? closest(name, options) : through;
         errors.add(spot, "nothing has this name: " + name, close.empty() ? fallback : "Did you mean " + close + "?");
+    }
+
+    // --- --debug ---
+    // For each line: its function, its file, and each variable it can see, with its place from the frame and its kind
+    std::string debug_info(Spot spot) {
+        if (!current || spot.file < 0) return "";
+        std::string name = without_file(current->name);
+        const size_t lambda = name.find(" (lambda ");
+        if (lambda != std::string::npos && lambda > 0) name = name.substr(0, lambda);
+        std::string out = name + "|" + program.file_names[static_cast<size_t>(spot.file)];
+        const int inputs = static_cast<int>(current->inputs.size());
+        std::map<std::string, std::string> seen;
+        for (size_t level = scopes.size(); level-- > 0;) {
+            for (const auto& [variable_name, variable] : scopes[level]) {
+                if (seen.count(variable_name) || variable.slot < 0 || variable.capture >= 0 || variable_name.empty() || variable_name[0] == '(') continue;
+                const int offset = variable.slot < inputs ? 16 + (inputs - 1 - variable.slot) * 8 : -(variable.slot - inputs + 1) * 8;
+                seen[variable_name] = std::to_string(offset) + ":" + debug_kind(variable.type, true);
+            }
+        }
+        for (const auto& [variable_name, rest] : seen) out += "|" + variable_name + ":" + rest;
+        return out;
+    }
+
+    // i, f, b, s, x for a function, aKIND for an array, eNAME{A,B} for an enum, tNAME{FIELD=KIND;...} for a struct
+    std::string debug_kind(Type type, bool with_fields) const {
+        if (type == Type::Int) return "i";
+        if (type == Type::Float) return "f";
+        if (type == Type::Bool) return "b";
+        if (type == Type::String) return "s";
+        if (program.types.is_array(type)) return "a" + debug_kind(program.types.element_of(type), false);
+        if (program.types.is_function(type)) return "x";
+        const std::string name = without_file(type_name(type));
+        if (program.types.is_enum(type)) {
+            std::string out = "e" + name + "{";
+            const auto found = enums.find(type_name(type));
+            if (found != enums.end()) {
+                for (size_t i = 0; i < found->second->members.size(); i++) out += (i > 0 ? "," : "") + found->second->members[i];
+            }
+            return out + "}";
+        }
+        if (program.types.is_struct(type)) {
+            if (!with_fields) return "t" + name;
+            std::string out = "t" + name + "{";
+            const std::vector<StructField>& fields = program.types.fields_of(type);
+            for (size_t i = 0; i < fields.size(); i++) out += (i > 0 ? ";" : "") + fields[i].name + "=" + debug_kind(fields[i].type, false);
+            return out + "}";
+        }
+        return "?";
     }
 
     // --- Interfaces ---

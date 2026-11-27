@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-FILES = ["package.json", "extension.js", "jamo.tmLanguage.json", "language-configuration.json"]
+FILES = ["package.json", "extension.js", "debug_adapter.js", "jamo.tmLanguage.json", "language-configuration.json"]
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)
 
 

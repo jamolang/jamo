@@ -476,6 +476,70 @@ def test_doc(work):
     ran = run([str(CPP_JAMO), "doc", "main.jamo"], cwd=folder)
     report("the C++ backup says to use jamo.exe for jamo doc", ran.returncode == 1 and "Use jamo.exe" in ran.stderr, ran.stderr)
 
+# --- The debugger: jamo debug in the console, the VS Code adapter, and --debug in both compilers ---
+def test_debugger(work):
+    source = ROOT / "tests" / "debug" / "dbg.jamo"
+    builds = []
+    for compiler in (JAMO, CPP_JAMO):
+        folder = work / "debug build" / compiler.stem
+        folder.mkdir(parents=True)
+        shutil.copy(source, folder / "dbg.jamo")
+        built = run([str(compiler), "build", "--debug", str(folder / "dbg.jamo")], cwd=folder)
+        builds.append((folder / "dbg.exe").read_bytes() if (folder / "dbg.exe").exists() else b"")
+        report(f"--debug builds, from {compiler.name}", built.returncode == 0, built.stderr)
+    report("both compilers make the same debug .exe", builds[0] != b"" and builds[0] == builds[1])
+    alone = run([str(work / "debug build" / "jamo" / "dbg.exe")])
+    report("a debug build with no debugger runs as usual", alone.returncode == 0 and clean(alone.stdout) == "6\n6\n", alone.stdout + alone.stderr)
+
+    folder = work / "debug console"
+    folder.mkdir()
+    shutil.copy(source, folder / "dbg.jamo")
+    typed = "b 14\nc\nw\nv\nv 1\np count\np nope\nn\no\nc\n"
+    ran = subprocess.run([str(JAMO), "debug", "dbg.jamo"], cwd=folder, input=typed, capture_output=True, text=True, timeout=60, encoding="utf-8")
+    enemy = 'Enemy{name: "orc", hp: 10, speed: 1.5, mood: Mood.ANGRY}'
+    want = (
+        "Debugging dbg.jamo. It stops at its first line. Type help for the commands.\n"
+        "Stopped at dbg.jamo line 20\n  20 | var count = 3\n"
+        "(jamo)   Breakpoint at dbg.jamo line 14.\n"
+        "(jamo) Stopped at dbg.jamo line 14 (breakpoint)\n  14 | var left = e.hp - amount\n"
+        "(jamo)   0  hurt  dbg.jamo line 14\n  1  main  dbg.jamo line 24\n"
+        f"(jamo)   amount: int = 4\n  e: Enemy = {enemy}\n"
+        f"(jamo)   alive: bool = true\n  count: int = 3\n  e: Enemy = {enemy}\n  names: [string] = [\"orc\", \"slime\"]\n"
+        "(jamo)   There's no variable called count here.\n"
+        "(jamo)   There's no variable called nope here.\n"
+        "(jamo) Stopped at dbg.jamo line 15\n  15 | e.hp = left\n"
+        "(jamo) Stopped at dbg.jamo line 25\n  25 | print(total)\n"
+        "(jamo) 6\n6\n"
+        "The program finished with exit code 0.\n"
+    )
+    report("jamo debug stops, steps, and shows the calls and variables", ran.returncode == 0 and clean(ran.stdout) == want, f"{ran.returncode}\n{ran.stdout}\nwanted:\n{want}")
+    ran = subprocess.run([str(JAMO), "debug", "dbg.jamo"], cwd=folder, input="q\n", capture_output=True, text=True, timeout=60, encoding="utf-8")
+    report("jamo debug's q stops the program", clean(ran.stdout).endswith("The program finished with exit code 1.\n") and "6\n" not in ran.stdout, ran.stdout)
+    ran = run([str(CPP_JAMO), "debug", "dbg.jamo"], cwd=folder)
+    report("the C++ backup says to use jamo.exe for jamo debug", ran.returncode == 1 and "Use jamo.exe" in ran.stderr, ran.stderr)
+
+    node = shutil.which("node")
+    if not node:
+        report("node is here for the VS Code debugger check", False, "node wasn't found")
+        return
+    folder = work / "debug vscode"
+    folder.mkdir()
+    shutil.copy(source, folder / "dbg.jamo")
+    ran = run([node, str(ROOT / "tests" / "debug" / "vscode_check.js"), str(ROOT / "vscode" / "debug_adapter.js"), str(folder / "dbg.jamo"), str(JAMO), "14"], cwd=folder)
+    want = (
+        "launch: true \n"
+        'breakpoints: [{"verified":true,"line":14}]\n'
+        "stopped: breakpoint\n"
+        "  frame 0 hurt dbg.jamo 14\n  frame 1 main dbg.jamo 24\n"
+        f"  var amount: int = 4\n  var e: Enemy = {enemy}\n"
+        "  one call up: alive, count, e, names\n"
+        "  hover amount: 4\n"
+        "after next: step line 15\n"
+        "exited: 0\n"
+        'program printed: "6\\n6\\n"\n'
+    )
+    report("the VS Code debugger stops, shows calls and variables, steps and finishes", ran.returncode == 0 and clean(ran.stdout) == want, f"{ran.stdout}\n{ran.stderr}\nwanted:\n{want}")
+
 # --- jamo run --trace: each of the program's own functions writes its name as it starts, indented by depth ---
 def test_trace(work):
     folder = work / "trace"
@@ -5479,6 +5543,7 @@ def main():
         test_trace(work)
         test_test_command(work)
         test_doc(work)
+        test_debugger(work)
         test_fmt(work)
         test_checksums(work)
         test_console_text(work)

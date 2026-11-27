@@ -293,6 +293,65 @@ bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
     return true;
 }
 
+namespace {
+
+std::unique_ptr<Stmt> debug_hook(const Spot& spot) {
+    auto call = std::make_unique<Expr>();
+    call->kind = ExprKind::Call;
+    call->name = "jamo_debug_line";
+    call->spot = spot;
+    call->depth = 2;
+    auto line = std::make_unique<Expr>();
+    line->kind = ExprKind::Number;
+    line->number = static_cast<uint64_t>(spot.line);
+    line->spot = spot;
+    auto info = std::make_unique<Expr>();
+    info->kind = ExprKind::String;
+    info->spot = spot;
+    auto frame = std::make_unique<Expr>();
+    frame->kind = ExprKind::Call;
+    frame->name = "jamo_frame";
+    frame->spot = spot;
+    call->inputs.push_back(std::move(line));
+    call->inputs.push_back(std::move(info));
+    call->inputs.push_back(std::move(frame));
+    auto stmt = std::make_unique<Stmt>();
+    stmt->kind = StmtKind::Call;
+    stmt->spot = spot;
+    stmt->value = std::move(call);
+    return stmt;
+}
+
+void debug_block(Block& block) {
+    Block out;
+    for (auto& stmt : block) {
+        debug_block(stmt->body);
+        for (ElifPart& part : stmt->elifs) debug_block(part.body);
+        for (CasePart& part : stmt->cases) debug_block(part.body);
+        debug_block(stmt->other_body);
+        out.push_back(debug_hook(stmt->spot));
+        out.push_back(std::move(stmt));
+    }
+    block = std::move(out);
+}
+
+bool in_built_in_file(const Program& program, int file) {
+    if (file < 0 || static_cast<size_t>(file) >= program.file_names.size()) return true;
+    const std::string& name = program.file_names[static_cast<size_t>(file)];
+    return name.size() > 11 && name.compare(name.size() - 11, 11, " (built in)") == 0;
+}
+
+}  // namespace
+
+void add_debug_lines(Program& program) {
+    for (auto& function : program.functions) {
+        if (function->dll.empty() && !in_built_in_file(program, function->spot.file)) debug_block(function->body);
+    }
+    for (Block& body : program.lambda_bodies) {
+        if (!body.empty() && !in_built_in_file(program, body.front()->spot.file)) debug_block(body);
+    }
+}
+
 void load_extra_file(const std::string& name, const std::string& source, Errors& errors, Program& program) {
     program.own_label.clear();
     program.own_types.clear();

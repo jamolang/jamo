@@ -1,25 +1,41 @@
 {
     "name": "jamo",
     "displayName": "Jamo",
-    "description": "Colors, red underlines, hover, go to definition, an outline and suggestions for the Jamo language.",
+    "description": "Colors, red underlines, hover, go to definition, an outline, suggestions and a debugger for the Jamo language.",
     "version": "0.4.0",
     "publisher": "jamolang",
-    "engines": { "vscode": "^1.75.0" },
-    "categories": ["Programming Languages"],
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Debuggers"
+    ],
     "main": "./extension.js",
-    "activationEvents": ["onLanguage:jamo"],
+    "activationEvents": [
+        "onLanguage:jamo",
+        "onDebug"
+    ],
     "contributes": {
-        "languages": [{
-            "id": "jamo",
-            "aliases": ["Jamo"],
-            "extensions": [".jamo"],
-            "configuration": "./language-configuration.json"
-        }],
-        "grammars": [{
-            "language": "jamo",
-            "scopeName": "source.jamo",
-            "path": "./jamo.tmLanguage.json"
-        }],
+        "languages": [
+            {
+                "id": "jamo",
+                "aliases": [
+                    "Jamo"
+                ],
+                "extensions": [
+                    ".jamo"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "jamo",
+                "scopeName": "source.jamo",
+                "path": "./jamo.tmLanguage.json"
+            }
+        ],
         "configuration": {
             "title": "Jamo",
             "properties": {
@@ -29,6 +45,73 @@
                     "description": "Where jamo.exe is. Just jamo works if it's on your PATH."
                 }
             }
-        }
+        },
+        "breakpoints": [
+            {
+                "language": "jamo"
+            }
+        ],
+        "debuggers": [
+            {
+                "type": "jamo",
+                "label": "Jamo",
+                "languages": [
+                    "jamo"
+                ],
+                "program": "./debug_adapter.js",
+                "runtime": "node",
+                "configurationAttributes": {
+                    "launch": {
+                        "required": [
+                            "program"
+                        ],
+                        "properties": {
+                            "program": {
+                                "type": "string",
+                                "description": "The .jamo file to debug.",
+                                "default": "${file}"
+                            },
+                            "stopOnEntry": {
+                                "type": "boolean",
+                                "description": "Stop at the program's first line.",
+                                "default": false
+                            },
+                            "args": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "What to pass to the program.",
+                                "default": []
+                            },
+                            "jamoPath": {
+                                "type": "string",
+                                "description": "Where jamo.exe is. Without it, the jamo.path setting is used."
+                            }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    {
+                        "type": "jamo",
+                        "request": "launch",
+                        "name": "Debug this Jamo file",
+                        "program": "${file}"
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Jamo: debug a file",
+                        "description": "Runs a .jamo file in the debugger",
+                        "body": {
+                            "type": "jamo",
+                            "request": "launch",
+                            "name": "Debug this Jamo file",
+                            "program": "^\"\\${file}\""
+                        }
+                    }
+                ]
+            }
+        ]
     }
 }

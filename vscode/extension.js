@@ -209,6 +209,22 @@ function activate(context) {
     const underlines = vscode.languages.createDiagnosticCollection("jamo");
     context.subscriptions.push(underlines);
 
+    // F5 on a .jamo file debugs it with no launch.json, using the jamo.path setting
+    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider("jamo", {
+        resolveDebugConfiguration(_folder, config) {
+            const editor = vscode.window.activeTextEditor;
+            if (!config.type && !config.request && !config.name && editor && editor.document.languageId === "jamo") {
+                config.type = "jamo";
+                config.request = "launch";
+                config.name = "Debug this Jamo file";
+                config.program = editor.document.uri.fsPath;
+            }
+            if (!config.program) return undefined;
+            if (!config.jamoPath) config.jamoPath = vscode.workspace.getConfiguration("jamo").get("path") || "jamo";
+            return config;
+        },
+    }));
+
     const check = (document) => {
         if (document.languageId !== "jamo" || document.uri.scheme !== "file") return;
         if (document.uri.fsPath.startsWith(LIBRARY_FOLDER)) return;

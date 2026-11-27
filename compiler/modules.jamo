@@ -573,6 +573,67 @@ func load_program(main_file: string, errors: Errors, program: Program): bool
     return true
 end
 
+# --- --debug: a call to jamo_debug_line before each line of the program's own files ---
+func debug_hook(program: Program, line: int, column: int, length: int, file: int): int
+    var call = program.new_expr(EX_CALL, line, column, length)
+    var number = program.new_expr(EX_NUMBER, line, column, length)
+    var info = program.new_expr(EX_STRING, line, column, length)
+    var frame = program.new_expr(EX_CALL, line, column, length)
+    var c = program.exprs[call]
+    c.file = file
+    c.name = "jamo_debug_line"
+    c.depth = 2
+    c.inputs = [number, info, frame]
+    program.exprs[number].file = file
+    program.exprs[number].number = line
+    program.exprs[info].file = file
+    program.exprs[frame].file = file
+    program.exprs[frame].name = "jamo_frame"
+    var stmt = program.new_stmt(ST_CALL, line, column, length)
+    program.stmts[stmt].file = file
+    program.stmts[stmt].value = call
+    return stmt
+end
+
+func debug_block(program: Program, block: [int]): [int]
+    var out: [int] = []
+    for place in block
+        var s = program.stmts[place]
+        s.body = debug_block(program, s.body)
+        for part in s.elifs
+            part.body = debug_block(program, part.body)
+        end
+        for part in s.cases
+            part.body = debug_block(program, part.body)
+        end
+        s.other_body = debug_block(program, s.other_body)
+        out.add(debug_hook(program, s.line, s.column, s.length, s.file))
+        out.add(place)
+    end
+    return out
+end
+
+func in_built_in_file(program: Program, file: int): bool
+    if file < 0 or file >= len(program.file_names)
+        return true
+    end
+    return ends_with(program.file_names[file], " (built in)")
+end
+
+func add_debug_lines(program: Program)
+    for function in program.functions
+        if function.dll == "" and not in_built_in_file(program, function.file)
+            function.body = debug_block(program, function.body)
+        end
+    end
+    for i in 0..len(program.lambda_bodies)
+        var body = program.lambda_bodies[i]
+        if len(body) > 0 and not in_built_in_file(program, program.stmts[body[0]].file)
+            program.lambda_bodies[i] = debug_block(program, body)
+        end
+    end
+end
+
 # Reads one more file from text, like the main that jamo test makes. It uses nothing
 func load_extra_file(name: string, source: string, errors: Errors, program: Program)
     program.own_label = ""

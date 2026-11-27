@@ -2008,6 +2008,32 @@ Square can't be a Shape, because it has no grow function.
 Shape needs grow to be func(float).
 ```
 
+## 33. Finding bugs with the debugger
+
+When a program does something strange, the debugger lets you stop it on any line and look inside: which function it's in, how it got there, and what every variable holds right then.
+
+In the console, type `jamo debug game.jamo`. It stops at the first line and waits for you:
+
+```text
+Debugging game.jamo. It stops at its first line. Type help for the commands.
+Stopped at game.jamo line 20
+  20 | var count = 3
+(jamo) b 14
+  Breakpoint at game.jamo line 14.
+(jamo) c
+Stopped at game.jamo line 14 (breakpoint)
+  14 | var left = e.hp - amount
+(jamo) v
+  amount: int = 4
+  e: Enemy = Enemy{name: "orc", hp: 10, speed: 1.5, mood: Mood.ANGRY}
+```
+
+`b 14` puts a breakpoint on line 14 (`b enemy.jamo:14` for another file), and `c` runs until it gets to one. `n` runs one line, stepping over any calls on it, `s` steps into a call, and `o` runs until this function gives back its answer. `v` shows the variables, `p name` shows one, `w` shows the calls it's in, and `q` stops the program. Pressing Enter on its own does the last `c`, `n`, `s` or `o` again.
+
+In VS Code with the Jamo extension, it's even easier: click left of a line number to put a red breakpoint dot there, then press F5. The program stops on that line, the variables show on the left, and the buttons at the top step and continue.
+
+A program built for the debugger runs a little slower, but only while you're debugging. `jamo build` and `jamo run` work as before.
+
 ## What Jamo can't do yet
 
 Jamo is young, so it's better to know this up front:

@@ -16,6 +16,7 @@
 #include "codegen.hpp"
 #include "modules.hpp"
 #include "pe.hpp"
+#include "libraries.hpp"
 
 namespace fs = std::filesystem;
 
@@ -28,6 +29,7 @@ const int CLEANER_OFF = 4;
 const int NO_OPTIMIZING = 8;
 const int WINDOW_PROGRAM = 16;
 const int TRACING = 32;
+bool debugging = false;  // --debug: the program comes with jamo_debugger.jamo and a call to it before each line
 const int RENAME_ATTEMPTS = 20;
 const DWORD RENAME_WAIT_MS = 50;
 const char* const VERSION = "0.6.0";
@@ -41,6 +43,7 @@ const char* const USAGE =
     "  jamo build --window file.jamo   Writes a window program, with no console behind it\n"
     "  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n"
     "  jamo check file.jamo   Finds mistakes without writing an .exe\n"
+    "  jamo debug file.jamo   Runs it with breakpoints, stepping and a look at its variables\n"
     "  jamo test              Runs the test_ functions in every _test.jamo file here, or: jamo test folder or file\n"
     "  jamo new name          Makes a folder called name, with a program to start from\n"
     "  jamo new --game name   Makes it with a small window game to start from instead\n"
@@ -161,6 +164,11 @@ bool load_and_check(const fs::path& source_path, Program& program) {
     if (!load_program(source_path, errors, program)) {
         std::fprintf(stderr, "I can't read a file called %s.\n", as_text(source_path).c_str());
         return false;
+    }
+    if (!errors.any() && debugging) {
+        load_extra_file("jamo_debugger.jamo (built in)", builtin_library("jamo_debugger.jamo"), errors, program);
+        program.setup_order.insert(program.setup_order.begin(), static_cast<int>(program.file_names.size()) - 1);
+        add_debug_lines(program);
     }
     if (!errors.any()) check_program(program, errors);
     if (errors.any()) {
@@ -790,6 +798,10 @@ int wmain(int count, wchar_t** words) {
             std::fputs("The C++ backup can't tidy files. Use jamo.exe, the compiler written in Jamo, for jamo fmt.\n", stderr);
             return FAILED;
         }
+        if (count >= 3 && command == L"debug") {
+            std::fputs("The C++ backup can't run the debugger. Use jamo.exe, the compiler written in Jamo, for jamo debug.\n", stderr);
+            return FAILED;
+        }
         if (count == 3 && command == L"doc") {
             std::fputs("The C++ backup can't make docs. Use jamo.exe, the compiler written in Jamo, for jamo doc.\n", stderr);
             return FAILED;
@@ -820,6 +832,9 @@ int wmain(int count, wchar_t** words) {
                 cleaner_mode |= WINDOW_PROGRAM;
             } else if (word == L"--trace") {
                 cleaner_mode |= TRACING;
+            } else if (word == L"--debug") {
+                cleaner_mode |= NO_OPTIMIZING;
+                debugging = true;
             } else {
                 break;
             }
