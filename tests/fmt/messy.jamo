@@ -1,0 +1,59 @@
+use "list.jamo"
+struct Box
+on_click: func(int): int
+size: int
+end
+enum Mood
+CALM
+ANGRY
+end
+func main()
+		var limit = 5
+  var f = func(x: int): int
+ return x * limit
+     end
+var b = Box{on_click: f, size: 2}
+if b.size > 1
+print("big")
+elif b.size == 1
+       print("one")
+else
+print("none")
+end
+match b.size
+case 1
+print("a")
+case 2
+print("b")
+else
+print("c")
+end
+try
+print(int("x"))
+catch problem
+print(problem)
+end
+var total = add(
+1,
+add(
+2,
+3
+)
+)
+var long = 1 +
+2
+for i in 0..
+3
+print(i)
+end
+func twice(n: int): int => n * 2
+print(twice(total + long))
+print(filtered([1, 2, 3], func(n: int): bool => n > 1))
+end
+
+func add(a: int,
+b: int): int
+return a + b   # adds them
+end
+
+

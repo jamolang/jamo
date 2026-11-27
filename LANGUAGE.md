@@ -109,6 +109,8 @@ print(change(4))
 - `func(x: int, y: int): int => x * y` is a function written in place. The answer's type can be left out, and comes from the expression after `=>`, which is all it does
 - One written in place can use the variables and inputs around it. It keeps a copy of each one's value from when it was made (arrays and structs are shared, as always). Variables outside functions are used directly, not copied
 - `( )` after any value holding a function calls it, like `steps[0](3)` or `make_adder(5)(1)`
+- Without `=>`, a function written in place has lines after it and then `end`, like any function's body
+- `func name(x: int): int` inside a function, with `=> expression` or lines and `end`, is the same as `var name = func(x: int): int ...`. It can't call itself, and it can't change the variables it captured, which are copies
 
 ## Generics
 ```

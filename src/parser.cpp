@@ -453,7 +453,7 @@ private:
             case TokenKind::Use:
                 fail("use can only go at the top level of a file, outside functions.");
             case TokenKind::Func:
-                fail("Functions can't go inside functions.", "Move this one outside, and finish the function above with end.");
+                return parse_nested_function();
             default:
                 fail("A statement can't start with this.");
         }
@@ -881,18 +881,66 @@ private:
         return expr;
     }
 
-    // func(x: int, y: int): int => x * y, a function written in place. The answer's type can be left out
+    // func(x: int, y: int): int => x * y, a function written in place. The answer's type can be left out. Or with a
+    // block: func(x: int): int, then lines, then end
     ExprPtr parse_lambda(ExprPtr expr) {
         take();
-        expr->kind = ExprKind::Lambda;
+        parse_lambda_inputs(*expr);
+        if (next_is(TokenKind::Newline)) {
+            parse_lambda_block(*expr, expr->spot);
+            return expr;
+        }
+        expect(TokenKind::Arrow, "A function written in place needs => before what it gives back.", "Like this: func(x: int): int => x * 2");
+        expr->left = parse_expression();
+        expr->depth = expr->left->depth + 1;
+        return expr;
+    }
+
+    // The block of a function written in place, up to its end. It's kept aside, and the Lambda knows where
+    void parse_lambda_block(Expr& expr, Spot opener) {
+        expect_line_end();
+        Block body = parse_block(opener, "func");
+        expect(TokenKind::EndWord, "This function needs an end.");
+        program.lambda_bodies.push_back(std::move(body));
+        expr.number = program.lambda_bodies.size();
+    }
+
+    // func name(x: int): int inside a function, then lines, then end: var name = a function written in place
+    std::unique_ptr<Stmt> parse_nested_function() {
+        const Token& keyword = take();
+        const Token& name = expect_name("a function name");
+        auto value = std::make_unique<Expr>();
+        value->spot = keyword.spot;
+        parse_lambda_inputs(*value);
+        if (next_is(TokenKind::Arrow)) {
+            take();
+            value->left = parse_expression();
+            value->depth = value->left->depth + 1;
+        } else {
+            if (!next_is(TokenKind::Newline)) fail("A function inside a function needs => and what it gives back, or lines of its own with end after them.", "Like this: func double(x: int): int => x * 2");
+            parse_lambda_block(*value, keyword.spot);
+        }
+        expect_line_end();
+        auto stmt = std::make_unique<Stmt>();
+        stmt->kind = StmtKind::Var;
+        stmt->spot = keyword.spot;
+        stmt->name = name.text;
+        stmt->name_spot = name.spot;
+        stmt->value = std::move(value);
+        return stmt;
+    }
+
+    // ( ) with the inputs, and the answer's type after : if there is one
+    void parse_lambda_inputs(Expr& expr) {
+        expr.kind = ExprKind::Lambda;
         expect(TokenKind::LeftParen, "A function written in place needs ( ) with its inputs.", "Like this: func(x: int): int => x * 2");
         if (!next_is(TokenKind::RightParen)) {
             while (true) {
                 const Token& name = expect_name("an input name");
                 expect(TokenKind::Colon, "Each input needs a type.", "Like this: func(x: int): int => x * 2");
-                expr->field_names.push_back(name.text);
-                expr->field_spots.push_back(name.spot);
-                expr->type_args.push_back(parse_type());
+                expr.field_names.push_back(name.text);
+                expr.field_spots.push_back(name.spot);
+                expr.type_args.push_back(parse_type());
                 if (!next_is(TokenKind::Comma)) break;
                 take();
             }
@@ -900,13 +948,9 @@ private:
         expect(TokenKind::RightParen, "These inputs need a closing ).");
         if (next_is(TokenKind::Colon)) {
             take();
-            expr->truth = true;
-            expr->convert_to = parse_type();
+            expr.truth = true;
+            expr.convert_to = parse_type();
         }
-        expect(TokenKind::Arrow, "A function written in place needs => before what it gives back.", "Like this: func(x: int): int => x * 2");
-        expr->left = parse_expression();
-        expr->depth = expr->left->depth + 1;
-        return expr;
     }
 
     ExprPtr parse_primary() {

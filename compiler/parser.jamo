@@ -723,7 +723,7 @@ func Parser.parse_statement(): int
     elif kind == TK_USE
         self.fail("use can only go at the top level of a file, outside functions.", "")
     elif kind == TK_FUNC
-        self.fail("Functions can't go inside functions.", "Move this one outside, and finish the function above with end.")
+        return self.parse_nested_function()
     else
         self.fail("A statement can't start with this.", "")
     end
@@ -1565,9 +1565,35 @@ func Parser.parse_array_literal(place: int): int
     return place
 end
 
-# func(x: int, y: int): int => x * y, a function written in place. The answer's type can be left out
+# func(x: int, y: int): int => x * y, a function written in place. The answer's type can be left out. Or with a
+# block: func(x: int): int, then lines, then end
 func Parser.parse_lambda(place: int): int
     self.take()
+    if self.parse_lambda_inputs(place) < 0
+        return -1
+    end
+    var e = self.ex(place)
+    if self.next_is(TK_NEWLINE)
+        self.parse_lambda_block(place, e.line, e.column, e.length)
+        if self.stopped
+            return -1
+        end
+        return place
+    end
+    self.expect(TK_ARROW, "A function written in place needs => before what it gives back.", "Like this: func(x: int): int => x * 2")
+    if self.stopped
+        return -1
+    end
+    e.left = self.parse_expression()
+    if self.stopped
+        return -1
+    end
+    e.depth = self.ex(e.left).depth + 1
+    return place
+end
+
+# ( ) with the inputs, and the answer's type after : if there is one. Answers -1 if it stopped
+func Parser.parse_lambda_inputs(place: int): int
     var e = self.ex(place)
     e.kind = EX_LAMBDA
     self.expect(TK_LEFT_PAREN, "A function written in place needs ( ) with its inputs.", "Like this: func(x: int): int => x * 2")
@@ -1610,16 +1636,69 @@ func Parser.parse_lambda(place: int): int
             return -1
         end
     end
-    self.expect(TK_ARROW, "A function written in place needs => before what it gives back.", "Like this: func(x: int): int => x * 2")
-    if self.stopped
-        return -1
-    end
-    e.left = self.parse_expression()
-    if self.stopped
-        return -1
-    end
-    e.depth = self.ex(e.left).depth + 1
     return place
+end
+
+# The block of a function written in place, up to its end. It's kept aside, and the Lambda knows where
+func Parser.parse_lambda_block(place: int, line: int, column: int, length: int)
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    var body = self.parse_block(line, column, length, "func")
+    if self.stopped
+        return
+    end
+    self.expect(TK_END_WORD, "This function needs an end.", "")
+    if self.stopped
+        return
+    end
+    self.program.lambda_bodies.add(body)
+    self.ex(place).number = len(self.program.lambda_bodies)
+end
+
+# func name(x: int): int inside a function, then lines, then end: var name = a function written in place
+func Parser.parse_nested_function(): int
+    var keyword = self.take()
+    var name = self.expect_name("a function name")
+    if self.stopped
+        return -1
+    end
+    var value = self.program.new_expr(EX_LAMBDA, keyword.line, keyword.column, keyword.length)
+    if self.parse_lambda_inputs(value) < 0
+        return -1
+    end
+    if self.next_is(TK_ARROW)
+        self.take()
+        var body = self.parse_expression()
+        if self.stopped
+            return -1
+        end
+        var v = self.ex(value)
+        v.left = body
+        v.depth = self.ex(body).depth + 1
+    else
+        if not self.next_is(TK_NEWLINE)
+            self.fail("A function inside a function needs => and what it gives back, or lines of its own with end after them.", "Like this: func double(x: int): int => x * 2")
+            return -1
+        end
+        self.parse_lambda_block(value, keyword.line, keyword.column, keyword.length)
+        if self.stopped
+            return -1
+        end
+    end
+    self.expect_line_end()
+    if self.stopped
+        return -1
+    end
+    var stmt = self.program.new_stmt(ST_VAR, keyword.line, keyword.column, keyword.length)
+    var st = self.st(stmt)
+    st.name = name.text
+    st.name_line = name.line
+    st.name_column = name.column
+    st.name_length = name.length
+    st.value = value
+    return stmt
 end
 
 func Parser.parse_primary(): int

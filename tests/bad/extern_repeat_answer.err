@@ -1,4 +1,4 @@
-extern_repeat_answer.jamo line 3: sqrt is already declared in gfx.jamo (built in) line 31, and this one is different: it answers with f32 here but float there.
+extern_repeat_answer.jamo line 3: sqrt is already declared in gfx.jamo (built in) line 33, and this one is different: it answers with f32 here but float there.
     extern "msvcrt.dll" func sqrt(value: float): f32
                              ^^^^
 An extern can be declared again only if its DLL, inputs and answer are exactly the same.

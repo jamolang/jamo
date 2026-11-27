@@ -28,6 +28,10 @@ Every program starts at `main`. `print` shows a value and starts a new line. `en
 
 While you're working on a program, `jamo watch hello.jamo` runs it, then builds and runs it again every time you save. A mistake shows up straight away, and the last version that worked keeps running until it's fixed. Press Ctrl+C to stop watching.
 
+When a program does something you didn't expect, `jamo run --trace hello.jamo` shows each of its own functions as it starts, two spaces in for each call it's inside, so you can follow what it did.
+
+`jamo fmt hello.jamo` tidies a program's indentation: 4 spaces for each block, and the same for each line that carries on. It never changes what the program does, so it's safe to run any time.
+
 **Try it:** make it print your name on a second line.
 
 ## 2. Values and variables
@@ -607,6 +611,107 @@ end
 
 Positions are floats, counting pixels from the window's top left. Colors use `rgb(red, green, blue)` from 0 to 255, or `rgba` with a fourth number for how see-through it is. `screen.load_image("ship.png")` loads a PNG picture to draw with `screen.image(picture, x, y)` or `image_sized`. Call `show()` once a frame to put what you drew on the window.
 
+### Sprites and animation
+
+`use "sprite.jamo"` draws characters that move. A sprite sheet is one picture cut into frames of the same size, counted from 0, left to right and then down. You can load one with `screen.load_pixel_image("hero.png")`, which keeps pixel art sharp, or write it as text right in your code: each letter picks a color from a list, `0` to `9` and then `a` to `z`, and `.` is see-through.
+
+```jamo check-only
+use "sprite.jamo"
+
+func main()
+    var window = open_window("Blinking face", 320, 240)
+    var screen = start_gfx(window)
+    var yellow = rgb(255, 210, 60)
+    var dark = rgb(40, 30, 20)
+    # Two 6 by 6 frames side by side: eyes open, then eyes shut
+    var art = screen.image_from_text([".0000..0000.", "010010000000", "000000011110", "010010000000", "001100001100", ".0000..0000."], [yellow, dark])
+    var face = sheet(art, 6, 6)
+    var blink = animation([0, 0, 0, 0, 1], 4.0, true)
+    var x = 120.0
+    var facing_left = false
+    while window.is_open()
+        if window.key_down("left")
+            x -= 3.0
+            facing_left = true
+        end
+        if window.key_down("right")
+            x += 3.0
+            facing_left = false
+        end
+        blink.update(window.frame_time())
+        screen.clear(rgb(30, 60, 90))
+        screen.sprite(face, blink.frame(), x, 90.0, 10.0, facing_left)
+        screen.show()
+        window.wait_frame(60)
+    end
+end
+```
+
+- `screen.sprite(sheet, frame, x, y, scale, flipped)` draws a frame with its top left at x, y, `scale` times its size, mirrored when `flipped` is true. `sprite_turned` draws it around its middle, turned by an angle in radians.
+- `animation(frames, frames_a_second, looping)` plays a list of frame numbers. Call `update(seconds)` once a frame and draw `frame()`. One that doesn't loop stops on its last frame, and `done()` says when it has finished. `restart()` starts it over.
+- Without a sheet, `image_part` draws part of any image, and `image_turned` turns and mirrors a whole one.
+
+### Particles
+
+`use "particles.jamo"` adds sparks, explosions and smoke. Keep one `Particles` for the game, add to it when something happens, and update and draw it every frame:
+
+```jamo check-only
+use "particles.jamo"
+
+func main()
+    var window = open_window("Sparks", 640, 480)
+    var screen = start_gfx(window)
+    var sparks = new_particles()
+    sparks.gravity = 500.0
+    while window.is_open()
+        if window.mouse_pressed("left")
+            sparks.burst(float(window.mouse_x()), float(window.mouse_y()), 40, rgb(255, 200, 60), 300.0, 0.8)
+        end
+        sparks.update(window.frame_time())
+        screen.clear(rgb(20, 20, 30))
+        sparks.draw(screen)
+        screen.show()
+        window.wait_frame(60)
+    end
+end
+```
+
+### Controllers
+
+`use "gamepad.jamo"` reads Xbox-style controllers, for up to 4 players. Make one with `gamepad(0)` for player 1, call `update()` once a frame, then ask it things:
+
+```jamo check-only
+use "gfx.jamo"
+use "gamepad.jamo"
+
+func main()
+    var window = open_window("Pad", 640, 480)
+    var screen = start_gfx(window)
+    var pad = gamepad(0)
+    var x = 320.0
+    var y = 240.0
+    while window.is_open()
+        pad.update()
+        x += pad.left_x() * 5.0
+        y += pad.left_y() * 5.0
+        if pad.pressed("a")
+            pad.rumble(0.5, 0.5)
+        end
+        if pad.released("a")
+            pad.rumble(0.0, 0.0)
+        end
+        screen.clear(rgb(20, 20, 30))
+        screen.circle(x, y, 20.0, rgb(90, 200, 255))
+        screen.show()
+        window.wait_frame(60)
+    end
+end
+```
+
+`down(button)` is true while a button is held, `pressed` and `released` only on the frame it changes. The buttons are `a`, `b`, `x`, `y`, `up`, `down`, `left`, `right`, `start`, `back`, `lb`, `rb`, `left_stick` and `right_stick`. `left_x()`, `left_y()`, `right_x()` and `right_y()` go from -1.0 to 1.0, with up being negative like the screen, and `left_trigger()` and `right_trigger()` from 0.0 to 1.0. A controller that isn't plugged in reads as nothing pressed, so the keyboard can always work too.
+
+`burst(x, y, count, color, speed, life)` sends particles every way, and `spray(x, y, angle, spread, ...)` sends them one way, like a jet or a trail. `gravity` pulls them down (below 0 floats them up, like smoke), `drag` slows them, and `size` sets how big new ones are. Each one fades and shrinks as it gets old.
+
 ## 15. Sound
 
 `use "sound.jamo"` plays WAV files and made-up tones, many at once.
@@ -893,7 +998,7 @@ ababab
 [30, 20, 10]
 ```
 
-The text tools are `split(text, by)`, `find(text, part)`, which gives -1 when it isn't there, `contains`, `starts_with`, `ends_with`, `slice(text, from, to)`, which goes up to but not including `to`, `replace(text, old, new)`, `trim`, which takes spaces, tabs and line endings off both ends, `upper` and `lower`, which change English, accented, Greek and Cyrillic letters, `letter_count(text)` and `letters(text)`, which count and split whole letters instead of bytes, `reverse_letters`, `join(parts, between)`, `repeat(text, times)`, and `is_int(text)` and `is_float(text)`, which say whether `int(text)` and `float(text)` would work. Places count bytes from 0, like `text[i]`. Each gives back new text, and a place outside the text stops the program with a message saying why.
+The text tools are `split(text, by)`, `find(text, part)`, which gives -1 when it isn't there, `contains`, `starts_with`, `ends_with`, `slice(text, from, to)`, which goes up to but not including `to`, `replace(text, old, new)`, `trim`, which takes spaces, tabs and line endings off both ends, `upper` and `lower`, which change English, accented, Greek and Cyrillic letters, `letter_count(text)` and `letters(text)`, which count and split whole letters instead of bytes, `reverse_letters`, `join(parts, between)`, `repeat(text, times)`, `fixed(number, places)`, which writes a float with that many decimals, like `fixed(3.14159, 2)` for `3.14` (halves round up, the way you'd do it by hand), `commas(1234567)` for `1,234,567`, and `is_int(text)` and `is_float(text)`, which say whether `int(text)` and `float(text)` would work. Places count bytes from 0, like `text[i]`. Each gives back new text, and a place outside the text stops the program with a message saying why.
 
 `sort_ints`, `sort_strings`, `reverse_ints` and `reverse_strings` change the array you give them, instead of making a new one. Text sorts by its bytes, so capitals come before small letters: `"Zoo"` before `"apple"`.
 
@@ -1654,20 +1759,102 @@ Hello, Sam
 ```
 
 - The answer's type after the `)` can be left out, and Jamo works it out from what's after `=>`.
-- What's after `=>` is one expression. For more steps, write a named function and use its name.
 - It keeps a copy of each variable it uses, made when the function is. Changing the variable afterwards doesn't change the function. Arrays and structs are shared as always, so adding to an array it uses works.
 - Any value holding a function can be called straight away, like `steps[1](2)` or `make_adder(5)(1)`.
 
+For more than one expression, leave out `=>` and write lines, then `end`. A function can also go inside another one, by name. Both keep copies of the variables around them, the same way:
+
+```jamo
+use "list.jamo"
+
+func main()
+    var limit = 50
+    func cheap(price: int): bool
+        if price < 0
+            return false
+        end
+        return price < limit
+    end
+    print(filtered([10, 80, -5, 45], cheap))
+    func double(n: int): int => n * 2
+    print(double(21))
+    var shout = func(word: string): string
+        var loud = word + "!"
+        return loud + loud
+    end
+    print(shout("hey"))
+end
+```
+
+```output
+[10, 45]
+42
+hey!hey!
+```
+
+- A function inside a function is made where it's written, like a variable, so it can't call itself. For that, write it outside.
+- It can't change the variables it copied. To share a value that changes, keep it in an array or a struct: adding to an array it uses works.
+
 Try it: make an array of three functions that each change a number, and run a number through all of them in a loop.
+
+## 30. Maybe there, maybe not, and giving back two things
+
+`use "maybe.jamo"` helps when a function might not find anything, or needs to give back more than one value.
+
+```jamo
+use "maybe.jamo"
+
+func divide(a: int, b: int): Maybe<int>
+    if b == 0
+        return none<int>()
+    end
+    return some(a / b)
+end
+
+func min_and_max(items: [int]): Pair<int, int>
+    var low = items[0]
+    var high = items[0]
+    for n in items
+        if n < low
+            low = n
+        end
+        if n > high
+            high = n
+        end
+    end
+    return pair(low, high)
+end
+
+func main()
+    var answer = divide(10, 0)
+    if answer.has()
+        print(answer.get())
+    else
+        print("can't divide by 0")
+    end
+    print(divide(9, 3).or_else(0))
+    var spread = min_and_max([4, -2, 9])
+    print(f"from {spread.first} to {spread.second}")
+    print(find_first([3, 8, 11], func(n: int): bool => n > 5).or_else(-1))
+end
+```
+
+```output
+can't divide by 0
+3
+from -2 to 9
+8
+```
+
+`some(value)` holds a value and `none<int>()` holds nothing (its type has to be given). `has()` says which, `get()` gives the value (and stops with a clear error when there isn't one), and `or_else(fallback)` gives the value or the fallback. `find_first(items, keep)` gives the first item `keep` says yes to. `pair(a, b)` and `triple(a, b, c)` bundle values into a `Pair` or `Triple`, read with `.first`, `.second` and `.third`.
 
 ## What Jamo can't do yet
 
 Jamo is young, so it's better to know this up front:
 
 - It only runs on Windows.
-- A function written in place holds one expression after `=>`. For more steps, write a named function.
 - `len` and `text[i]` count bytes. `letter_count` and `letters` count whole letters, and `upper` and `lower` change English, accented, Greek and Cyrillic letters, but not every language's.
 
 ## Where to go next
 
-The `examples` folder has fifteen small programs to read and change. In the console: a guessing game, a calculator, a to-do list, a text adventure, a word counter, a prime finder and a lunar lander game. In a window: Sky Hopper (a platformer), Beat Run (a rhythm game with music made in code), bouncing balls with sound, Breakout, Snake, a sign-up form and a spinning 3D scene. And `fetch_page.jamo` downloads a web page. `LANGUAGE.md` has the exact rules of the language.
+The `examples` folder has sixteen small programs to read and change. In the console: a guessing game, a calculator, a to-do list, a text adventure, a word counter, a prime finder and a lunar lander game. In a window: Sky Hopper (a platformer), Beat Run (a rhythm game with music made in code), Star Guard (an arena shooter that also works with a controller), bouncing balls with sound, Breakout, Snake, a sign-up form and a spinning 3D scene. And `fetch_page.jamo` downloads a web page. `LANGUAGE.md` has the exact rules of the language.

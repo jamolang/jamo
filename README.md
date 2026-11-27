@@ -106,6 +106,10 @@ Next, the **[guide](GUIDE.md)** teaches the whole language from zero, one small 
 
 *Beat Run, from [examples/beat_run.jamo](examples/beat_run.jamo): a one-button rhythm game whose music is made in code and mixed into one clip, so the game follows the song's own clock.*
 
+![Star Guard, the arena shooter example, holding off a wave of drones](assets/star_guard.gif)
+
+*Star Guard, from [examples/star_guard.jamo](examples/star_guard.jamo): an arena shooter for keyboard and mouse or a controller. Each kind of drone's movement is a function made in place, the art is drawn from rows of text, and the explosions come from `particles.jamo`.*
+
 This is a whole game. Move with the arrow keys and catch the coins:
 
 ```jamo check-only
@@ -166,12 +170,16 @@ And these libraries come built in. Write `use "name.jamo"` at the top of a file 
 | Library | What it's for |
 |---|---|
 | `window`, `gfx` | Windows, the keyboard and mouse, and 2D drawing: shapes, text and images |
+| `sprite` | Sprite sheets and animations, with pixel art made from text, mirroring and turning |
+| `gamepad` | Xbox-style controllers for up to 4 players: buttons, sticks, triggers and rumble |
+| `particles` | Sparks, explosions, smoke and trails that move, fall, slow down and fade |
 | `sound` | Sounds and whole songs, made in code or loaded from files |
 | `ui` | Buttons, sliders, checkboxes and text boxes |
 | `g3d` | 3D scenes with lights, shapes and models |
 | `vec`, `grid`, `timer` | Game helpers: 2D points and directions, boards and tile maps, cooldowns and repeating timers |
 | `net` | Web requests, and links between programs for multiplayer |
 | `math`, `time` | Square roots, angles, random numbers, the clock and waiting |
+| `maybe` | A value that might not be there (`Maybe`), and pairs and triples for giving back more than one thing |
 | `map`, `dict`, `list` | Looking things up by key, and arrays: finding, counting, sorting, reversing, shuffling and picking items of any type |
 | `text`, `builder`, `json`, `bytes` | Working with text, JSON files and binary data |
 | `files`, `term`, `log`, `test` | Folders and files (with `read_file_or` that never stops the program), colors in the console, log files, and checking your own code |
@@ -229,6 +237,8 @@ The compiler is written in Jamo too. A second copy written in C++ lives in [src]
 | `jamo build --window file.jamo` | Writes a window program with no console, for sharing games |
 | `jamo check file.jamo` | Finds mistakes without making an `.exe` |
 | `jamo new name` | Makes a folder with a program to start from (`--game` for a small game) |
+| `jamo run --trace file.jamo` | Runs it, showing each of your own functions as it starts, indented by how deep the calls go |
+| `jamo fmt file.jamo` | Tidies the indentation and spacing, without changing what the program does |
 | `jamo get someone/project` | Downloads a library someone shared on GitHub into `packages`, and says the `use` line for it |
 | `jamo version`, `jamo help` | What they say |
 
@@ -243,7 +253,6 @@ The extension colors Jamo code and underlines mistakes in red as you type. Hover
 ## What Jamo can't do yet
 
 - It only runs on Windows.
-- A function written in place holds one expression, like `func(x: int): int => x * 2`. For more, write a named function.
 
 The end of the [guide](GUIDE.md#what-jamo-cant-do-yet) has the full list.
 

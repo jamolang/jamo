@@ -1,4 +1,6 @@
+# A function inside a function can't have types of its own
 func main()
-    func inner()
+    func inner<T>(x: T): T
+        return x
     end
 end

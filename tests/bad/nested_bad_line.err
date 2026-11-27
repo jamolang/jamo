@@ -1,0 +1,8 @@
+nested_bad_line.jamo line 2: A function inside a function needs => and what it gives back, or lines of its own with end after them.
+        func pick(n: int): int 5
+                               ^
+Like this: func double(x: int): int => x * 2
+nested_bad_line.jamo line 1: This func never gets its end.
+    func main()
+    ^^^^
+Add a line with end to finish it.

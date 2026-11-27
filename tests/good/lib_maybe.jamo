@@ -1,0 +1,52 @@
+# maybe.jamo: Maybe, find_first, pairs and triples. Answers worked out by hand
+use "maybe.jamo"
+
+struct Enemy
+    name: string
+    health: int
+end
+
+func min_and_max(items: [int]): Pair<int, int>
+    var low = items[0]
+    var high = items[0]
+    for n in items
+        if n < low
+            low = n
+        end
+        if n > high
+            high = n
+        end
+    end
+    return pair(low, high)
+end
+
+func divide(a: int, b: int): Maybe<int>
+    if b == 0
+        return none<int>()
+    end
+    return some(a / b)
+end
+
+func main()
+    print(divide(10, 2).get())
+    print(divide(10, 0).has())
+    print(divide(10, 0).or_else(-1))
+    var enemies = [Enemy{name: "slime", health: 0}, Enemy{name: "bat", health: 5}, Enemy{name: "orc", health: 9}]
+    var target = find_first(enemies, func(e: Enemy): bool => e.health > 0)
+    if target.has()
+        target.get().health -= 3
+    end
+    print(enemies[1].health)
+    print(find_first([1, 3, 5], func(n: int): bool => n % 2 == 0).has())
+    var spread = min_and_max([4, -2, 9, 3])
+    print(f"{spread.first} {spread.second}")
+    var t = triple("Ana", 30, true)
+    print(f"{t.first} {t.second} {t.third}")
+    var names = some("Bo")
+    print(names.get() + names.or_else("nobody"))
+    try
+        print(none<string>().get())
+    catch problem
+        print(problem)
+    end
+end

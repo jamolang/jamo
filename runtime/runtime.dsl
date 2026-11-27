@@ -2499,3 +2499,54 @@ too_many:
     jmp error_text
 finished:
     ret
+
+@ trace_call rax = a function's name. For --trace: writes it to the error stream on its own line, two spaces in for each Jamo call under it. Keeps rbx, rsi and rdi
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push rsi
+    push rdi
+    sub rsp, 8
+    mov rbx, rax
+    mov rsi, qword ptr [rbp]
+    xor edi, edi
+    ! out.lea_data(RAX, DataRef::Cleaner);
+    mov r8, qword ptr [rax+40]
+count_frames:
+    test rsi, rsi
+    je counted
+    cmp rsi, r8
+    jae counted
+    inc rdi
+    mov rax, qword ptr [rsi]
+    cmp rax, rsi
+    jbe counted
+    mov rsi, rax
+    jmp count_frames
+counted:
+    dec rdi
+    cmp rdi, 40
+    jbe indent
+    mov edi, 40
+indent:
+    test rdi, rdi
+    jle write_name
+    ! out.lea_data(RAX, DataRef::Letters);
+    add rax, 512
+    call error_text
+    ! out.lea_data(RAX, DataRef::Letters);
+    add rax, 512
+    call error_text
+    dec rdi
+    jmp indent
+write_name:
+    mov rax, rbx
+    call error_text
+    ! out.lea_string(RAX, text.new_line);
+    call error_text
+    lea rsp, [rbp-24]
+    pop rdi
+    pop rsi
+    pop rbx
+    pop rbp
+    ret

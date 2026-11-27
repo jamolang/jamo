@@ -1049,6 +1049,11 @@ func Checker.copy_expr(place: int, params: [int], args: [int]): int
     e.field_lengths = copy_ints(from.field_lengths)
     e.op = from.op
     e.convert_to = self.substitute(from.convert_to, params, args)
+    if from.kind == EX_LAMBDA and from.number > 0
+        var body = self.copy_block(self.program.lambda_bodies[from.number - 1], params, args)
+        self.program.lambda_bodies.add(body)
+        e.number = len(self.program.lambda_bodies)
+    end
     e.depth = from.depth
     for type in from.type_args
         e.type_args.add(self.substitute(type, params, args))
@@ -1804,6 +1809,10 @@ func Checker.check_assign(s: Stmt)
     end
     if found.slot == -1
         self.report_unknown_name(s.name, s.name_line, s.name_column, s.name_length, s.file, "Use var to make a new variable: var " + s.name + " = ...")
+        return
+    end
+    if found.capture >= 0
+        self.add(s.name_line, s.name_column, s.name_length, s.file, s.name + " comes from outside this function, so it can't be changed here.", "The function has a copy, made when it was. To share a value that changes, keep it in an array or a struct.")
         return
     end
     s.slot = found.slot
@@ -2884,6 +2893,22 @@ func Checker.check_lambda(place: int): int
         end
         self.next_slot += 1
     end
+    if e.number > 0
+        # A whole block, checked like any function's
+        var body = self.program.lambda_bodies[e.number - 1]
+        var block_answer = TYPE_NOTHING
+        if e.truth
+            block_answer = e.convert_to
+        end
+        function.return_type = block_answer
+        self.check_statements(body)
+        self.warn_about_unused_variables()
+        if block_answer != TYPE_NOTHING and not self.always_returns(body)
+            self.add(e.line, e.column, e.length, e.file, "This function must return " + self.with_article(block_answer) + " on every path, but it can reach its end without one.", "Add a return before its end. A while doesn't count, and an if needs an else that returns too.")
+        end
+        function.body = body
+        return self.finish_lambda(place, function, block_answer)
+    end
     var wanted = TYPE_NOTHING
     if e.truth
         wanted = e.convert_to
@@ -2917,6 +2942,12 @@ func Checker.check_lambda(place: int): int
     e.left = -1
     function.body.add(stmt)
     function.return_type = answer
+    return self.finish_lambda(place, function, answer)
+end
+
+# Puts the scopes around the function back, reads its captured values there, and gives it to the program
+func Checker.finish_lambda(place: int, function: Function, answer: int): int
+    var e = self.ex(place)
     function.slot_count = self.next_slot
     var frame = self.lambdas.pop()
     var captured = frame.captured

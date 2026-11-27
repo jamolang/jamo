@@ -1,0 +1,66 @@
+# particles.jamo: movement, gravity, drag, getting old, the limit, and bursts. Answers worked out by hand
+use "particles.jamo"
+
+func main()
+    var p = new_particles()
+    # 100 pixels a second right for half a second, no gravity or drag: x goes from 10 to 60
+    p.add(10.0, 20.0, 100.0, 0.0, rgb(255, 0, 0), 1.0)
+    p.update(0.25)
+    p.update(0.25)
+    print(f"{p.items[0].x} {p.items[0].y} {p.count()}")
+    # Too old after its 1 second: gone
+    p.update(0.6)
+    print(p.count())
+
+    # Gravity 200: each 0.5 second step adds 100 down, then moves by the new speed: y = 0 + 50 + 100 = 150
+    p.gravity = 200.0
+    p.add(0.0, 0.0, 0.0, 0.0, rgb(0, 255, 0), 5.0)
+    p.update(0.5)
+    p.update(0.5)
+    print(f"{p.items[0].y} {p.items[0].vy}")
+    p.clear()
+
+    # Drag 0.5: half a second keeps 1 - 0.5 * 0.5 = 75% of the speed
+    p.gravity = 0.0
+    p.drag = 0.5
+    p.add(0.0, 0.0, 80.0, 0.0, rgb(0, 0, 255), 5.0)
+    p.update(0.5)
+    print(f"{p.items[0].vx} {p.items[0].x}")
+    p.clear()
+
+    # The limit keeps the newest ones
+    p.drag = 0.0
+    p.most = 3
+    for i in 0..5
+        p.add(float(i), 0.0, 0.0, 0.0, rgb(9, 9, 9), 5.0)
+    end
+    print(f"{p.count()} {p.items[0].x} {p.items[2].x}")
+
+    # A burst makes that many, all within speed of the start after a second, all gone after their life
+    random_seed(4)
+    var b = new_particles()
+    b.burst(100.0, 100.0, 50, rgb(255, 210, 60), 80.0, 0.5)
+    print(b.count())
+    b.update(0.2)
+    var near = true
+    for q in b.items
+        var dx = q.x - 100.0
+        var dy = q.y - 100.0
+        if dx * dx + dy * dy > 16.0 * 16.0 + 0.001
+            near = false
+        end
+    end
+    print(near)
+    b.update(0.4)
+    print(b.count())
+    var s = new_particles()
+    s.spray(0.0, 0.0, 0.0, 0.0, 10, rgb(1, 1, 1), 100.0, 1.0)
+    s.update(0.1)
+    var right = true
+    for q in s.items
+        if q.x < 5.0 - 0.001 or q.x > 10.0 + 0.001 or q.y * q.y > 0.000001
+            right = false
+        end
+    end
+    print(right)
+end

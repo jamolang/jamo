@@ -22,6 +22,7 @@ const int CLEANER_FLAGS = 7;
 const int WINDOWS_SPACE = 32;  // The space every Windows function may use above its inputs
 const int NO_OPTIMIZING = 8;
 const int WINDOW_PROGRAM = 16;  // No console, and a run error shows in a message box
+const int TRACING = 32;         // Each function of the program's own files writes its name when it starts
 const uint8_t JUMP_FROM_SET = 0x10;  // A jump's condition number is its set instruction's, less this
 const int PAGE_SIZE = 4096;
 const int SHOW_FRAME = 32;
@@ -50,7 +51,7 @@ uint8_t condition_of(BinaryOp op) {
 
 class Generator {
 public:
-    Generator(const Program& the_program, const std::string& the_file_name, int test_flags) : program(the_program), file_name(the_file_name), cleaner_mode(test_flags & (CLEANER_FLAGS | WINDOW_PROGRAM)), optimizing((test_flags & NO_OPTIMIZING) == 0) {}
+    Generator(const Program& the_program, const std::string& the_file_name, int test_flags) : program(the_program), file_name(the_file_name), cleaner_mode(test_flags & (CLEANER_FLAGS | WINDOW_PROGRAM)), optimizing((test_flags & NO_OPTIMIZING) == 0), tracing((test_flags & TRACING) != 0) {}
 
     MachineCode generate() {
         runtime = make_runtime_labels(out);
@@ -444,11 +445,22 @@ private:
         const int local_bytes = (function.slot_count + spare - input_count) * WORD_SIZE;
         for (int touched = PAGE_SIZE; touched < local_bytes; touched += PAGE_SIZE) out.touch_stack_below(touched);
         if (local_bytes > 0) out.sub_rsp(local_bytes);
+        if (tracing && traced(function)) {
+            out.lea_rax_string(string_number(function.name == SETUP_NAME ? "(setting up the variables outside functions)" : function.name));
+            out.call(runtime.trace_call);
+        }
         for (const auto& [slot, reg] : slot_registers) {
             if (slot < input_count) out.load_reg_from_frame(reg, frame_offset(slot));
         }
         write_block(function.body);
         if (!always_leaves(function.body)) write_return();
+    }
+
+    // --trace leaves out the built-in libraries' functions, so only the program's own show
+    bool traced(const Function& function) const {
+        if (program.file_names.empty()) return true;
+        const std::string& name = program.file_names[static_cast<size_t>(function.spot.file < 0 ? 0 : function.spot.file)];
+        return !(name.size() > 11 && name.compare(name.size() - 11, 11, " (built in)") == 0);
     }
 
     // Puts back the registers this function used, then returns
@@ -530,7 +542,7 @@ private:
     // disappear without changing what a program shows. Its inputs and variables go in spare slots of the caller's
     // frame, and each return jumps to the end of its body
     bool can_inline(const Function& function) {
-        if (!optimizing || !function.dll.empty() || function.name == "main") return false;
+        if (!optimizing || tracing || !function.dll.empty() || function.name == "main") return false;
         const auto found = inline_ok.find(function.name);
         if (found != inline_ok.end()) return found->second;
         inline_ok[function.name] = false;
@@ -2212,6 +2224,7 @@ private:
     const std::string& file_name;
     int cleaner_mode;
     bool optimizing;
+    bool tracing = false;
     std::set<std::string> functions_in_use;
     std::map<std::string, const Function*> function_named;
     std::map<std::string, Label> callback_labels;

@@ -1,0 +1,106 @@
+# sprite: sprite sheets and animations, for characters that walk, jump and blink. use "sprite.jamo"
+#
+# A sheet is one image cut into frames of the same size, counted from 0, left to right and then down. An animation
+# is a list of frame numbers played at so many frames a second, looping or stopping at its last one.
+#
+#     var hero = sheet(screen.load_pixel_image("hero.png"), 16, 16)
+#     var walk = animation([0, 1, 2, 3], 8.0, true)
+#     ...each frame:
+#     walk.update(window.frame_time())
+#     screen.sprite(hero, walk.frame(), x, y, 4.0, facing_left)
+
+use "gfx.jamo"
+
+struct Sheet
+    image: Image
+    frame_width: int
+    frame_height: int
+    columns: int
+    count: int
+end
+
+struct Animation
+    frames: [int]
+    seconds_each: float
+    time: float
+    looping: bool
+end
+
+# Cuts an image into frames frame_width by frame_height pixels. Any part left over at the right or bottom is skipped
+func sheet(image: Image, frame_width: int, frame_height: int): Sheet
+    if frame_width <= 0 or frame_height <= 0
+        fail(f"A sheet's frames need a size above 0, not {frame_width} by {frame_height}.")
+    end
+    var columns = image.width / frame_width
+    var rows = image.height / frame_height
+    if columns == 0 or rows == 0
+        fail(f"This image is {image.width} by {image.height} pixels, too small for frames {frame_width} by {frame_height}.")
+    end
+    return Sheet{image: image, frame_width: frame_width, frame_height: frame_height, columns: columns, count: columns * rows}
+end
+
+# Draws one frame with its top left corner at x, y, scale times its size, mirrored left to right when flipped
+func Gfx.sprite(sheet: Sheet, frame: int, x: float, y: float, scale: float, flipped: bool)
+    var width = float(sheet.frame_width) * scale
+    var height = float(sheet.frame_height) * scale
+    self.sprite_turned(sheet, frame, x + width / 2.0, y + height / 2.0, scale, 0.0, flipped)
+end
+
+# Draws one frame around its middle at center_x, center_y, turned by angle in radians
+func Gfx.sprite_turned(sheet: Sheet, frame: int, center_x: float, center_y: float, scale: float, angle: float, flipped: bool)
+    if frame < 0 or frame >= sheet.count
+        fail(f"This sheet has frames 0 to {sheet.count - 1}, not {frame}.")
+    end
+    var part_x = frame % sheet.columns * sheet.frame_width
+    var part_y = frame / sheet.columns * sheet.frame_height
+    self.image_part_turned(sheet.image, part_x, part_y, sheet.frame_width, sheet.frame_height, center_x, center_y, float(sheet.frame_width) * scale, float(sheet.frame_height) * scale, angle, flipped)
+end
+
+# Plays these frame numbers in order, frames_a_second of them each second
+func animation(frames: [int], frames_a_second: float, looping: bool): Animation
+    if len(frames) == 0
+        fail("An animation needs at least one frame.")
+    end
+    if not (frames_a_second > 0.0)
+        fail(f"An animation needs more than 0 frames a second, not {frames_a_second}.")
+    end
+    var kept: [int] = []
+    for f in frames
+        kept.add(f)
+    end
+    return Animation{frames: kept, seconds_each: 1.0 / frames_a_second, time: 0.0, looping: looping}
+end
+
+# Moves the animation on by seconds, usually window.frame_time()
+func Animation.update(seconds: float)
+    if seconds > 0.0
+        self.time += seconds
+    end
+    var length = self.seconds_each * float(len(self.frames))
+    if self.looping and self.time >= length
+        self.time = self.time % length
+    end
+end
+
+# The frame number to draw now
+func Animation.frame(): int
+    var place = int(self.time / self.seconds_each)
+    if place >= len(self.frames)
+        if self.looping
+            place = place % len(self.frames)
+        else
+            place = len(self.frames) - 1
+        end
+    end
+    return self.frames[place]
+end
+
+# True once an animation that doesn't loop has shown its last frame for its full time
+func Animation.done(): bool
+    return not self.looping and self.time >= self.seconds_each * float(len(self.frames))
+end
+
+# Back to the first frame
+func Animation.restart()
+    self.time = 0.0
+end

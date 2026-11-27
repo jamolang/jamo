@@ -19,6 +19,7 @@ const WINDOWS_SPACE = 32
 const NO_OPTIMIZING = 8
 # No console, and a run error shows in a message box
 const WINDOW_PROGRAM = 16
+const TRACING = 32
 const JUMP_FROM_SET = 16
 const PAGE_SIZE = 4096
 const SHOW_FRAME = 32
@@ -43,6 +44,7 @@ struct Generator
     file_name: string
     cleaner_mode: int
     optimizing: bool
+    tracing: bool
     out: Assembler
     rt: [int]
     text: RuntimeText
@@ -119,7 +121,7 @@ end
 # file_name appears in run errors. test_flags: 1 cleans at every allocation, 2 adds cleaner checks, 4 turns
 # the cleaner off, 8 turns off optimizing. The machine code, strings and imports are left in the Generator
 func generate_code(program: Program, file_name: string, test_flags: int): Generator
-    var g = Generator{program: program, file_name: file_name, cleaner_mode: test_flags % 8 + test_flags / WINDOW_PROGRAM % 2 * WINDOW_PROGRAM, optimizing: test_flags / 8 % 2 == 0, out: new_assembler(), rt: [], text: new_runtime_text(), function_labels: new_dict(), function_named: new_dict(), functions_in_use: new_dict(), callback_labels: new_dict(), slot_registers: [], saved_count: 0, import_dlls: [], import_names: [], import_numbers: new_dict(), opengl_lookup: -1, current_function: "", loop_nexts: [], loop_ends: [], loop_tries: [], tries_open: [], show_labels: new_dict(), shows_to_write: [], strings: [], string_numbers: new_dict(), input_count: 0, bits: 0, scratch: memory(8), inline_ok: new_dict(), inline_count: 0, slot_shift: -1, inline_end: -1, inline_top: 0}
+    var g = Generator{program: program, file_name: file_name, cleaner_mode: test_flags % 8 + test_flags / WINDOW_PROGRAM % 2 * WINDOW_PROGRAM, optimizing: test_flags / 8 % 2 == 0, tracing: test_flags / TRACING % 2 == 1, out: new_assembler(), rt: [], text: new_runtime_text(), function_labels: new_dict(), function_named: new_dict(), functions_in_use: new_dict(), callback_labels: new_dict(), slot_registers: [], saved_count: 0, import_dlls: [], import_names: [], import_numbers: new_dict(), opengl_lookup: -1, current_function: "", loop_nexts: [], loop_ends: [], loop_tries: [], tries_open: [], show_labels: new_dict(), shows_to_write: [], strings: [], string_numbers: new_dict(), input_count: 0, bits: 0, scratch: memory(8), inline_ok: new_dict(), inline_count: 0, slot_shift: -1, inline_end: -1, inline_top: 0}
     g.generate()
     return g
 end
@@ -718,6 +720,18 @@ end
 
 # --- Jamo code ---
 
+# --trace leaves out the built-in libraries' functions, so only the program's own show
+func Generator.traced(function: Function): bool
+    if len(self.program.file_names) == 0
+        return true
+    end
+    var which = function.file
+    if which < 0
+        which = 0
+    end
+    return not ends_with(self.program.file_names[which], " (built in)")
+end
+
 func Generator.write_function(function: Function)
     var out = self.out
     self.input_count = len(function.inputs)
@@ -742,6 +756,14 @@ func Generator.write_function(function: Function)
     end
     if local_bytes > 0
         out.sub_rsp(local_bytes)
+    end
+    if self.tracing and self.traced(function)
+        var name = function.name
+        if name == SETUP_NAME
+            name = "(setting up the variables outside functions)"
+        end
+        out.lea_rax_string(self.string_number(name))
+        out.call(self.rt[R_TRACE_CALL])
     end
     for slot in 0..len(self.slot_registers)
         if self.slot_registers[slot] >= 0 and slot < self.input_count
@@ -852,7 +874,7 @@ end
 # disappear without changing what a program shows. Its inputs and variables go in spare slots of the caller's
 # frame, and each return jumps to the end of its body
 func Generator.can_inline(function: Function): bool
-    if not self.optimizing or function.dll != "" or function.name == "main"
+    if not self.optimizing or self.tracing or function.dll != "" or function.name == "main"
         return false
     end
     if self.inline_ok.has(function.name)

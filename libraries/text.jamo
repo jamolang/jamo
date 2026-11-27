@@ -329,6 +329,69 @@ func repeat(text: string, times: int): string
     return memory_text(place, total)
 end
 
+# --- Writing numbers ---
+
+# C's own number writer. Its float input is passed as the bits of an int, since C reads a float given to a function
+# like this one from where ints go
+extern "msvcrt.dll" func _snprintf(buffer: int, size: int, format: int, places: int, value_bits: int): i32
+
+# A float with exactly places digits after the dot: fixed(3.14159, 2) is "3.14". It rounds the number the way it
+# reads, to 17 digits, with halves going up, so fixed(2.5, 0) is "3" and fixed(6.335, 2) is "6.34", the way you'd
+# round by hand. places goes from 0 to 20. nan and the infinities come out as "nan", "inf" and "-inf"
+func fixed(value: float, places: int): string
+    if places < 0 or places > 20
+        fail(f"fixed needs from 0 to 20 places, not {places}.")
+    end
+    if value != value
+        return "nan"
+    end
+    # Only an infinity minus itself isn't 0
+    if value - value != 0.0
+        if value > 0.0
+            return "inf"
+        end
+        return "-inf"
+    end
+    var bits = memory(8)
+    poke_f64(bits, 0, value)
+    var format = memory(8)
+    poke_u8(format, 0, 37)
+    poke_u8(format, 1, 46)
+    poke_u8(format, 2, 42)
+    poke_u8(format, 3, 102)
+    var size = 400
+    var buffer = memory(size)
+    var written = _snprintf(buffer, size - 1, format, places, peek_i64(bits, 0))
+    if written < 0
+        fail("fixed couldn't write this number.")
+    end
+    return memory_text(buffer, written)
+end
+
+# An int with commas between each group of three digits: commas(1234567) is "1,234,567"
+func commas(value: int): string
+    var digits = string(value)
+    var sign = ""
+    if starts_with(digits, "-")
+        sign = "-"
+        digits = slice(digits, 1, len(digits))
+    end
+    var parts: [string] = []
+    var at = len(digits)
+    while at > 3
+        parts.add(slice(digits, at - 3, at))
+        at -= 3
+    end
+    parts.add(slice(digits, 0, at))
+    var out: [string] = []
+    var i = len(parts) - 1
+    while i >= 0
+        out.add(parts[i])
+        i -= 1
+    end
+    return sign + join(out, ",")
+end
+
 # --- Checking numbers ---
 
 # The same limits float() has. From here up, a decimal rounds past the largest float: 2^1024 - 2^970

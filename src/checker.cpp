@@ -583,6 +583,11 @@ private:
         copy->field_spots = from->field_spots;
         copy->op = from->op;
         copy->convert_to = substitute(from->convert_to, params, args);
+        if (from->kind == ExprKind::Lambda && from->number > 0) {
+            Block body = copy_block(program.lambda_bodies[from->number - 1], params, args);
+            program.lambda_bodies.push_back(std::move(body));
+            copy->number = program.lambda_bodies.size();
+        }
         copy->depth = from->depth;
         for (const Type type : from->type_args) copy->type_args.push_back(substitute(type, params, args));
         copy->left = copy_expr(from->left.get(), params, args);
@@ -1091,6 +1096,10 @@ private:
         }
         if (!variable) {
             report_unknown_name(stmt.name, stmt.name_spot, "Use var to make a new variable: var " + stmt.name + " = ...");
+            return;
+        }
+        if (variable->capture >= 0) {
+            errors.add(stmt.name_spot, stmt.name + " comes from outside this function, so it can't be changed here.", "The function has a copy, made when it was. To share a value that changes, keep it in an array or a struct.");
             return;
         }
         stmt.slot = variable->slot;
@@ -1986,6 +1995,20 @@ private:
             }
             next_slot++;
         }
+        if (expr.number > 0) {
+            // A whole block, checked like any function's
+            Block body = std::move(program.lambda_bodies[expr.number - 1]);
+            const Type answer = expr.truth ? expr.convert_to : Type::Nothing;
+            function->return_type = answer;
+            check_statements(body);
+            warn_about_unused_variables();
+            if (answer != Type::Nothing && !always_returns(body)) {
+                errors.add(expr.spot, "This function must return " + with_article(answer) + " on every path, but it can reach its end without one.", "Add a return before its end. A while doesn't count, and an if needs an else that returns too.");
+            }
+            function->body = std::move(body);
+            function->return_type = answer;
+            return finish_lambda(expr, std::move(function), answer);
+        }
         const Type wanted = expr.truth ? expr.convert_to : Type::Nothing;
         const Type got = check_wanting(*expr.left, wanted);
         Type answer = expr.truth ? expr.convert_to : got;
@@ -2005,6 +2028,11 @@ private:
         stmt->value = std::move(expr.left);
         function->body.push_back(std::move(stmt));
         function->return_type = answer;
+        return finish_lambda(expr, std::move(function), answer);
+    }
+
+    // Puts the scopes around the function back, reads its captured values there, and gives it to the program
+    Type finish_lambda(Expr& expr, std::unique_ptr<Function> function, Type answer) {
         function->slot_count = next_slot;
         const std::vector<std::string> captured = lambdas.back().captured;
         scopes = std::move(lambdas.back().scopes);

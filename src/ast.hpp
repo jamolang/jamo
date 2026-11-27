@@ -297,5 +297,6 @@ struct Program {
     std::vector<ConstDecl> consts;
     std::vector<std::unique_ptr<Function>> functions;
     std::vector<std::unique_ptr<Stmt>> globals;  // var lines outside functions, in order. The checker moves them into the setup function
+    std::vector<Block> lambda_bodies;  // The blocks of functions written in place with one: a Lambda's number is its place + 1
     std::vector<int> setup_order;                 // Files in the order their variables are set up: each one after the files it uses
 };

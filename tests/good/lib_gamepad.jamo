@@ -1,0 +1,32 @@
+# gamepad.jamo with no controller needed: a missing one reads as nothing pressed, and made-up readings put straight
+# into its memory test the buttons, sticks, dead zone and triggers. Answers worked out by hand
+use "gamepad.jamo"
+
+func main()
+    # Player 3 is almost never plugged in on a test PC
+    var pad = gamepad(3)
+    pad.update()
+    print(f"{pad.down("a")} {pad.left_x()} {pad.right_trigger()}")
+
+    # Made-up readings: A and up held, left stick all the way right, left stick y a little up (inside the dead zone),
+    # right stick all the way down, left trigger halfway
+    pad.last_buttons = pad.buttons
+    pad.buttons = 4096 + 1
+    poke_u16(pad.state, 8, 32767)
+    poke_u16(pad.state, 10, 5000)
+    poke_u16(pad.state, 14, 65536 - 32768)
+    poke_u8(pad.state, 6, 255)
+    print(f"{pad.down("a")} {pad.pressed("a")} {pad.down("up")} {pad.down("b")}")
+    print(f"{pad.left_x()} {pad.left_y()} {pad.right_y()} {pad.left_trigger()}")
+    # Next frame: A still held, so not pressed again. Then let go: released
+    pad.last_buttons = pad.buttons
+    print(f"{pad.down("a")} {pad.pressed("a")} {pad.released("a")}")
+    pad.last_buttons = pad.buttons
+    pad.buttons = 1
+    print(f"{pad.down("a")} {pad.released("a")}")
+    # A stick just past the dead zone gives a small number, not a jump
+    poke_u16(pad.state, 8, 7849 + 2)
+    print(pad.left_x() > 0.0 and pad.left_x() < 0.001)
+    pad.rumble(0.0, 0.0)
+    print("done")
+end

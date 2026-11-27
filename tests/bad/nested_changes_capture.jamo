@@ -1,0 +1,7 @@
+func main()
+    var total = 0
+    func add(n: int)
+        total = total + n
+    end
+    add(1)
+end

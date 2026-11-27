@@ -2,6 +2,18 @@
 
 What changed in each version of Jamo.
 
+## Not released yet
+
+- **Star Guard** (`examples/star_guard.jamo`): an arena shooter against waves of three kinds of drone, with keyboard and mouse or a controller. It uses sprites drawn from text, particles, functions made in place for how each drone moves, `try` for the saved best score, and `fixed` and `commas`. Checked with a bot over 32 runs: standing still lasts about 5 waves, dodging about 10. Drones never appear right next to the ship.
+- `jamo run --trace file.jamo` shows each of the program's own functions as it starts, indented by how deep the calls go, to follow what a program does. Library functions are left out.
+- `maybe.jamo`: `Maybe<T>` for a value that might not be there (`some`, `none<T>()`, `has`, `get`, `or_else`), `find_first(items, keep)`, and `Pair` and `Triple` with `pair(a, b)` and `triple(a, b, c)` for giving back more than one thing.
+- `gamepad.jamo`: Xbox-style controllers through Windows' XInput, for up to 4 players. Buttons held, pressed and released, sticks from -1.0 to 1.0 with a dead zone, triggers, and rumble. A controller that isn't plugged in reads as nothing pressed.
+- `text.jamo`: `fixed(number, places)` writes a float with exactly that many decimals, rounding halves up the way you'd do by hand (`fixed(2.5, 0)` is `3`), and `commas(1234567)` gives `1,234,567`. Checked on 400 numbers.
+- `particles.jamo`: sparks, explosions, smoke and trails. `burst` sends particles every way, `spray` sends them one way, and each one moves, falls with `gravity`, slows with `drag`, and fades and shrinks as it gets old.
+- `jamo fmt file.jamo` tidies a program: 4 spaces for each block and each line that carries on, no spaces at line ends, and one line ending at the end of the file. It never moves a line, and the tidied program builds to the very same `.exe`. Checked on every example, library and test.
+- `sprite.jamo`: sprite sheets cut into frames, animations that loop or play once, and drawing frames scaled, mirrored or turned. `gfx.jamo` gains `load_pixel_image` (sharp pixels), `image_from_text` (pixel art written in code, no picture file needed), `image_part`, `image_part_turned` and `image_turned`.
+- Functions written in place can have a whole block: leave out `=>`, write lines, then `end`. Functions can go inside functions too, by name, with `=>` or a block, and keep copies of the variables around them. Changing a copied variable inside one is a clear error. Guide section 29.
+
 ## 0.4.0
 
 ### New in the language

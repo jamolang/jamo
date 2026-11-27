@@ -390,6 +390,48 @@ def test_warnings_and_calls(work):
 
 
 # --- The VS Code extension, without VS Code ---
+# --- jamo run --trace: each of the program's own functions writes its name as it starts, indented by depth ---
+def test_trace(work):
+    folder = work / "trace"
+    folder.mkdir()
+    (folder / "t.jamo").write_text('use "text.jamo"\n\nvar start = setup_value()\n\nfunc setup_value(): int\n    return 1\nend\n\nfunc leaf(n: int): int\n    return n + 1\nend\n\nfunc middle(n: int): int\n    return leaf(n) + leaf(n)\nend\n\nfunc main()\n    print(middle(start))\n    var twice = func(x: int): int => leaf(x) * 2\n    print(twice(3))\n    print(upper("done"))\nend\n', encoding="utf-8")
+    want = "(setting up the variables outside functions)\n  setup_value\nmain\n  middle\n    leaf\n    leaf\n  (lambda 1)\n    leaf\n"
+    for compiler in (JAMO, CPP_JAMO):
+        ran = run([str(compiler), "run", "--trace", str(folder / "t.jamo")], cwd=folder)
+        report(f"--trace shows the program's own functions, indented, from {compiler.name}", ran.returncode == 0 and clean(ran.stderr) == want and clean(ran.stdout) == "4\n8\nDONE\n", ran.stdout + ran.stderr)
+    plain = run([str(JAMO), "run", str(folder / "t.jamo")], cwd=folder)
+    report("without --trace nothing extra is written", plain.returncode == 0 and plain.stderr == "", plain.stderr)
+
+
+# --- jamo fmt: a messy program comes out the way tests/fmt/messy.tidy was written by hand, a second run changes
+# nothing, and the tidied program builds to the very same .exe ---
+def test_fmt(work):
+    folder = work / "fmt"
+    folder.mkdir()
+    messy = (ROOT / "tests" / "fmt" / "messy.jamo").read_bytes().replace(b"\r\n", b"\n")
+    want = (ROOT / "tests" / "fmt" / "messy.tidy").read_bytes().replace(b"\r\n", b"\n")
+    (folder / "before.jamo").write_bytes(messy)
+    (folder / "after.jamo").write_bytes(messy)
+    first = run([str(JAMO), "fmt", "after.jamo"], cwd=folder)
+    got = (folder / "after.jamo").read_bytes()
+    report("jamo fmt tidies a messy program into the hand-written answer", first.returncode == 0 and "Tidied after.jamo" in first.stdout and got == want, first.stdout + first.stderr + "\n" + got.decode("utf-8", "replace"))
+    second = run([str(JAMO), "fmt", "after.jamo"], cwd=folder)
+    report("jamo fmt changes nothing the second time", second.returncode == 0 and "already tidy" in second.stdout and (folder / "after.jamo").read_bytes() == want, second.stdout)
+    # The same name in two folders, since an .exe keeps its file's name for run errors
+    for name, text in (("old", messy), ("new", want)):
+        (folder / name).mkdir()
+        (folder / name / "game.jamo").write_bytes(text)
+    built = [run([str(JAMO), "build", str(folder / name / "game.jamo")]) for name in ("old", "new")]
+    report("a tidied program builds to the very same .exe", all(b.returncode == 0 for b in built) and (folder / "old" / "game.exe").read_bytes() == (folder / "new" / "game.exe").read_bytes(), " ".join(b.stderr for b in built))
+    (folder / "crlf.jamo").write_bytes(b"func main()\r\nprint(1)\r\nend\r\n")
+    run([str(JAMO), "fmt", "crlf.jamo"], cwd=folder)
+    report("jamo fmt keeps Windows line endings", (folder / "crlf.jamo").read_bytes() == b"func main()\r\n    print(1)\r\nend\r\n", repr((folder / "crlf.jamo").read_bytes()))
+    wrong = run([str(JAMO), "fmt", "notes.txt", "missing.jamo"], cwd=folder)
+    report("jamo fmt says which files it can't tidy", wrong.returncode == 1 and "notes.txt isn't one" in wrong.stderr and "can't find missing.jamo" in wrong.stderr, wrong.stderr)
+    backup = run([str(CPP_JAMO), "fmt", "after.jamo"], cwd=folder)
+    report("the C++ backup says to use jamo.exe for jamo fmt", backup.returncode == 1 and "jamo.exe" in backup.stderr, backup.stderr)
+
+
 # --- Every .exe has the PE checksum Windows' own MapFileAndCheckSumW works out. Without one, Windows Defender's
 # machine learning took Jamo programs for malware ---
 def test_checksums(work):
@@ -5342,6 +5384,8 @@ def main():
         test_windows_calls(work)
         test_docs(work)
         test_examples(work)
+        test_trace(work)
+        test_fmt(work)
         test_checksums(work)
         test_console_text(work)
         test_get_command(work)

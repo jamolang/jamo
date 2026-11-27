@@ -1,0 +1,24 @@
+# text.jamo's fixed and commas. Answers worked out by hand: halves round up, going by the number as written
+use "text.jamo"
+
+func main()
+    print(fixed(3.14159, 2))
+    print(fixed(2.5, 0))
+    print(fixed(-2.5, 0))
+    print(fixed(6.335, 2))
+    print(fixed(0.125, 2))
+    print(fixed(1.0, 3))
+    print(fixed(123456.789, 1))
+    print(fixed(0.0, 0))
+    print(fixed(7.0 / 3.0, 6))
+    var zero = 0.0
+    print(fixed(zero / zero, 2))
+    print(fixed(1.0 / zero, 2))
+    print(fixed(-1.0 / zero, 2))
+    print(f"Total: ${fixed(19.999, 2)}")
+    print(commas(0))
+    print(commas(999))
+    print(commas(1000))
+    print(commas(-1234567))
+    print(commas(9223372036854775807))
+end

@@ -9,6 +9,8 @@
 use "window.jamo"
 use "png.jamo"
 
+extern "msvcrt.dll" func sin(value: float): float
+extern "msvcrt.dll" func cos(value: float): float
 extern "user32.dll" func GetDC(window: int): int
 extern "user32.dll" func ReleaseDC(window: int, dc: int): i32
 extern "gdi32.dll" func ChoosePixelFormat(dc: int, format: int): i32
@@ -497,6 +499,112 @@ func Gfx.image_sized(image: Image, x: float, y: float, width: float, height: flo
     end
     self.use_texture(image.texture)
     self.quad(x, y, x + width, y, x + width, y + height, x, y + height, 0.0, 0.0, 1.0, 1.0, rgb(255, 255, 255))
+end
+
+# --- Sprites: parts of images, mirrored, turned, sharp for pixel art, and made from text ---
+
+# Like load_image, but each pixel stays a sharp square when it's drawn bigger, which pixel art wants
+func Gfx.load_pixel_image(path: string): Image
+    self.must_be_open()
+    var picture = decode_png(read_file(path))
+    var image = Image{texture: gfx_texture(picture.pixels, picture.width, picture.height, false), width: picture.width, height: picture.height, open: true}
+    self.images.add(image)
+    return image
+end
+
+# Pixel art written as text, one row of letters per line, all the same length. 0 to 9 and then a to z pick a color
+# from colors, in order, and . or a space is see-through. The pixels stay sharp when drawn bigger:
+#     var heart = screen.image_from_text([".11.11.", "1111111", ".11111.", "..111.."], [rgb(230, 50, 70)])
+func Gfx.image_from_text(rows: [string], colors: [Color]): Image
+    self.must_be_open()
+    if len(rows) == 0 or len(rows[0]) == 0
+        fail("image_from_text needs at least one row with something in it.")
+    end
+    var width = len(rows[0])
+    var height = len(rows)
+    var pixels = memory(width * height * 4)
+    for y in 0..height
+        if len(rows[y]) != width
+            fail(f"image_from_text needs every row the same length, but row {y} has {len(rows[y])} letters and row 0 has {width}.")
+        end
+        for x in 0..width
+            var code = byte(rows[y], x)
+            var which = -1
+            if code >= 48 and code <= 57
+                which = code - 48
+            elif code >= 97 and code <= 122
+                which = code - 97 + 10
+            elif code != 46 and code != 32
+                fail(f"image_from_text uses 0 to 9 and a to z for colors and . for see-through, but row {y} has {rows[y][x]}.")
+            end
+            var place = (y * width + x) * 4
+            if which >= 0
+                if which >= len(colors)
+                    fail(f"image_from_text was given {len(colors)} colors, but row {y} asks for color {rows[y][x]}.")
+                end
+                var c = colors[which]
+                poke_u8(pixels, place, gfx_byte(c.red))
+                poke_u8(pixels, place + 1, gfx_byte(c.green))
+                poke_u8(pixels, place + 2, gfx_byte(c.blue))
+                poke_u8(pixels, place + 3, gfx_byte(c.alpha))
+            end
+        end
+    end
+    var image = Image{texture: gfx_texture(pixels, width, height, false), width: width, height: height, open: true}
+    self.images.add(image)
+    return image
+end
+
+func gfx_byte(value: float): int
+    var b = int(value * 255.0 + 0.5)
+    if b < 0
+        return 0
+    elif b > 255
+        return 255
+    end
+    return b
+end
+
+# Draws the part of an image from (part_x, part_y), part_width by part_height pixels, at x, y and width by height.
+# A sprite sheet keeps many frames in one image this way
+func Gfx.image_part(image: Image, part_x: int, part_y: int, part_width: int, part_height: int, x: float, y: float, width: float, height: float)
+    self.image_part_turned(image, part_x, part_y, part_width, part_height, x + width / 2.0, y + height / 2.0, width, height, 0.0, false)
+end
+
+# Like image_part, but around its middle at center_x, center_y, turned by angle (in radians, clockwise on the screen),
+# and mirrored left to right when flipped is true, for something that faces the other way
+func Gfx.image_part_turned(image: Image, part_x: int, part_y: int, part_width: int, part_height: int, center_x: float, center_y: float, width: float, height: float, angle: float, flipped: bool)
+    if not image.open
+        fail("This image is closed, so it can't be drawn.")
+    end
+    var u1 = float(part_x) / float(image.width)
+    var v1 = float(part_y) / float(image.height)
+    var u2 = float(part_x + part_width) / float(image.width)
+    var v2 = float(part_y + part_height) / float(image.height)
+    if flipped
+        var keep = u1
+        u1 = u2
+        u2 = keep
+    end
+    var c = cos(angle)
+    var s = sin(angle)
+    var hw = width / 2.0
+    var hh = height / 2.0
+    var x1 = center_x + (0.0 - hw) * c - (0.0 - hh) * s
+    var y1 = center_y + (0.0 - hw) * s + (0.0 - hh) * c
+    var x2 = center_x + hw * c - (0.0 - hh) * s
+    var y2 = center_y + hw * s + (0.0 - hh) * c
+    var x3 = center_x + hw * c - hh * s
+    var y3 = center_y + hw * s + hh * c
+    var x4 = center_x + (0.0 - hw) * c - hh * s
+    var y4 = center_y + (0.0 - hw) * s + hh * c
+    self.use_texture(image.texture)
+    self.quad(x1, y1, x2, y2, x3, y3, x4, y4, u1, v1, u2, v2, rgb(255, 255, 255))
+end
+
+# The whole image around its middle, turned and maybe mirrored
+func Gfx.image_turned(image: Image, center_x: float, center_y: float, width: float, height: float, angle: float, flipped: bool)
+    self.image_part_turned(image, 0, 0, image.width, image.height, center_x, center_y, width, height, angle, flipped)
 end
 
 func Image.close()

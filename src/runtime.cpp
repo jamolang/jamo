@@ -3000,11 +3000,69 @@ void write_show_calls(Assembler& out, const Runtime& runtime, const RuntimeText&
     out.bytes({0xC3});  // ret
 }
 
+// rax = a function's name. For --trace: writes it to the error stream on its own line, two spaces in for each Jamo call under it. Keeps rbx, rsi and rdi
+void write_trace_call(Assembler& out, const Runtime& runtime, const RuntimeText& text) {
+    const Label count_frames = out.new_label();
+    const Label counted = out.new_label();
+    const Label indent = out.new_label();
+    const Label write_name = out.new_label();
+    out.place(runtime.trace_call);
+    out.bytes({0x55});  // push rbp
+    out.bytes({0x48, 0x89, 0xE5});  // mov rbp, rsp
+    out.bytes({0x53});  // push rbx
+    out.bytes({0x56});  // push rsi
+    out.bytes({0x57});  // push rdi
+    out.bytes({0x48, 0x83, 0xEC, 0x08});  // sub rsp, 8
+    out.bytes({0x48, 0x89, 0xC3});  // mov rbx, rax
+    out.bytes({0x48, 0x8B, 0x75, 0x00});  // mov rsi, qword ptr [rbp]
+    out.bytes({0x31, 0xFF});  // xor edi, edi
+    out.lea_data(RAX, DataRef::Cleaner);
+    out.bytes({0x4C, 0x8B, 0x40, 0x28});  // mov r8, qword ptr [rax+40]
+    out.place(count_frames);
+    out.bytes({0x48, 0x85, 0xF6});  // test rsi, rsi
+    out.jump_if_equal(counted);
+    out.bytes({0x4C, 0x39, 0xC6});  // cmp rsi, r8
+    out.jump_if_at_least(counted);
+    out.bytes({0x48, 0xFF, 0xC7});  // inc rdi
+    out.bytes({0x48, 0x8B, 0x06});  // mov rax, qword ptr [rsi]
+    out.bytes({0x48, 0x39, 0xF0});  // cmp rax, rsi
+    out.jump_if_at_most(counted);
+    out.bytes({0x48, 0x89, 0xC6});  // mov rsi, rax
+    out.jump(count_frames);
+    out.place(counted);
+    out.bytes({0x48, 0xFF, 0xCF});  // dec rdi
+    out.bytes({0x48, 0x83, 0xFF, 0x28});  // cmp rdi, 40
+    out.jump_if_at_most(indent);
+    out.bytes({0xBF, 0x28, 0x00, 0x00, 0x00});  // mov edi, 40
+    out.place(indent);
+    out.bytes({0x48, 0x85, 0xFF});  // test rdi, rdi
+    out.jump_if_less_equal(write_name);
+    out.lea_data(RAX, DataRef::Letters);
+    out.bytes({0x48, 0x05, 0x00, 0x02, 0x00, 0x00});  // add rax, 512
+    out.call(runtime.error_text);
+    out.lea_data(RAX, DataRef::Letters);
+    out.bytes({0x48, 0x05, 0x00, 0x02, 0x00, 0x00});  // add rax, 512
+    out.call(runtime.error_text);
+    out.bytes({0x48, 0xFF, 0xCF});  // dec rdi
+    out.jump(indent);
+    out.place(write_name);
+    out.bytes({0x48, 0x89, 0xD8});  // mov rax, rbx
+    out.call(runtime.error_text);
+    out.lea_string(RAX, text.new_line);
+    out.call(runtime.error_text);
+    out.bytes({0x48, 0x8D, 0x65, 0xE8});  // lea rsp, [rbp-24]
+    out.bytes({0x5F});  // pop rdi
+    out.bytes({0x5E});  // pop rsi
+    out.bytes({0x5B});  // pop rbx
+    out.bytes({0x5D});  // pop rbp
+    out.bytes({0xC3});  // ret
+}
+
 }  // namespace
 
 Runtime make_runtime_labels(Assembler& out) {
     Runtime runtime;
-    for (Label* label : {&runtime.exit, &runtime.write, &runtime.raw_alloc, &runtime.format_int, &runtime.make_string, &runtime.print_int, &runtime.int_to_string, &runtime.bool_to_string, &runtime.print_bool, &runtime.print_string, &runtime.join_strings, &runtime.join_many, &runtime.strings_equal, &runtime.error_text, &runtime.file_name_of, &runtime.run_error, &runtime.stop_with_error, &runtime.divide_by_zero, &runtime.out_of_memory, &runtime.format_float, &runtime.print_float, &runtime.float_to_string, &runtime.float_to_int, &runtime.float_mod, &runtime.builder_start, &runtime.builder_add, &runtime.builder_add_string, &runtime.builder_to_string, &runtime.builder_add_int, &runtime.index_error, &runtime.string_at, &runtime.new_array, &runtime.array_add, &runtime.array_pop, &runtime.array_address, &runtime.array_at, &runtime.builder_add_float, &runtime.builder_add_bool, &runtime.builder_add_quoted, &runtime.builder_print, &runtime.show_enter, &runtime.show_leave, &runtime.text_error, &runtime.string_to_int, &runtime.big_times_ten, &runtime.big_double, &runtime.big_compare, &runtime.big_subtract, &runtime.string_to_float, &runtime.string_to_float_body, &runtime.big_subtract_clear, &runtime.to_wide, &runtime.to_wide_body, &runtime.read_whole_file, &runtime.read_whole_file_body, &runtime.write_whole_file, &runtime.write_whole_file_body, &runtime.file_exists, &runtime.stdin_refill, &runtime.read_line, &runtime.builder_add_byte, &runtime.builder_add_letter, &runtime.get_args, &runtime.get_args_body, &runtime.add_backslash_run, &runtime.raw_free, &runtime.alloc, &runtime.alloc_text, &runtime.alloc_block, &runtime.alloc_again, &runtime.alloc_take, &runtime.alloc_slow, &runtime.cleaner_start, &runtime.cleaner_verify, &runtime.cleaner_add_to_table, &runtime.cleaner_mark_word, &runtime.cleaner_clean, &runtime.show_calls}) *label = out.new_label();
+    for (Label* label : {&runtime.exit, &runtime.write, &runtime.raw_alloc, &runtime.format_int, &runtime.make_string, &runtime.print_int, &runtime.int_to_string, &runtime.bool_to_string, &runtime.print_bool, &runtime.print_string, &runtime.join_strings, &runtime.join_many, &runtime.strings_equal, &runtime.error_text, &runtime.file_name_of, &runtime.run_error, &runtime.stop_with_error, &runtime.divide_by_zero, &runtime.out_of_memory, &runtime.format_float, &runtime.print_float, &runtime.float_to_string, &runtime.float_to_int, &runtime.float_mod, &runtime.builder_start, &runtime.builder_add, &runtime.builder_add_string, &runtime.builder_to_string, &runtime.builder_add_int, &runtime.index_error, &runtime.string_at, &runtime.new_array, &runtime.array_add, &runtime.array_pop, &runtime.array_address, &runtime.array_at, &runtime.builder_add_float, &runtime.builder_add_bool, &runtime.builder_add_quoted, &runtime.builder_print, &runtime.show_enter, &runtime.show_leave, &runtime.text_error, &runtime.string_to_int, &runtime.big_times_ten, &runtime.big_double, &runtime.big_compare, &runtime.big_subtract, &runtime.string_to_float, &runtime.string_to_float_body, &runtime.big_subtract_clear, &runtime.to_wide, &runtime.to_wide_body, &runtime.read_whole_file, &runtime.read_whole_file_body, &runtime.write_whole_file, &runtime.write_whole_file_body, &runtime.file_exists, &runtime.stdin_refill, &runtime.read_line, &runtime.builder_add_byte, &runtime.builder_add_letter, &runtime.get_args, &runtime.get_args_body, &runtime.add_backslash_run, &runtime.raw_free, &runtime.alloc, &runtime.alloc_text, &runtime.alloc_block, &runtime.alloc_again, &runtime.alloc_take, &runtime.alloc_slow, &runtime.cleaner_start, &runtime.cleaner_verify, &runtime.cleaner_add_to_table, &runtime.cleaner_mark_word, &runtime.cleaner_clean, &runtime.show_calls, &runtime.trace_call}) *label = out.new_label();
     return runtime;
 }
 
@@ -3087,4 +3145,5 @@ void write_runtime(Assembler& out, const Runtime& runtime, const RuntimeText& te
     write_cleaner_mark_word(out, runtime, text);
     write_cleaner_clean(out, runtime, text);
     write_show_calls(out, runtime, text);
+    write_trace_call(out, runtime, text);
 }

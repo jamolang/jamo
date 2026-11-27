@@ -1,0 +1,8 @@
+func main()
+    func pick(n: int): int
+        if n > 0
+            return 1
+        end
+    end
+    print(pick(1))
+end

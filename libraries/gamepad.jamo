@@ -1,0 +1,176 @@
+# gamepad: Xbox-style controllers, through Windows' XInput, for up to 4 players. use "gamepad.jamo"
+#
+# Make one Gamepad for each player, call update() once a frame, then ask about its buttons and sticks. A controller
+# that isn't plugged in just reads as nothing pressed, so a game works the same with or without one.
+#
+#     var pad = gamepad(0)
+#     ...each frame:
+#     pad.update()
+#     x += pad.left_x() * speed
+#     if pad.pressed("a")
+#         jump()
+#     end
+#
+# Buttons: a, b, x, y, up, down, left, right, start, back, lb, rb, left_stick and right_stick
+
+extern "xinput1_4.dll" func XInputGetState(player: i32, state: int): i32
+extern "xinput1_4.dll" func XInputSetState(player: i32, vibration: int): i32
+
+# How far a stick must move, out of 32767, before it counts. Sticks rest a little off the middle
+const GAMEPAD_DEAD_ZONE = 7849
+
+struct Gamepad
+    player: int
+    connected: bool
+    buttons: int
+    last_buttons: int
+    state: int
+end
+
+# Player number 0 to 3
+func gamepad(player: int): Gamepad
+    if player < 0 or player > 3
+        fail(f"A gamepad is player 0 to 3, not {player}.")
+    end
+    return Gamepad{player: player, connected: false, buttons: 0, last_buttons: 0, state: memory(16)}
+end
+
+# Reads the controller. Call it once a frame, before asking about it
+func Gamepad.update()
+    self.last_buttons = self.buttons
+    for i in 0..2
+        poke_i64(self.state, i * 8, 0)
+    end
+    self.connected = XInputGetState(self.player, self.state) == 0
+    if self.connected
+        self.buttons = peek_u16(self.state, 4)
+    else
+        self.buttons = 0
+    end
+end
+
+func gamepad_bit(name: string): int
+    match name
+        case "up"
+            return 1
+        case "down"
+            return 2
+        case "left"
+            return 4
+        case "right"
+            return 8
+        case "start"
+            return 16
+        case "back"
+            return 32
+        case "left_stick"
+            return 64
+        case "right_stick"
+            return 128
+        case "lb"
+            return 256
+        case "rb"
+            return 512
+        case "a"
+            return 4096
+        case "b"
+            return 8192
+        case "x"
+            return 16384
+        case "y"
+            return 32768
+        else
+            fail(f"A gamepad has no button called {name}. It has a, b, x, y, up, down, left, right, start, back, lb, rb, left_stick and right_stick.")
+    end
+    return 0
+end
+
+func gamepad_has(buttons: int, bit: int): bool
+    return buttons / bit % 2 == 1
+end
+
+# True while the button is held down
+func Gamepad.down(name: string): bool
+    return gamepad_has(self.buttons, gamepad_bit(name))
+end
+
+# True only on the frame the button goes down
+func Gamepad.pressed(name: string): bool
+    var bit = gamepad_bit(name)
+    return gamepad_has(self.buttons, bit) and not gamepad_has(self.last_buttons, bit)
+end
+
+# True only on the frame the button comes back up
+func Gamepad.released(name: string): bool
+    var bit = gamepad_bit(name)
+    return not gamepad_has(self.buttons, bit) and gamepad_has(self.last_buttons, bit)
+end
+
+# A stick's axis from -1.0 to 1.0, 0.0 inside the dead zone. Up is negative, like the screen's y
+func gamepad_axis(raw: int, flip: bool): float
+    var value = raw
+    if value >= 32768
+        value -= 65536
+    end
+    if flip
+        value = 0 - value
+    end
+    if value > -GAMEPAD_DEAD_ZONE and value < GAMEPAD_DEAD_ZONE
+        return 0.0
+    end
+    var size = float(value)
+    if value > 0
+        size = float(value - GAMEPAD_DEAD_ZONE) / float(32767 - GAMEPAD_DEAD_ZONE)
+    else
+        size = float(value + GAMEPAD_DEAD_ZONE) / float(32768 - GAMEPAD_DEAD_ZONE)
+    end
+    if size > 1.0
+        return 1.0
+    elif size < -1.0
+        return -1.0
+    end
+    return size
+end
+
+func Gamepad.left_x(): float
+    return gamepad_axis(peek_u16(self.state, 8), false)
+end
+
+func Gamepad.left_y(): float
+    return gamepad_axis(peek_u16(self.state, 10), true)
+end
+
+func Gamepad.right_x(): float
+    return gamepad_axis(peek_u16(self.state, 12), false)
+end
+
+func Gamepad.right_y(): float
+    return gamepad_axis(peek_u16(self.state, 14), true)
+end
+
+# A trigger from 0.0 (let go) to 1.0 (all the way in)
+func Gamepad.left_trigger(): float
+    return float(peek_u8(self.state, 6)) / 255.0
+end
+
+func Gamepad.right_trigger(): float
+    return float(peek_u8(self.state, 7)) / 255.0
+end
+
+# Shakes the controller: the left motor is slow and heavy, the right one fast and light, each from 0.0 to 1.0.
+# rumble(0.0, 0.0) stops it
+func Gamepad.rumble(left: float, right: float)
+    var motors = memory(8)
+    poke_u16(motors, 0, int(gamepad_clamp(left) * 65535.0))
+    poke_u16(motors, 2, int(gamepad_clamp(right) * 65535.0))
+    XInputSetState(self.player, motors)
+end
+
+func gamepad_clamp(value: float): float
+    if not (value > 0.0)
+        return 0.0
+    elif value > 1.0
+        return 1.0
+    end
+    return value
+end

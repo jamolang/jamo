@@ -1,4 +1,4 @@
-function_inside_function.jamo line 2: Functions can't go inside functions.
-        func inner()
-        ^^^^
-Move this one outside, and finish the function above with end.
+function_inside_function.jamo line 3: A function written in place needs ( ) with its inputs.
+        func inner<T>(x: T): T
+                  ^
+Like this: func(x: int): int => x * 2

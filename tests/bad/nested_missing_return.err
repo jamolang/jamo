@@ -1,0 +1,4 @@
+nested_missing_return.jamo line 2: This function must return an int on every path, but it can reach its end without one.
+        func pick(n: int): int
+        ^^^^
+Add a return before its end. A while doesn't count, and an if needs an else that returns too.

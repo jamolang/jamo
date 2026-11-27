@@ -1,0 +1,115 @@
+# particles: sparks, explosions, smoke and trails in a line or two. use "particles.jamo"
+#
+# Keep one Particles for a game, add bursts and sprays to it when things happen, and each frame call update with the
+# frame's time and draw with the screen. Each particle moves, falls with gravity, slows with drag, and fades and
+# shrinks as it gets old.
+#
+#     var sparks = new_particles()
+#     sparks.gravity = 600.0
+#     ...when a coin is caught:
+#     sparks.burst(x, y, 20, rgb(255, 210, 60), 200.0, 0.6)
+#     ...each frame:
+#     sparks.update(window.frame_time())
+#     sparks.draw(screen)
+
+use "gfx.jamo"
+use "math.jamo"
+
+struct Particle
+    x: float
+    y: float
+    vx: float
+    vy: float
+    age: float
+    life: float
+    size: float
+    color: Color
+end
+
+struct Particles
+    items: [Particle]
+    gravity: float        # how fast they fall, in pixels a second each second. Below 0 floats them up, like smoke
+    drag: float           # how much speed they lose each second, from 0.0 (none) to 1.0 (stop at once)
+    size: float           # how big a new particle is, in pixels
+    most: int             # the oldest ones go when there are more than this
+end
+
+func new_particles(): Particles
+    return Particles{items: [], gravity: 0.0, drag: 0.0, size: 6.0, most: 5000}
+end
+
+# One particle at x, y moving at vx, vy pixels a second, lasting life seconds
+func Particles.add(x: float, y: float, vx: float, vy: float, color: Color, life: float)
+    if not (life > 0.0)
+        fail(f"A particle needs a life above 0.0 seconds, not {life}.")
+    end
+    if len(self.items) >= self.most
+        var kept: [Particle] = []
+        for i in len(self.items) - self.most + 1..len(self.items)
+            kept.add(self.items[i])
+        end
+        self.items = kept
+    end
+    self.items.add(Particle{x: x, y: y, vx: vx, vy: vy, age: 0.0, life: life, size: self.size, color: color})
+end
+
+# count particles flying out every way from x, y, at up to speed pixels a second, for about life seconds
+func Particles.burst(x: float, y: float, count: int, color: Color, speed: float, life: float)
+    for i in 0..count
+        var angle = random_float() * pi() * 2.0
+        var power = speed * (0.3 + random_float() * 0.7)
+        self.add(x, y, cos(angle) * power, sin(angle) * power, color, life * (0.6 + random_float() * 0.4))
+    end
+end
+
+# count particles going toward angle (in radians: 0 is right, pi() / 2.0 is down), spread that many radians either side
+func Particles.spray(x: float, y: float, angle: float, spread: float, count: int, color: Color, speed: float, life: float)
+    for i in 0..count
+        var a = angle + (random_float() * 2.0 - 1.0) * spread
+        var power = speed * (0.5 + random_float() * 0.5)
+        self.add(x, y, cos(a) * power, sin(a) * power, color, life * (0.6 + random_float() * 0.4))
+    end
+end
+
+# Moves every particle on by seconds and drops the ones that are too old
+func Particles.update(seconds: float)
+    if not (seconds > 0.0)
+        return
+    end
+    var keep = 1.0 - clamp(self.drag, 0.0, 1.0) * seconds
+    if keep < 0.0
+        keep = 0.0
+    end
+    var kept: [Particle] = []
+    for p in self.items
+        p.age += seconds
+        if p.age < p.life
+            p.vy += self.gravity * seconds
+            p.vx = p.vx * keep
+            p.vy = p.vy * keep
+            p.x += p.vx * seconds
+            p.y += p.vy * seconds
+            kept.add(p)
+        end
+    end
+    self.items = kept
+end
+
+# Draws them, each fading and shrinking as it gets old
+func Particles.draw(screen: Gfx)
+    for p in self.items
+        var left = 1.0 - p.age / p.life
+        var size = p.size * (0.3 + 0.7 * left)
+        var c = p.color
+        screen.rect(p.x - size / 2.0, p.y - size / 2.0, size, size, Color{red: c.red, green: c.green, blue: c.blue, alpha: c.alpha * left})
+    end
+end
+
+# How many are flying now
+func Particles.count(): int
+    return len(self.items)
+end
+
+func Particles.clear()
+    self.items = []
+end

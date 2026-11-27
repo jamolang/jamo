@@ -28,7 +28,7 @@ const FAILED = 1
 const CLEANER_CHECKS = 2
 const CLEANER_OFF = 4
 const VERSION = "0.4.0"
-const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
+const USAGE = "Usage:\n  jamo run file.jamo     Builds it and runs it. Anything after the file goes to the program\n  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n  jamo build file.jamo   Writes file.exe beside the source\n  jamo build --window file.jamo   Writes a window program, with no console behind it\n  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n  jamo check file.jamo   Finds mistakes without writing an .exe\n  jamo new name          Makes a folder called name, with a program to start from\n  jamo new --game name   Makes it with a small window game to start from instead\n  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n  jamo version           Shows which Jamo this is\n  jamo help              Shows this\n"
 # The game jamo new --game starts from: a player that moves, a coin to catch, and a score
 const NEW_GAME = "use \"gfx.jamo\"\nuse \"math.jamo\"\n\nconst WIDTH = 640\nconst HEIGHT = 480\nconst SIZE = 32.0\nconst SPEED = 4.0\n\n# Everything the game keeps track of lives in one struct, passed to the functions that need it\nstruct Game\n    x: float\n    y: float\n    coin_x: float\n    coin_y: float\n    score: int\nend\n\nfunc Game.move(window: Window)\n    if window.key_down(\"left\")\n        self.x -= SPEED\n    end\n    if window.key_down(\"right\")\n        self.x += SPEED\n    end\n    if window.key_down(\"up\")\n        self.y -= SPEED\n    end\n    if window.key_down(\"down\")\n        self.y += SPEED\n    end\n    self.x = clamp(self.x, 0.0, float(WIDTH) - SIZE)\n    self.y = clamp(self.y, 0.0, float(HEIGHT) - SIZE)\nend\n\n# Touching the coin scores a point, and the coin jumps somewhere new\nfunc Game.catch_coin()\n    if abs(self.x + SIZE / 2.0 - self.coin_x) < 24.0 and abs(self.y + SIZE / 2.0 - self.coin_y) < 24.0\n        self.score += 1\n        self.coin_x = 20.0 + random_float() * float(WIDTH - 40)\n        self.coin_y = 60.0 + random_float() * float(HEIGHT - 80)\n    end\nend\n\nfunc Game.draw(screen: Gfx)\n    screen.clear(rgb(24, 28, 44))\n    screen.circle(self.coin_x, self.coin_y, 10.0, rgb(255, 210, 60))\n    screen.rect(self.x, self.y, SIZE, SIZE, rgb(90, 200, 255))\n    screen.text(f\"Coins: {self.score}\", 16.0, 16.0, 24.0, rgb(255, 255, 255))\nend\n\nfunc main()\n    var window = open_window(\"My game\", WIDTH, HEIGHT)\n    var screen = start_gfx(window)\n    var game = Game{x: 300.0, y: 220.0, coin_x: 120.0, coin_y: 120.0, score: 0}\n    while window.is_open()\n        if window.key_pressed(\"escape\")\n            window.close()\n        end\n        game.move(window)\n        game.catch_coin()\n        game.draw(screen)\n        screen.show()\n        window.wait_frame(60)\n    end\nend\n"
 const NEW_PROGRAM = "func main()\n    print(\"Hello from Jamo!\")\nend\n"
@@ -367,6 +367,13 @@ func command_answer(words: [string]): int
     if count == 4 and command == "new" and words[2] == "--game"
         return make_new_program(words[1], true)
     end
+    if count >= 3 and command == "fmt"
+        var paths: [string] = []
+        for i in 1..len(words)
+            paths.add(words[i])
+        end
+        return tidy_files(paths)
+    end
     if count == 3 and command == "get"
         return get_package(words[1])
     end
@@ -399,6 +406,10 @@ func command_answer(words: [string]): int
         elif word == "--window"
             if cleaner_mode / WINDOW_PROGRAM % 2 == 0
                 cleaner_mode += WINDOW_PROGRAM
+            end
+        elif word == "--trace"
+            if cleaner_mode / TRACING % 2 == 0
+                cleaner_mode += TRACING
             end
         else
             break
@@ -559,6 +570,213 @@ func package_problem(got: Response): string
         return f"the site answered {got.status}"
     end
     return got.error
+end
+
+# --- jamo fmt: tidies a program's indentation and spacing ---
+# Jamo's blocks close with end, so indentation never changes what a program does. Each line keeps its place, so
+# error line numbers stay the same: lines get 4 spaces for each open block (and 4 more while a line carries on), lose
+# spaces at their ends, and the file ends with one line ending
+
+# The code of a line, with text in quotes and the comment taken out, so they can't look like keywords or brackets
+func tidy_code_part(line: string): string
+    var out = new_builder()
+    var i = 0
+    var count = len(line)
+    while i < count
+        var c = byte(line, i)
+        if c == 35
+            break
+        end
+        if c == 34
+            out.add("\"\"")
+            i += 1
+            while i < count and byte(line, i) != 34
+                if byte(line, i) == 92
+                    i += 1
+                end
+                i += 1
+            end
+            i += 1
+        else
+            out.add(slice(line, i, i + 1))
+            i += 1
+        end
+    end
+    return trim(out.text())
+end
+
+# The word a line starts with, or "" when it starts with something else
+func tidy_first_word(line: string): string
+    var at = 0
+    while at < len(line)
+        var c = byte(line, at)
+        if not ((c >= 97 and c <= 122) or (c >= 65 and c <= 90) or (c >= 48 and c <= 57 and at > 0) or c == 95)
+            break
+        end
+        at += 1
+    end
+    return slice(line, 0, at)
+end
+
+# True when the code carries on to the next line, the way the lexer joins lines after an operator or a comma
+func tidy_carries_on(code: string): bool
+    if code == ""
+        return false
+    end
+    for ending in [",", "=", "+", "-", "*", "/", "%", "..", " <", " >", " and", " or", " not", "=>"]
+        if ends_with(code, ending)
+            return true
+        end
+    end
+    return code == "and" or code == "or" or code == "not"
+end
+
+# True when the line makes a function in place with a block after it, like var f = func(x: int): int, and not when
+# func( is a type, like on_click: func(int): int
+func tidy_starts_function_value(code: string): bool
+    if contains(code, "=>")
+        return false
+    end
+    var at = find(code, "func(")
+    while at >= 0
+        var before = trim(slice(code, 0, at))
+        if ends_with(before, "=") or ends_with(before, "(") or ends_with(before, ",") or before == "return" or ends_with(before, " return")
+            return true
+        end
+        var rest = slice(code, at + 5, len(code))
+        var next = find(rest, "func(")
+        if next < 0
+            return false
+        end
+        at = at + 5 + next
+    end
+    return false
+end
+
+func tidy_source(text: string): string
+    var lines = split(replace(text, "\r", ""), "\n")
+    var out: [string] = []
+    var stack: [string] = []
+    var open = 0
+    # How many brackets were open before each line that opened more, so lines inside get one level for each of those lines
+    var bracket_lines: [int] = []
+    var carried = false
+    # Whether the line that started this statement opened a block, which already gives its next lines a level
+    var opened = false
+    for raw in lines
+        var line = trim(raw)
+        if line == ""
+            out.add("")
+            continue
+        end
+        var first = tidy_first_word(line)
+        var code = tidy_code_part(line)
+        var level = len(stack)
+        if open > 0
+            level = len(stack) + len(bracket_lines)
+            if starts_with(line, ")") or starts_with(line, "]") or starts_with(line, "}")
+                level -= 1
+            end
+        elif carried
+            level = len(stack) + 1
+            if opened
+                level = len(stack)
+            end
+        elif first == "end"
+            if len(stack) > 0 and stack[len(stack) - 1] == "case"
+                stack.pop()
+            end
+            if len(stack) > 0
+                stack.pop()
+            end
+            level = len(stack)
+        elif first == "case"
+            if len(stack) > 0 and stack[len(stack) - 1] == "case"
+                stack.pop()
+            end
+            level = len(stack)
+            stack.add("case")
+        elif first == "elif" or first == "else" or first == "catch"
+            if len(stack) > 0 and stack[len(stack) - 1] == "case"
+                stack.pop()
+                level = len(stack)
+                stack.add("case")
+            else
+                level = len(stack) - 1
+                if level < 0
+                    level = 0
+                end
+            end
+        end
+        out.add(repeat("    ", level) + line)
+        if open == 0 and not carried
+            var depth_before = len(stack)
+            if first == "if" or first == "while" or first == "for" or first == "struct" or first == "enum" or first == "try"
+                stack.add("block")
+            elif first == "match"
+                stack.add("match")
+            elif first == "func" and not contains(code, "=>")
+                stack.add("block")
+            elif first != "func" and tidy_starts_function_value(code)
+                stack.add("block")
+            end
+            opened = len(stack) > depth_before
+        end
+        var open_before = open
+        for i in 0..len(code)
+            var c = byte(code, i)
+            if c == 40 or c == 91 or c == 123
+                open += 1
+            elif (c == 41 or c == 93 or c == 125) and open > 0
+                open -= 1
+            end
+        end
+        if open > open_before
+            bracket_lines.add(open_before)
+        end
+        while len(bracket_lines) > 0 and open <= bracket_lines[len(bracket_lines) - 1]
+            bracket_lines.pop()
+        end
+        carried = tidy_carries_on(code)
+    end
+    while len(out) > 0 and out[len(out) - 1] == ""
+        out.pop()
+    end
+    return join(out, "\n") + "\n"
+end
+
+# jamo fmt a.jamo b.jamo: tidies each file in place, saying which ones changed
+func tidy_files(paths: [string]): int
+    var failed = false
+    for path in paths
+        if not ends_with(lower(path), ".jamo")
+            complain(f"jamo fmt tidies .jamo files, and {path} isn't one.\n")
+            failed = true
+            continue
+        end
+        if not exists(path)
+            complain(f"I can't find {path}.\n")
+            failed = true
+            continue
+        end
+        var before = read_file(path)
+        var after = tidy_source(before)
+        if contains(before, "\r\n")
+            after = replace(after, "\n", "\r\n")
+        end
+        if after == before
+            say(f"{path} is already tidy\n")
+        elif save_text(path, after)
+            say(f"Tidied {path}\n")
+        else
+            complain(f"I couldn't save {path}.\n")
+            failed = true
+        end
+    end
+    if failed
+        return FAILED
+    end
+    return 0
 end
 
 func main()

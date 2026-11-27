@@ -1,0 +1,357 @@
+# Star Guard: hold off waves of alien drones in a small arena. Move with WASD or the arrow keys and shoot toward the
+# mouse with the left button, or move with a controller's left stick and aim and fire with the right stick.
+# Three kinds of drone each move their own way. Space starts again after the ship is lost.
+#
+# Shows off sprites drawn from text (sprite.jamo), particles (particles.jamo), controllers (gamepad.jamo), functions
+# written in place for how each drone moves, try and catch for reading the best score, and fixed and commas.
+
+use "sprite.jamo"
+use "particles.jamo"
+use "gamepad.jamo"
+use "text.jamo"
+
+const WIDTH = 800
+const HEIGHT = 600
+const SCALE = 4.0
+const SHIP_SPEED = 260.0
+const SHOT_SPEED = 620.0
+const SHOT_GAP = 0.14
+const SAFE_SPAWN = 160.0
+const BEST_FILE = "star_guard_best.txt"
+
+struct Shot
+    x: float
+    y: float
+    vx: float
+    vy: float
+    life: float
+end
+
+struct Drone
+    x: float
+    y: float
+    vx: float
+    vy: float
+    health: int
+    kind: int
+    age: float
+    move: func(Drone, float, float, float)   # how it moves: the drone, the ship's x and y, and the frame's seconds
+end
+
+struct Game
+    x: float
+    y: float
+    shots: [Shot]
+    drones: [Drone]
+    cooldown: float
+    wave: int
+    score: int
+    best: int
+    lives: int
+    hurt: float
+    over: bool
+    wave_timer: float
+end
+
+# --- How each kind of drone moves, written in place ---
+
+func chaser(speed: float): func(Drone, float, float, float)
+    return func(d: Drone, tx: float, ty: float, dt: float)
+        var dx = tx - d.x
+        var dy = ty - d.y
+        var size = sqrt(dx * dx + dy * dy) + 0.001
+        d.x += dx / size * speed * dt
+        d.y += dy / size * speed * dt
+    end
+end
+
+func weaver(speed: float, wobble: float): func(Drone, float, float, float)
+    return func(d: Drone, tx: float, ty: float, dt: float)
+        var dx = tx - d.x
+        var dy = ty - d.y
+        var size = sqrt(dx * dx + dy * dy) + 0.001
+        var side = sin(d.age * 5.0) * wobble
+        d.x += (dx / size * speed - dy / size * side) * dt
+        d.y += (dy / size * speed + dx / size * side) * dt
+    end
+end
+
+func bouncer(): func(Drone, float, float, float)
+    return func(d: Drone, tx: float, ty: float, dt: float)
+        d.x += d.vx * dt
+        d.y += d.vy * dt
+        if d.x < 20.0 or d.x > float(WIDTH) - 20.0
+            d.vx = 0.0 - d.vx
+        end
+        if d.y < 60.0 or d.y > float(HEIGHT) - 20.0
+            d.vy = 0.0 - d.vy
+        end
+    end
+end
+
+# --- Setting up ---
+
+func read_best(): int
+    try
+        return int(trim(read_file(BEST_FILE)))
+    catch
+        return 0
+    end
+end
+
+func new_game(best: int): Game
+    return Game{x: float(WIDTH) / 2.0, y: float(HEIGHT) / 2.0, shots: [], drones: [], cooldown: 0.0, wave: 0, score: 0, best: best, lives: 3, hurt: 0.0, over: false, wave_timer: 1.0}
+end
+
+# A new drone just off a random edge
+func spawn(game: Game)
+    # Pick an edge spot, trying again if it's too close to the ship
+    var x = 0.0
+    var y = 0.0
+    for tries in 0..20
+        var side = random_int(0, 3)
+        x = random_float() * float(WIDTH)
+        y = 60.0 + random_float() * float(HEIGHT - 60)
+        if side == 0
+            x = -20.0
+        elif side == 1
+            x = float(WIDTH) + 20.0
+        elif side == 2
+            y = 40.0
+        else
+            y = float(HEIGHT) + 20.0
+        end
+        if (x - game.x) * (x - game.x) + (y - game.y) * (y - game.y) > SAFE_SPAWN * SAFE_SPAWN
+            break
+        end
+    end
+    var kind = random_int(0, 2)
+    if game.wave < 2
+        kind = 0
+    elif game.wave < 4 and kind == 2
+        kind = 1
+    end
+    var speed = 80.0 + float(game.wave) * 11.0
+    var move = chaser(speed)
+    var health = 1
+    if kind == 1
+        move = weaver(speed * 0.8, 90.0)
+        health = 2
+    elif kind == 2
+        move = bouncer()
+        health = 3
+        x = clamp(x, 40.0, float(WIDTH) - 40.0)
+        y = clamp(y, 80.0, float(HEIGHT) - 40.0)
+        if (x - game.x) * (x - game.x) + (y - game.y) * (y - game.y) < SAFE_SPAWN * SAFE_SPAWN
+            x = float(WIDTH) - x
+            y = float(HEIGHT) + 60.0 - y
+        end
+    end
+    var angle = random_float() * pi() * 2.0
+    game.drones.add(Drone{x: x, y: y, vx: cos(angle) * 160.0, vy: sin(angle) * 160.0, health: health, kind: kind, age: 0.0, move: move})
+end
+
+func next_wave(game: Game)
+    game.wave += 1
+    for i in 0..4 + game.wave * 3
+        spawn(game)
+    end
+end
+
+# --- One step ---
+
+func step(game: Game, dt: float, mx: float, my: float, aim_x: float, aim_y: float, firing: bool, sparks: Particles)
+    game.hurt = max(0.0, game.hurt - dt)
+    var size = sqrt(mx * mx + my * my)
+    if size > 1.0
+        mx = mx / size
+        my = my / size
+    end
+    game.x = clamp(game.x + mx * SHIP_SPEED * dt, 16.0, float(WIDTH) - 16.0)
+    game.y = clamp(game.y + my * SHIP_SPEED * dt, 56.0, float(HEIGHT) - 16.0)
+
+    game.cooldown -= dt
+    if firing and game.cooldown <= 0.0
+        var aim = sqrt(aim_x * aim_x + aim_y * aim_y)
+        if aim > 0.01
+            game.shots.add(Shot{x: game.x, y: game.y, vx: aim_x / aim * SHOT_SPEED, vy: aim_y / aim * SHOT_SPEED, life: 1.2})
+            game.cooldown = SHOT_GAP
+        end
+    end
+    var shots_kept: [Shot] = []
+    for s in game.shots
+        s.x += s.vx * dt
+        s.y += s.vy * dt
+        s.life -= dt
+        if s.life > 0.0
+            shots_kept.add(s)
+        end
+    end
+    game.shots = shots_kept
+
+    var drones_kept: [Drone] = []
+    for d in game.drones
+        d.age += dt
+        d.move(d, game.x, game.y, dt)
+        var alive = true
+        for s in game.shots
+            if s.life > 0.0 and (s.x - d.x) * (s.x - d.x) + (s.y - d.y) * (s.y - d.y) < 18.0 * 18.0
+                s.life = 0.0
+                d.health -= 1
+                sparks.burst(s.x, s.y, 6, rgb(255, 240, 180), 120.0, 0.3)
+            end
+        end
+        if d.health <= 0
+            alive = false
+            game.score += 10 * (d.kind + 1) * game.wave
+            sparks.burst(d.x, d.y, 30, drone_color(d.kind), 260.0, 0.7)
+        elif game.hurt <= 0.0 and (game.x - d.x) * (game.x - d.x) + (game.y - d.y) * (game.y - d.y) < 26.0 * 26.0
+            alive = false
+            game.lives -= 1
+            game.hurt = 1.5
+            sparks.burst(game.x, game.y, 50, rgb(120, 200, 255), 320.0, 0.9)
+            if game.lives <= 0
+                game.over = true
+                game.best = max_int(game.best, game.score)
+                try_write_best(game.best)
+            end
+        end
+        if alive
+            drones_kept.add(d)
+        end
+    end
+    game.drones = drones_kept
+    if len(game.drones) == 0
+        game.wave_timer -= dt
+        if game.wave_timer <= 0.0
+            next_wave(game)
+            game.wave_timer = 1.5
+        end
+    end
+end
+
+func try_write_best(best: int)
+    try
+        write_file(BEST_FILE, string(best))
+    catch
+        print("Couldn't save the best score.")
+    end
+end
+
+func drone_color(kind: int): Color
+    if kind == 1
+        return rgb(255, 120, 200)
+    elif kind == 2
+        return rgb(255, 190, 70)
+    end
+    return rgb(140, 255, 140)
+end
+
+# --- Drawing ---
+
+func draw(screen: Gfx, game: Game, ship: Sheet, drone_sheet: Sheet, blink: Animation, sparks: Particles, time: float)
+    screen.clear(rgb(10, 12, 26))
+    for i in 0..60
+        var sx = float((i * 137) % WIDTH)
+        var sy = float((i * 211 + int(time * 20.0) * (i % 3 + 1)) % HEIGHT)
+        screen.rect(sx, sy, 2.0, 2.0, rgba(200, 210, 255, 60 + (i % 4) * 40))
+    end
+    for s in game.shots
+        screen.circle(s.x, s.y, 4.0, rgb(255, 250, 200))
+    end
+    for d in game.drones
+        var wobble = sin(d.age * 6.0) * 0.2
+        screen.sprite_turned(drone_sheet, d.kind * 2 + blink.frame(), d.x, d.y, SCALE, wobble, false)
+    end
+    if not game.over and (game.hurt <= 0.0 or int(game.hurt * 10.0) % 2 == 0)
+        screen.sprite_turned(ship, 0, game.x, game.y, SCALE, 0.0, false)
+    end
+    sparks.draw(screen)
+    screen.rect(0.0, 0.0, float(WIDTH), 40.0, rgba(0, 0, 0, 140))
+    screen.text(f"Score {commas(game.score)}", 16.0, 9.0, 22.0, rgb(240, 240, 255))
+    screen.text(f"Wave {game.wave}", 300.0, 9.0, 22.0, rgb(200, 210, 255))
+    screen.text(f"Lives {game.lives}", 440.0, 9.0, 22.0, rgb(255, 160, 160))
+    screen.text(f"Best {commas(game.best)}", 600.0, 9.0, 22.0, rgb(255, 220, 120))
+    if game.over
+        screen.rect(200.0, 220.0, 400.0, 150.0, rgba(0, 0, 0, 200))
+        screen.text("Ship lost", 330.0, 240.0, 36.0, rgb(255, 160, 160))
+        var per_wave = 0.0
+        if game.wave > 0
+            per_wave = float(game.score) / float(game.wave)
+        end
+        screen.text(f"{commas(game.score)} points, {fixed(per_wave, 1)} a wave", 260.0, 290.0, 22.0, rgb(240, 240, 255))
+        screen.text("Space to play again", 300.0, 330.0, 20.0, rgb(200, 210, 230))
+    end
+    screen.show()
+end
+
+func main()
+    var window = open_window("Star Guard", WIDTH, HEIGHT)
+    var screen = start_gfx(window)
+    var white = rgb(235, 240, 255)
+    var blue = rgb(90, 170, 255)
+    var dark = rgb(30, 40, 80)
+    var ship = sheet(screen.image_from_text([
+        "...00...",
+        "...00...",
+        "..0110..",
+        ".011110.",
+        "00111100",
+        "02222220",
+        "0.2..2.0",
+        "........"
+    ], [white, blue, dark]), 8, 8)
+    # Three kinds of drone, two frames each: eyes open, then shut
+    var drone_sheet = sheet(screen.image_from_text([
+        "..0000....0000.....11......11....222222..222222.",
+        ".000000..000000..111111..111111.2222222222222222",
+        ".030030..033330.11311311113333112232232222333322",
+        ".000000..000000..111111..111111.2222222222222222",
+        "..0..0....0..0..1.1..1.11.1..1.122.22.2222.22.22",
+        ".0....0..0....0.1......11......1.2....2..2....2."
+    ], [rgb(140, 255, 140), rgb(255, 120, 200), rgb(255, 190, 70), rgb(20, 20, 30)]), 8, 6)
+    var blink = animation([0, 0, 0, 1], 3.0, true)
+    var sparks = new_particles()
+    sparks.drag = 2.0
+    var pad = gamepad(0)
+    var game = new_game(read_best())
+    var time = 0.0
+    while window.is_open()
+        var dt = min(window.frame_time(), 0.05)
+        time += dt
+        pad.update()
+        blink.update(dt)
+        sparks.update(dt)
+        var mx = pad.left_x()
+        var my = pad.left_y()
+        if window.key_down("a") or window.key_down("left")
+            mx -= 1.0
+        end
+        if window.key_down("d") or window.key_down("right")
+            mx += 1.0
+        end
+        if window.key_down("w") or window.key_down("up")
+            my -= 1.0
+        end
+        if window.key_down("s") or window.key_down("down")
+            my += 1.0
+        end
+        var aim_x = float(window.mouse_x()) - game.x
+        var aim_y = float(window.mouse_y()) - game.y
+        var firing = window.mouse_down("left")
+        if pad.right_x() != 0.0 or pad.right_y() != 0.0
+            aim_x = pad.right_x()
+            aim_y = pad.right_y()
+            firing = true
+        end
+        if game.over
+            if window.key_pressed("space") or pad.pressed("a") or pad.pressed("start")
+                game = new_game(game.best)
+            end
+        else
+            step(game, dt, mx, my, aim_x, aim_y, firing, sparks)
+        end
+        draw(screen, game, ship, drone_sheet, blink, sparks, time)
+        window.wait_frame(60)
+    end
+end

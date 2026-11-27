@@ -1,0 +1,4 @@
+nested_changes_capture.jamo line 4: total comes from outside this function, so it can't be changed here.
+            total = total + n
+            ^^^^^
+The function has a copy, made when it was. To share a value that changes, keep it in an array or a struct.

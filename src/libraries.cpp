@@ -1635,6 +1635,183 @@ func G3d.close()
     end
 end
 )JAMOLIBRARY";
+    if (name == "gamepad.jamo") return R"JAMOLIBRARY(# gamepad: Xbox-style controllers, through Windows' XInput, for up to 4 players. use "gamepad.jamo"
+#
+# Make one Gamepad for each player, call update() once a frame, then ask about its buttons and sticks. A controller
+# that isn't plugged in just reads as nothing pressed, so a game works the same with or without one.
+#
+#     var pad = gamepad(0)
+#     ...each frame:
+#     pad.update()
+#     x += pad.left_x() * speed
+#     if pad.pressed("a")
+#         jump()
+#     end
+#
+# Buttons: a, b, x, y, up, down, left, right, start, back, lb, rb, left_stick and right_stick
+
+extern "xinput1_4.dll" func XInputGetState(player: i32, state: int): i32
+extern "xinput1_4.dll" func XInputSetState(player: i32, vibration: int): i32
+
+# How far a stick must move, out of 32767, before it counts. Sticks rest a little off the middle
+const GAMEPAD_DEAD_ZONE = 7849
+
+struct Gamepad
+    player: int
+    connected: bool
+    buttons: int
+    last_buttons: int
+    state: int
+end
+
+# Player number 0 to 3
+func gamepad(player: int): Gamepad
+    if player < 0 or player > 3
+        fail(f"A gamepad is player 0 to 3, not {player}.")
+    end
+    return Gamepad{player: player, connected: false, buttons: 0, last_buttons: 0, state: memory(16)}
+end
+
+# Reads the controller. Call it once a frame, before asking about it
+func Gamepad.update()
+    self.last_buttons = self.buttons
+    for i in 0..2
+        poke_i64(self.state, i * 8, 0)
+    end
+    self.connected = XInputGetState(self.player, self.state) == 0
+    if self.connected
+        self.buttons = peek_u16(self.state, 4)
+    else
+        self.buttons = 0
+    end
+end
+
+func gamepad_bit(name: string): int
+    match name
+        case "up"
+            return 1
+        case "down"
+            return 2
+        case "left"
+            return 4
+        case "right"
+            return 8
+        case "start"
+            return 16
+        case "back"
+            return 32
+        case "left_stick"
+            return 64
+        case "right_stick"
+            return 128
+        case "lb"
+            return 256
+        case "rb"
+            return 512
+        case "a"
+            return 4096
+        case "b"
+            return 8192
+        case "x"
+            return 16384
+        case "y"
+            return 32768
+        else
+            fail(f"A gamepad has no button called {name}. It has a, b, x, y, up, down, left, right, start, back, lb, rb, left_stick and right_stick.")
+    end
+    return 0
+end
+
+func gamepad_has(buttons: int, bit: int): bool
+    return buttons / bit % 2 == 1
+end
+
+# True while the button is held down
+func Gamepad.down(name: string): bool
+    return gamepad_has(self.buttons, gamepad_bit(name))
+end
+
+# True only on the frame the button goes down
+func Gamepad.pressed(name: string): bool
+    var bit = gamepad_bit(name)
+    return gamepad_has(self.buttons, bit) and not gamepad_has(self.last_buttons, bit)
+end
+
+# True only on the frame the button comes back up
+func Gamepad.released(name: string): bool
+    var bit = gamepad_bit(name)
+    return not gamepad_has(self.buttons, bit) and gamepad_has(self.last_buttons, bit)
+end
+
+# A stick's axis from -1.0 to 1.0, 0.0 inside the dead zone. Up is negative, like the screen's y
+func gamepad_axis(raw: int, flip: bool): float
+    var value = raw
+    if value >= 32768
+        value -= 65536
+    end
+    if flip
+        value = 0 - value
+    end
+    if value > -GAMEPAD_DEAD_ZONE and value < GAMEPAD_DEAD_ZONE
+        return 0.0
+    end
+    var size = float(value)
+    if value > 0
+        size = float(value - GAMEPAD_DEAD_ZONE) / float(32767 - GAMEPAD_DEAD_ZONE)
+    else
+        size = float(value + GAMEPAD_DEAD_ZONE) / float(32768 - GAMEPAD_DEAD_ZONE)
+    end
+    if size > 1.0
+        return 1.0
+    elif size < -1.0
+        return -1.0
+    end
+    return size
+end
+
+func Gamepad.left_x(): float
+    return gamepad_axis(peek_u16(self.state, 8), false)
+end
+
+func Gamepad.left_y(): float
+    return gamepad_axis(peek_u16(self.state, 10), true)
+end
+
+func Gamepad.right_x(): float
+    return gamepad_axis(peek_u16(self.state, 12), false)
+end
+
+func Gamepad.right_y(): float
+    return gamepad_axis(peek_u16(self.state, 14), true)
+end
+
+# A trigger from 0.0 (let go) to 1.0 (all the way in)
+func Gamepad.left_trigger(): float
+    return float(peek_u8(self.state, 6)) / 255.0
+end
+
+func Gamepad.right_trigger(): float
+    return float(peek_u8(self.state, 7)) / 255.0
+end
+
+# Shakes the controller: the left motor is slow and heavy, the right one fast and light, each from 0.0 to 1.0.
+# rumble(0.0, 0.0) stops it
+func Gamepad.rumble(left: float, right: float)
+    var motors = memory(8)
+    poke_u16(motors, 0, int(gamepad_clamp(left) * 65535.0))
+    poke_u16(motors, 2, int(gamepad_clamp(right) * 65535.0))
+    XInputSetState(self.player, motors)
+end
+
+func gamepad_clamp(value: float): float
+    if not (value > 0.0)
+        return 0.0
+    elif value > 1.0
+        return 1.0
+    end
+    return value
+end
+)JAMOLIBRARY";
     if (name == "gfx.jamo") return R"JAMOLIBRARY(# gfx: 2D drawing in a window, with OpenGL 3.3. use "gfx.jamo"
 #
 # Shapes, text and pictures collect in a batch and go to the graphics card together. Everything draws into
@@ -1646,6 +1823,8 @@ end
 use "window.jamo"
 use "png.jamo"
 
+extern "msvcrt.dll" func sin(value: float): float
+extern "msvcrt.dll" func cos(value: float): float
 extern "user32.dll" func GetDC(window: int): int
 extern "user32.dll" func ReleaseDC(window: int, dc: int): i32
 extern "gdi32.dll" func ChoosePixelFormat(dc: int, format: int): i32
@@ -2134,6 +2313,112 @@ func Gfx.image_sized(image: Image, x: float, y: float, width: float, height: flo
     end
     self.use_texture(image.texture)
     self.quad(x, y, x + width, y, x + width, y + height, x, y + height, 0.0, 0.0, 1.0, 1.0, rgb(255, 255, 255))
+end
+
+# --- Sprites: parts of images, mirrored, turned, sharp for pixel art, and made from text ---
+
+# Like load_image, but each pixel stays a sharp square when it's drawn bigger, which pixel art wants
+func Gfx.load_pixel_image(path: string): Image
+    self.must_be_open()
+    var picture = decode_png(read_file(path))
+    var image = Image{texture: gfx_texture(picture.pixels, picture.width, picture.height, false), width: picture.width, height: picture.height, open: true}
+    self.images.add(image)
+    return image
+end
+
+# Pixel art written as text, one row of letters per line, all the same length. 0 to 9 and then a to z pick a color
+# from colors, in order, and . or a space is see-through. The pixels stay sharp when drawn bigger:
+#     var heart = screen.image_from_text([".11.11.", "1111111", ".11111.", "..111.."], [rgb(230, 50, 70)])
+func Gfx.image_from_text(rows: [string], colors: [Color]): Image
+    self.must_be_open()
+    if len(rows) == 0 or len(rows[0]) == 0
+        fail("image_from_text needs at least one row with something in it.")
+    end
+    var width = len(rows[0])
+    var height = len(rows)
+    var pixels = memory(width * height * 4)
+    for y in 0..height
+        if len(rows[y]) != width
+            fail(f"image_from_text needs every row the same length, but row {y} has {len(rows[y])} letters and row 0 has {width}.")
+        end
+        for x in 0..width
+            var code = byte(rows[y], x)
+            var which = -1
+            if code >= 48 and code <= 57
+                which = code - 48
+            elif code >= 97 and code <= 122
+                which = code - 97 + 10
+            elif code != 46 and code != 32
+                fail(f"image_from_text uses 0 to 9 and a to z for colors and . for see-through, but row {y} has {rows[y][x]}.")
+            end
+            var place = (y * width + x) * 4
+            if which >= 0
+                if which >= len(colors)
+                    fail(f"image_from_text was given {len(colors)} colors, but row {y} asks for color {rows[y][x]}.")
+                end
+                var c = colors[which]
+                poke_u8(pixels, place, gfx_byte(c.red))
+                poke_u8(pixels, place + 1, gfx_byte(c.green))
+                poke_u8(pixels, place + 2, gfx_byte(c.blue))
+                poke_u8(pixels, place + 3, gfx_byte(c.alpha))
+            end
+        end
+    end
+    var image = Image{texture: gfx_texture(pixels, width, height, false), width: width, height: height, open: true}
+    self.images.add(image)
+    return image
+end
+
+func gfx_byte(value: float): int
+    var b = int(value * 255.0 + 0.5)
+    if b < 0
+        return 0
+    elif b > 255
+        return 255
+    end
+    return b
+end
+
+# Draws the part of an image from (part_x, part_y), part_width by part_height pixels, at x, y and width by height.
+# A sprite sheet keeps many frames in one image this way
+func Gfx.image_part(image: Image, part_x: int, part_y: int, part_width: int, part_height: int, x: float, y: float, width: float, height: float)
+    self.image_part_turned(image, part_x, part_y, part_width, part_height, x + width / 2.0, y + height / 2.0, width, height, 0.0, false)
+end
+
+# Like image_part, but around its middle at center_x, center_y, turned by angle (in radians, clockwise on the screen),
+# and mirrored left to right when flipped is true, for something that faces the other way
+func Gfx.image_part_turned(image: Image, part_x: int, part_y: int, part_width: int, part_height: int, center_x: float, center_y: float, width: float, height: float, angle: float, flipped: bool)
+    if not image.open
+        fail("This image is closed, so it can't be drawn.")
+    end
+    var u1 = float(part_x) / float(image.width)
+    var v1 = float(part_y) / float(image.height)
+    var u2 = float(part_x + part_width) / float(image.width)
+    var v2 = float(part_y + part_height) / float(image.height)
+    if flipped
+        var keep = u1
+        u1 = u2
+        u2 = keep
+    end
+    var c = cos(angle)
+    var s = sin(angle)
+    var hw = width / 2.0
+    var hh = height / 2.0
+    var x1 = center_x + (0.0 - hw) * c - (0.0 - hh) * s
+    var y1 = center_y + (0.0 - hw) * s + (0.0 - hh) * c
+    var x2 = center_x + hw * c - (0.0 - hh) * s
+    var y2 = center_y + hw * s + (0.0 - hh) * c
+    var x3 = center_x + hw * c - hh * s
+    var y3 = center_y + hw * s + hh * c
+    var x4 = center_x + (0.0 - hw) * c - hh * s
+    var y4 = center_y + (0.0 - hw) * s + hh * c
+    self.use_texture(image.texture)
+    self.quad(x1, y1, x2, y2, x3, y3, x4, y4, u1, v1, u2, v2, rgb(255, 255, 255))
+end
+
+# The whole image around its middle, turned and maybe mirrored
+func Gfx.image_turned(image: Image, center_x: float, center_y: float, width: float, height: float, angle: float, flipped: bool)
+    self.image_part_turned(image, 0, 0, image.width, image.height, center_x, center_y, width, height, angle, flipped)
 end
 
 func Image.close()
@@ -3784,6 +4069,84 @@ func shuffle<T>(items: [T])
     end
 end
 )JAMOLIBRARY";
+    if (name == "maybe.jamo") return R"JAMOLIBRARY(# maybe: a value that might not be there, and pairs and triples for giving back more than one thing. use "maybe.jamo"
+#
+# A Maybe<T> holds one value or nothing. A function that might not find anything gives back a Maybe, and the code
+# that called it checks has() before get(), or uses or_else for a fallback:
+#
+#     var hit = find_first(enemies, func(e: Enemy): bool => e.health > 0)
+#     if hit.has()
+#         hit.get().health -= 10
+#     end
+#
+# pair(a, b) and triple(a, b, c) bundle values, so a function can give back two or three things at once.
+
+struct Maybe<T>
+    items: [T]
+end
+
+# A Maybe holding a value
+func some<T>(value: T): Maybe<T>
+    return Maybe<T>{items: [value]}
+end
+
+# A Maybe holding nothing. Its type has to be given, like none<int>()
+func none<T>(): Maybe<T>
+    var empty: [T] = []
+    return Maybe<T>{items: empty}
+end
+
+func Maybe<T>.has(): bool
+    return len(self.items) == 1
+end
+
+# The value. Stops with a clear error when there isn't one, so check has() first, or use or_else
+func Maybe<T>.get(): T
+    if len(self.items) == 0
+        fail("This Maybe holds nothing, so there's nothing to get. Check has() first, or use or_else.")
+    end
+    return self.items[0]
+end
+
+# The value, or fallback when there isn't one
+func Maybe<T>.or_else(fallback: T): T
+    if len(self.items) == 0
+        return fallback
+    end
+    return self.items[0]
+end
+
+# The first item where keep(item) is true, or nothing
+func find_first<T>(items: [T], keep: func(T): bool): Maybe<T>
+    for item in items
+        if keep(item)
+            return some(item)
+        end
+    end
+    return none<T>()
+end
+
+# --- Pairs and triples ---
+
+struct Pair<A, B>
+    first: A
+    second: B
+end
+
+struct Triple<A, B, C>
+    first: A
+    second: B
+    third: C
+end
+
+func pair<A, B>(first: A, second: B): Pair<A, B>
+    return Pair<A, B>{first: first, second: second}
+end
+
+func triple<A, B, C>(first: A, second: B, third: C): Triple<A, B, C>
+    return Triple<A, B, C>{first: first, second: second, third: third}
+end
+)JAMOLIBRARY";
     if (name == "net.jamo") return R"JAMOLIBRARY(# net: web requests over HTTP and HTTPS, with WinHTTP. use "net.jamo"
 #
 # A request waits until the answer has come, or the time runs out. Problems along the way, like a server
@@ -4686,6 +5049,122 @@ func net_lasting_wide(text: string): int
     var place = LocalAlloc(64, len(text) * 2 + 2)
     net_copy_wide(place, text)
     return place
+end
+)JAMOLIBRARY";
+    if (name == "particles.jamo") return R"JAMOLIBRARY(# particles: sparks, explosions, smoke and trails in a line or two. use "particles.jamo"
+#
+# Keep one Particles for a game, add bursts and sprays to it when things happen, and each frame call update with the
+# frame's time and draw with the screen. Each particle moves, falls with gravity, slows with drag, and fades and
+# shrinks as it gets old.
+#
+#     var sparks = new_particles()
+#     sparks.gravity = 600.0
+#     ...when a coin is caught:
+#     sparks.burst(x, y, 20, rgb(255, 210, 60), 200.0, 0.6)
+#     ...each frame:
+#     sparks.update(window.frame_time())
+#     sparks.draw(screen)
+
+use "gfx.jamo"
+use "math.jamo"
+
+struct Particle
+    x: float
+    y: float
+    vx: float
+    vy: float
+    age: float
+    life: float
+    size: float
+    color: Color
+end
+
+struct Particles
+    items: [Particle]
+    gravity: float        # how fast they fall, in pixels a second each second. Below 0 floats them up, like smoke
+    drag: float           # how much speed they lose each second, from 0.0 (none) to 1.0 (stop at once)
+    size: float           # how big a new particle is, in pixels
+    most: int             # the oldest ones go when there are more than this
+end
+
+func new_particles(): Particles
+    return Particles{items: [], gravity: 0.0, drag: 0.0, size: 6.0, most: 5000}
+end
+
+# One particle at x, y moving at vx, vy pixels a second, lasting life seconds
+func Particles.add(x: float, y: float, vx: float, vy: float, color: Color, life: float)
+    if not (life > 0.0)
+        fail(f"A particle needs a life above 0.0 seconds, not {life}.")
+    end
+    if len(self.items) >= self.most
+        var kept: [Particle] = []
+        for i in len(self.items) - self.most + 1..len(self.items)
+            kept.add(self.items[i])
+        end
+        self.items = kept
+    end
+    self.items.add(Particle{x: x, y: y, vx: vx, vy: vy, age: 0.0, life: life, size: self.size, color: color})
+end
+
+# count particles flying out every way from x, y, at up to speed pixels a second, for about life seconds
+func Particles.burst(x: float, y: float, count: int, color: Color, speed: float, life: float)
+    for i in 0..count
+        var angle = random_float() * pi() * 2.0
+        var power = speed * (0.3 + random_float() * 0.7)
+        self.add(x, y, cos(angle) * power, sin(angle) * power, color, life * (0.6 + random_float() * 0.4))
+    end
+end
+
+# count particles going toward angle (in radians: 0 is right, pi() / 2.0 is down), spread that many radians either side
+func Particles.spray(x: float, y: float, angle: float, spread: float, count: int, color: Color, speed: float, life: float)
+    for i in 0..count
+        var a = angle + (random_float() * 2.0 - 1.0) * spread
+        var power = speed * (0.5 + random_float() * 0.5)
+        self.add(x, y, cos(a) * power, sin(a) * power, color, life * (0.6 + random_float() * 0.4))
+    end
+end
+
+# Moves every particle on by seconds and drops the ones that are too old
+func Particles.update(seconds: float)
+    if not (seconds > 0.0)
+        return
+    end
+    var keep = 1.0 - clamp(self.drag, 0.0, 1.0) * seconds
+    if keep < 0.0
+        keep = 0.0
+    end
+    var kept: [Particle] = []
+    for p in self.items
+        p.age += seconds
+        if p.age < p.life
+            p.vy += self.gravity * seconds
+            p.vx = p.vx * keep
+            p.vy = p.vy * keep
+            p.x += p.vx * seconds
+            p.y += p.vy * seconds
+            kept.add(p)
+        end
+    end
+    self.items = kept
+end
+
+# Draws them, each fading and shrinking as it gets old
+func Particles.draw(screen: Gfx)
+    for p in self.items
+        var left = 1.0 - p.age / p.life
+        var size = p.size * (0.3 + 0.7 * left)
+        var c = p.color
+        screen.rect(p.x - size / 2.0, p.y - size / 2.0, size, size, Color{red: c.red, green: c.green, blue: c.blue, alpha: c.alpha * left})
+    end
+end
+
+# How many are flying now
+func Particles.count(): int
+    return len(self.items)
+end
+
+func Particles.clear()
+    self.items = []
 end
 )JAMOLIBRARY";
     if (name == "png.jamo") return R"JAMOLIBRARY(# png: reads PNG pictures into memory as rows of red, green, blue and alpha bytes. use "png.jamo"
@@ -5764,6 +6243,113 @@ func sound_sample(raw: int, at: int, kind: int, bits: int): int
     return top
 end
 )JAMOLIBRARY";
+    if (name == "sprite.jamo") return R"JAMOLIBRARY(# sprite: sprite sheets and animations, for characters that walk, jump and blink. use "sprite.jamo"
+#
+# A sheet is one image cut into frames of the same size, counted from 0, left to right and then down. An animation
+# is a list of frame numbers played at so many frames a second, looping or stopping at its last one.
+#
+#     var hero = sheet(screen.load_pixel_image("hero.png"), 16, 16)
+#     var walk = animation([0, 1, 2, 3], 8.0, true)
+#     ...each frame:
+#     walk.update(window.frame_time())
+#     screen.sprite(hero, walk.frame(), x, y, 4.0, facing_left)
+
+use "gfx.jamo"
+
+struct Sheet
+    image: Image
+    frame_width: int
+    frame_height: int
+    columns: int
+    count: int
+end
+
+struct Animation
+    frames: [int]
+    seconds_each: float
+    time: float
+    looping: bool
+end
+
+# Cuts an image into frames frame_width by frame_height pixels. Any part left over at the right or bottom is skipped
+func sheet(image: Image, frame_width: int, frame_height: int): Sheet
+    if frame_width <= 0 or frame_height <= 0
+        fail(f"A sheet's frames need a size above 0, not {frame_width} by {frame_height}.")
+    end
+    var columns = image.width / frame_width
+    var rows = image.height / frame_height
+    if columns == 0 or rows == 0
+        fail(f"This image is {image.width} by {image.height} pixels, too small for frames {frame_width} by {frame_height}.")
+    end
+    return Sheet{image: image, frame_width: frame_width, frame_height: frame_height, columns: columns, count: columns * rows}
+end
+
+# Draws one frame with its top left corner at x, y, scale times its size, mirrored left to right when flipped
+func Gfx.sprite(sheet: Sheet, frame: int, x: float, y: float, scale: float, flipped: bool)
+    var width = float(sheet.frame_width) * scale
+    var height = float(sheet.frame_height) * scale
+    self.sprite_turned(sheet, frame, x + width / 2.0, y + height / 2.0, scale, 0.0, flipped)
+end
+
+# Draws one frame around its middle at center_x, center_y, turned by angle in radians
+func Gfx.sprite_turned(sheet: Sheet, frame: int, center_x: float, center_y: float, scale: float, angle: float, flipped: bool)
+    if frame < 0 or frame >= sheet.count
+        fail(f"This sheet has frames 0 to {sheet.count - 1}, not {frame}.")
+    end
+    var part_x = frame % sheet.columns * sheet.frame_width
+    var part_y = frame / sheet.columns * sheet.frame_height
+    self.image_part_turned(sheet.image, part_x, part_y, sheet.frame_width, sheet.frame_height, center_x, center_y, float(sheet.frame_width) * scale, float(sheet.frame_height) * scale, angle, flipped)
+end
+
+# Plays these frame numbers in order, frames_a_second of them each second
+func animation(frames: [int], frames_a_second: float, looping: bool): Animation
+    if len(frames) == 0
+        fail("An animation needs at least one frame.")
+    end
+    if not (frames_a_second > 0.0)
+        fail(f"An animation needs more than 0 frames a second, not {frames_a_second}.")
+    end
+    var kept: [int] = []
+    for f in frames
+        kept.add(f)
+    end
+    return Animation{frames: kept, seconds_each: 1.0 / frames_a_second, time: 0.0, looping: looping}
+end
+
+# Moves the animation on by seconds, usually window.frame_time()
+func Animation.update(seconds: float)
+    if seconds > 0.0
+        self.time += seconds
+    end
+    var length = self.seconds_each * float(len(self.frames))
+    if self.looping and self.time >= length
+        self.time = self.time % length
+    end
+end
+
+# The frame number to draw now
+func Animation.frame(): int
+    var place = int(self.time / self.seconds_each)
+    if place >= len(self.frames)
+        if self.looping
+            place = place % len(self.frames)
+        else
+            place = len(self.frames) - 1
+        end
+    end
+    return self.frames[place]
+end
+
+# True once an animation that doesn't loop has shown its last frame for its full time
+func Animation.done(): bool
+    return not self.looping and self.time >= self.seconds_each * float(len(self.frames))
+end
+
+# Back to the first frame
+func Animation.restart()
+    self.time = 0.0
+end
+)JAMOLIBRARY";
     if (name == "term.jamo") return R"JAMOLIBRARY(# term: colors, tables, progress bars and menus for programs in the console. use "term.jamo"
 #
 # Colors use the codes every modern terminal understands. Windows' own console needs them turned on first, which
@@ -6324,6 +6910,69 @@ func repeat(text: string, times: int): string
         at = text_put(at, text)
     end
     return memory_text(place, total)
+end
+
+# --- Writing numbers ---
+
+# C's own number writer. Its float input is passed as the bits of an int, since C reads a float given to a function
+# like this one from where ints go
+extern "msvcrt.dll" func _snprintf(buffer: int, size: int, format: int, places: int, value_bits: int): i32
+
+# A float with exactly places digits after the dot: fixed(3.14159, 2) is "3.14". It rounds the number the way it
+# reads, to 17 digits, with halves going up, so fixed(2.5, 0) is "3" and fixed(6.335, 2) is "6.34", the way you'd
+# round by hand. places goes from 0 to 20. nan and the infinities come out as "nan", "inf" and "-inf"
+func fixed(value: float, places: int): string
+    if places < 0 or places > 20
+        fail(f"fixed needs from 0 to 20 places, not {places}.")
+    end
+    if value != value
+        return "nan"
+    end
+    # Only an infinity minus itself isn't 0
+    if value - value != 0.0
+        if value > 0.0
+            return "inf"
+        end
+        return "-inf"
+    end
+    var bits = memory(8)
+    poke_f64(bits, 0, value)
+    var format = memory(8)
+    poke_u8(format, 0, 37)
+    poke_u8(format, 1, 46)
+    poke_u8(format, 2, 42)
+    poke_u8(format, 3, 102)
+    var size = 400
+    var buffer = memory(size)
+    var written = _snprintf(buffer, size - 1, format, places, peek_i64(bits, 0))
+    if written < 0
+        fail("fixed couldn't write this number.")
+    end
+    return memory_text(buffer, written)
+end
+
+# An int with commas between each group of three digits: commas(1234567) is "1,234,567"
+func commas(value: int): string
+    var digits = string(value)
+    var sign = ""
+    if starts_with(digits, "-")
+        sign = "-"
+        digits = slice(digits, 1, len(digits))
+    end
+    var parts: [string] = []
+    var at = len(digits)
+    while at > 3
+        parts.add(slice(digits, at - 3, at))
+        at -= 3
+    end
+    parts.add(slice(digits, 0, at))
+    var out: [string] = []
+    var i = len(parts) - 1
+    while i >= 0
+        out.add(parts[i])
+        i -= 1
+    end
+    return sign + join(out, ",")
 end
 
 # --- Checking numbers ---

@@ -26,6 +26,7 @@ const int CLEANER_CHECKS = 2;
 const int CLEANER_OFF = 4;
 const int NO_OPTIMIZING = 8;
 const int WINDOW_PROGRAM = 16;
+const int TRACING = 32;
 const int RENAME_ATTEMPTS = 20;
 const DWORD RENAME_WAIT_MS = 50;
 const char* const VERSION = "0.4.0";
@@ -37,9 +38,11 @@ const char* const USAGE =
     "  jamo watch file.jamo   Runs it, then builds and runs it again each time you save a change\n"
     "  jamo build file.jamo   Writes file.exe beside the source\n"
     "  jamo build --window file.jamo   Writes a window program, with no console behind it\n"
+    "  jamo run --trace file.jamo     Shows each of the program's own functions as it starts\n"
     "  jamo check file.jamo   Finds mistakes without writing an .exe\n"
     "  jamo new name          Makes a folder called name, with a program to start from\n"
     "  jamo new --game name   Makes it with a small window game to start from instead\n"
+    "  jamo fmt file.jamo     Tidies the indentation and spacing, without changing what it does\n"
     "  jamo get someone/project   Downloads a library someone shared on GitHub into packages\n"
     "  jamo version           Shows which Jamo this is\n"
     "  jamo help              Shows this\n";
@@ -587,6 +590,10 @@ int wmain(int count, wchar_t** words) {
         if (count == 3 && command == L"ast") return print_tree(fs::path(words[2]));
         if (count == 3 && command == L"checked") return print_checked(fs::path(words[2]));
         if (count == 4 && command == L"code") return print_code(fs::path(words[3]), _wtoi(words[2]));
+        if (count >= 3 && command == L"fmt") {
+            std::fputs("The C++ backup can't tidy files. Use jamo.exe, the compiler written in Jamo, for jamo fmt.\n", stderr);
+            return FAILED;
+        }
         if (count == 3 && command == L"get") {
             std::fputs("The C++ backup can't download packages. Use jamo.exe, the compiler written in Jamo, for jamo get.\n", stderr);
             return FAILED;
@@ -610,6 +617,8 @@ int wmain(int count, wchar_t** words) {
                 cleaner_mode |= NO_OPTIMIZING;
             } else if (word == L"--window") {
                 cleaner_mode |= WINDOW_PROGRAM;
+            } else if (word == L"--trace") {
+                cleaner_mode |= TRACING;
             } else {
                 break;
             }

@@ -76,7 +76,7 @@ int main() {
         check(!errors.any(), "Windows line endings");
     }
     bad("print(1)", "top level");
-    bad("func main()\nfunc inner()\nend\nend", "inside functions");
+    bad("func main()\nfunc inner() 5\nend", "needs => and what it gives back");
     bad("func main()\n", "never gets its end");
     bad("func main()\nif true\nend", "never gets its end");
     bad("func main()\nvar x\nend", "always needs a value");

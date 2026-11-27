@@ -1,0 +1,4 @@
+func main()
+    func pick(n: int): int 5
+    print(1)
+end

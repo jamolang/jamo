@@ -1,0 +1,58 @@
+# sprite.jamo and gfx.jamo's sprite drawing, checked pixel by pixel in an off-screen window. Answers worked out by hand
+use "sprite.jamo"
+
+func same(c: Color, red: int, green: int, blue: int): bool
+    return gfx_byte(c.red) == red and gfx_byte(c.green) == green and gfx_byte(c.blue) == blue
+end
+
+func main()
+    var window = open_window("Sprite test", 200, 100)
+    window.quiet()
+    window.move(-3000, -3000)
+    var screen = start_gfx(window)
+    # Two 2x2 frames side by side: frame 0 is red on its left and green on its right, frame 1 is all blue
+    var art = screen.image_from_text(["0122", "0122"], [rgb(255, 0, 0), rgb(0, 255, 0), rgb(0, 0, 255)])
+    var frames = sheet(art, 2, 2)
+    print(frames.count)
+    var ok = true
+    for round in 0..3
+        screen.clear(rgb(0, 0, 0))
+        # Frame 0 at 10 times size: red left half at x 0-9, green right half at x 10-19
+        screen.sprite(frames, 0, 0.0, 0.0, 10.0, false)
+        # Mirrored at x 40: green on the left now
+        screen.sprite(frames, 0, 40.0, 0.0, 10.0, true)
+        # Frame 1 at x 80: blue
+        screen.sprite(frames, 1, 80.0, 0.0, 10.0, false)
+        # A see-through corner: . shows the background
+        var dot = screen.image_from_text([".0"], [rgb(255, 255, 255)])
+        screen.image_sized(dot, 120.0, 0.0, 20.0, 10.0)
+        if round == 2
+            ok = same(screen.read_pixel(4, 5), 255, 0, 0) and same(screen.read_pixel(15, 5), 0, 255, 0)
+            ok = ok and same(screen.read_pixel(44, 5), 0, 255, 0) and same(screen.read_pixel(55, 5), 255, 0, 0)
+            ok = ok and same(screen.read_pixel(85, 15), 0, 0, 255)
+            ok = ok and same(screen.read_pixel(124, 5), 0, 0, 0) and same(screen.read_pixel(135, 5), 255, 255, 255)
+            ok = ok and same(screen.read_pixel(100, 50), 0, 0, 0)
+        end
+        screen.show()
+    end
+    print(ok)
+    # A half turn puts red on the right
+    screen.clear(rgb(0, 0, 0))
+    screen.sprite_turned(frames, 0, 100.0, 50.0, 10.0, 3.14159265358979, false)
+    print(same(screen.read_pixel(105, 50), 255, 0, 0) and same(screen.read_pixel(94, 50), 0, 255, 0))
+    var walk = animation([2, 3, 4], 10.0, true)
+    var seen = ""
+    for i in 0..7
+        seen = seen + string(walk.frame())
+        walk.update(0.1)
+    end
+    print(seen)
+    var once = animation([5, 6], 4.0, false)
+    once.update(0.3)
+    print(f"{once.frame()} {once.done()}")
+    once.update(0.3)
+    print(f"{once.frame()} {once.done()}")
+    once.restart()
+    print(f"{once.frame()} {once.done()}")
+    window.close()
+end

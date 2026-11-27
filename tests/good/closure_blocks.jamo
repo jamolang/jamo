@@ -1,0 +1,71 @@
+# Functions written in place with a whole block, and functions inside functions. Answers worked out by hand
+use "list.jamo"
+
+struct Player
+    name: string
+    score: int
+end
+
+func make_counter_text(prefix: string): func(int): string
+    return func(n: int): string
+        var out = prefix
+        for i in 0..n
+            out = out + "*"
+        end
+        return out
+    end
+end
+
+func first_with<T>(items: [T], keep: func(T): bool, fallback: T): T
+    func search(): T
+        for item in items
+            if keep(item)
+                return item
+            end
+        end
+        return fallback
+    end
+    return search()
+end
+
+func main()
+    var limit = 50
+    func cheap(p: int): bool
+        if p < 0
+            return false
+        end
+        return p < limit
+    end
+    print(filtered([10, 80, -5, 45, 51], cheap))
+    var stars = make_counter_text("score: ")
+    print(stars(3))
+    var players = [Player{name: "Ana", score: 30}, Player{name: "Bo", score: 70}, Player{name: "Cy", score: 70}]
+    func better(a: Player, b: Player): bool
+        if a.score != b.score
+            return a.score > b.score
+        end
+        return len(a.name) < len(b.name)
+    end
+    sort_with(players, better)
+    print(mapped(players, func(p: Player): string => p.name))
+    var log: [string] = []
+    func note(text: string)
+        log.add(f"[{len(log)}] {text}")
+    end
+    note("start")
+    note("end")
+    print(log)
+    print(first_with([3, 8, 11], func(n: int): bool => n > 5, 0))
+    print(first_with(["a", "b"], func(t: string): bool => t == "z", "none"))
+    var safe = func(text: string): int
+        try
+            return int(text)
+        catch
+            return -1
+        end
+    end
+    print(safe("42"))
+    print(safe("x"))
+    func triple(n: int): int => n * 3
+    print(triple(4))
+end

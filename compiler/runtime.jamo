@@ -82,7 +82,8 @@ const R_CLEANER_ADD_TO_TABLE = 74
 const R_CLEANER_MARK_WORD = 75
 const R_CLEANER_CLEAN = 76
 const R_SHOW_CALLS = 77
-const RUNTIME_ROUTINES = 78
+const R_TRACE_CALL = 78
+const RUNTIME_ROUTINES = 79
 
 # rcx = exit code. A window program that collected a run error shows it in a message box first, since it has no console
 func write_rt_exit(out: Assembler, rt: [int], text: RuntimeText)
@@ -3023,6 +3024,64 @@ func write_rt_show_calls(out: Assembler, rt: [int], text: RuntimeText)
     out.hex("c3")  # ret
 end
 
+# rax = a function's name. For --trace: writes it to the error stream on its own line, two spaces in for each Jamo call under it. Keeps rbx, rsi and rdi
+func write_rt_trace_call(out: Assembler, rt: [int], text: RuntimeText)
+    var at_count_frames = out.new_label()
+    var at_counted = out.new_label()
+    var at_indent = out.new_label()
+    var at_write_name = out.new_label()
+    out.place(rt[R_TRACE_CALL])
+    out.hex("55")  # push rbp
+    out.hex("4889e5")  # mov rbp, rsp
+    out.hex("53")  # push rbx
+    out.hex("56")  # push rsi
+    out.hex("57")  # push rdi
+    out.hex("4883ec08")  # sub rsp, 8
+    out.hex("4889c3")  # mov rbx, rax
+    out.hex("488b7500")  # mov rsi, qword ptr [rbp]
+    out.hex("31ff")  # xor edi, edi
+    out.lea_data(REG_RAX, DATA_CLEANER, 0)
+    out.hex("4c8b4028")  # mov r8, qword ptr [rax+40]
+    out.place(at_count_frames)
+    out.hex("4885f6")  # test rsi, rsi
+    out.jump_if_equal(at_counted)
+    out.hex("4c39c6")  # cmp rsi, r8
+    out.jump_if_at_least(at_counted)
+    out.hex("48ffc7")  # inc rdi
+    out.hex("488b06")  # mov rax, qword ptr [rsi]
+    out.hex("4839f0")  # cmp rax, rsi
+    out.jump_if_at_most(at_counted)
+    out.hex("4889c6")  # mov rsi, rax
+    out.jump(at_count_frames)
+    out.place(at_counted)
+    out.hex("48ffcf")  # dec rdi
+    out.hex("4883ff28")  # cmp rdi, 40
+    out.jump_if_at_most(at_indent)
+    out.hex("bf28000000")  # mov edi, 40
+    out.place(at_indent)
+    out.hex("4885ff")  # test rdi, rdi
+    out.jump_if_less_equal(at_write_name)
+    out.lea_data(REG_RAX, DATA_LETTERS, 0)
+    out.hex("480500020000")  # add rax, 512
+    out.call(rt[R_ERROR_TEXT])
+    out.lea_data(REG_RAX, DATA_LETTERS, 0)
+    out.hex("480500020000")  # add rax, 512
+    out.call(rt[R_ERROR_TEXT])
+    out.hex("48ffcf")  # dec rdi
+    out.jump(at_indent)
+    out.place(at_write_name)
+    out.hex("4889d8")  # mov rax, rbx
+    out.call(rt[R_ERROR_TEXT])
+    out.lea_string(REG_RAX, text.new_line)
+    out.call(rt[R_ERROR_TEXT])
+    out.hex("488d65e8")  # lea rsp, [rbp-24]
+    out.hex("5f")  # pop rdi
+    out.hex("5e")  # pop rsi
+    out.hex("5b")  # pop rbx
+    out.hex("5d")  # pop rbp
+    out.hex("c3")  # ret
+end
+
 # Every routine's label, made first, in order
 func make_runtime_labels(out: Assembler): [int]
     var rt: [int] = []
@@ -3111,4 +3170,5 @@ func write_runtime(out: Assembler, rt: [int], text: RuntimeText)
     write_rt_cleaner_mark_word(out, rt, text)
     write_rt_cleaner_clean(out, rt, text)
     write_rt_show_calls(out, rt, text)
+    write_rt_trace_call(out, rt, text)
 end
