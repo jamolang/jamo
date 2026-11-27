@@ -1,4 +1,5 @@
-# Guess the number. Jamo has no random numbers yet, so it picks one from your name.
+# Guess the number. It picks the number from your name, so the same name always gets the same one. For a new number
+# every time, use random_int from math.jamo.
 
 func main()
     print("What's your name?")

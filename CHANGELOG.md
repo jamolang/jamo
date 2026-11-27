@@ -2,25 +2,42 @@
 
 What changed in each version of Jamo.
 
-## Not released yet
+## 0.3.0
 
-- Function values: a function's name is a value of type `func(int, int): bool`, which can go in variables, arrays, struct fields and inputs and be called with `( )`, including fields called like methods. Generics work them out too. `list.jamo` gains `sort_with`, `filtered` and `mapped`. Guide section 29. 8 planted bugs were all caught.
-- Index errors say "which has 1 item" and "1 byte" instead of "1 items" and "1 bytes".
-- REVIEW.md has a third pass: what changed for real use, and what is still open.
-- `jamo get someone/project` downloads a shared library from GitHub into `packages/project`, from the files its `jamo-package.txt` lists, or `project.jamo` alone. It refuses names that could leave the folder and saves nothing unless every file downloads. Guide section 24.
-- `try` and `catch`: a run error or `fail` inside a `try`, however deep in its calls, jumps to its `catch`, which can name the error's words. `return`, `break` and `continue` work inside both parts. Guide section 28. 11 planted bugs in a copy of the compiler were all caught by the new tests.
-- Text with letters beyond English: `upper` and `lower` change accented, Greek and Cyrillic letters too, `letter_count`, `letters` and `reverse_letters` work with whole letters instead of bytes, and `term.jamo` pads and lines up tables by letters.
-- Jamo Playground (`playground/jamo_playground.pyw`): an editor with colors, Run, typed input, clickable errors, the examples menu and Stop.
-- A new example, Beat Run (`examples/beat_run.jamo`): a one-button rhythm runner with a song made in code, obstacles on the beat, a jump that fits inside one beat, attempts, best % and a progress bar. Checked: every jump has at least a 50 ms window either side, most 142 ms.
-- `sound.jamo`: `silence(seconds)` and `clip.mix(other, at, volume)` build songs and longer sounds from notes, to the exact sample.
-- A new example, Sky Hopper (`examples/platformer.jamo`): a three-level platformer with springs, spikes, coins, coyote time, a jump buffer, short and long jumps, squash and stretch, sparks and a following camera. Its GIF is at the top of the README's game section.
-- The VS Code extension (0.3.0) adds hover, go to definition (also into the built-in libraries, which it now carries), an outline and suggestions. They read the code itself, so they work while a file has mistakes.
-- Sort any array: `sort_by`, `sort_by_float` and `sort_by_text` in `list.jamo` sort items by a key array you give them, keeping equal items in order, and `sort_floats` sorts floats.
-- `bench/run_bench.py` times the same five programs in Jamo, C and Python, checks they print the same, and draws the chart in the README.
-- A mistake inside a generic copy also points at the line that asked for it, like `Map<float, int>.set doesn't work with these types, because of the mistake above.`, so a mistake inside a library says which line of the program caused it.
-- A generic call given an input that gives back nothing says so, instead of saying it can't work out the type.
-- `math.jamo` and `time.jamo` keep their state in variables outside functions, instead of a trick with the `.exe`'s header. Nothing changes for programs.
-- Review, second pass: 3,000 random programs checked against Python and 3,000 broken programs, with no crashes and the two compilers always agreeing. See REVIEW.md.
+### New in the language
+
+- **`try` and `catch`.** A run error, or your own `fail`, inside a `try` jumps to its `catch` instead of stopping the program, even from deep inside functions it calls. The name after `catch` holds the error's words. `return`, `break` and `continue` work inside both parts. Guide section 28.
+- **Function values.** A function's name is a value of type like `func(int, int): bool`. It can go in variables, arrays, struct fields and inputs, and be called with `( )`. A struct field holding a function is called like a method, as in `button.on_click(3)`. Generics work them out too. Guide section 29.
+- `try` and `catch` are new keywords, so they can't be names any more.
+
+### New in the libraries
+
+- **`list.jamo`:** `sort_with`, `filtered` and `mapped` take a function of your own. `sort_by`, `sort_by_float` and `sort_by_text` sort any array by a key you give each item, and `sort_floats` sorts floats. Equal items keep their order in every sort.
+- **`text.jamo`:** `upper` and `lower` change accented, Greek and Cyrillic letters too. `letter_count`, `letters` and `reverse_letters` work with whole letters instead of bytes, and `term.jamo` pads and lines up tables by letters.
+- **`sound.jamo`:** `silence(seconds)` and `clip.mix(other, at, volume)` build songs and longer sounds from notes, to the exact sample.
+
+### New commands and tools
+
+- **`jamo get someone/project`** downloads a library someone shared on GitHub into `packages/project`. It takes the files the project's `jamo-package.txt` lists, or `project.jamo` alone. It refuses file names that could leave its folder, and saves nothing unless every file downloads. Guide section 24.
+- **Jamo Playground** (`playground/jamo_playground.pyw` in the repo, needs Python): type code and press Run, with colors, typed input, clickable errors, every example in a menu, and Stop.
+- **The VS Code extension (0.3.0)** adds hover, go to definition (into the built-in libraries too), an outline and suggestions while you type. They read the code itself, so they work while a file has mistakes.
+- **`bench/run_bench.py`** times five programs in Jamo, C and Python, checks all three print the same, and draws the chart in the README.
+
+### New examples
+
+- **Sky Hopper** (`examples/platformer.jamo`): a three-level platformer with springs, spikes and coins, and the small helps good platformers have: a moment to still jump after running off an edge, and a jump pressed just before landing still counts.
+- **Beat Run** (`examples/beat_run.jamo`): a one-button rhythm game whose whole song is made in code. Every obstacle sits on the beat, and every jump has at least 50 ms of slack either side.
+
+### Clearer errors
+
+- Index errors say "which has 1 item" and "1 byte", not "1 items" and "1 bytes".
+- A mistake inside a generic copy also points at the line of the program that asked for it.
+- A generic call given an input that gives back nothing says so.
+
+### Checked
+
+- About 650 tests pass. Bugs planted on purpose in a copy of the compiler were all caught: 11 for `try` and `catch`, 8 for function values.
+- 3,000 random programs were checked against Python and 3,000 broken programs against both compilers, with no problems. REVIEW.md has the details.
 
 ## 0.2.0
 

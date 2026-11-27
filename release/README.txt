@@ -23,8 +23,15 @@ Or start from a small game that already works:
   jamo new --game my_game
   jamo run my_game\main.jamo
 
-GUIDE.md teaches the whole language step by step, and the examples folder has thirteen programs to read and change.
+GUIDE.md teaches the whole language step by step, and the examples folder has fifteen programs to read and change, including a platformer and a rhythm game.
 GUIDE.md is plain text, so any text editor can open it.
+
+Using a library someone shared
+------------------------------
+
+  jamo get someone/project
+
+downloads it from GitHub into a packages folder, and tells you the use line to put at the top of your program.
 
 Sharing a game
 --------------
