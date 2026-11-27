@@ -2,7 +2,7 @@
 
 What changed in each version of Jamo.
 
-## Not released yet
+## 0.5.0
 
 - **Star Guard** (`examples/star_guard.jamo`): an arena shooter against waves of three kinds of drone, with keyboard and mouse or a controller. It uses sprites drawn from text, particles, functions made in place for how each drone moves, `try` for the saved best score, and `fixed` and `commas`. Checked with a bot over 32 runs: standing still lasts about 5 waves, dodging about 10. Drones never appear right next to the ship.
 - `jamo run --trace file.jamo` shows each of the program's own functions as it starts, indented by how deep the calls go, to follow what a program does. Library functions are left out.
