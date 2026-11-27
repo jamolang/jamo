@@ -1950,6 +1950,62 @@ When a test fails, you see what went wrong and the line it happened on, along wi
 
 The checks are `expect(ok)`, `expect_equal(got, want)` for whole numbers, `expect_text(got, want)` and `expect_near(got, want, close)` for floats. `jamo test some_folder` tests just that folder, and `jamo test score_test.jamo` just that file. Each test runs in its own file's folder, so it can read files that sit beside it.
 
+## 32. Interfaces: different structs in one list
+
+A game is full of different things that all need the same calls: every frame, each enemy, coin and bullet gets `update` and `draw`. An `interface` lists the functions they share, and then they can all go in one list:
+
+```jamo
+interface Animal
+    func name(): string
+    func sound(): string
+end
+
+struct Dog
+    tricks: int
+end
+
+func Dog.name(): string
+    return "dog"
+end
+
+func Dog.sound(): string
+    return "woof"
+end
+
+struct Cat
+    lives: int
+end
+
+func Cat.name(): string
+    return "cat"
+end
+
+func Cat.sound(): string
+    return "meow"
+end
+
+func main()
+    var pets: [Animal] = [Dog{tricks: 3}, Cat{lives: 9}]
+    for pet in pets
+        print(pet.name() + " says " + pet.sound())
+    end
+end
+```
+
+```output
+dog says woof
+cat says meow
+```
+
+A struct doesn't have to say it's an `Animal`. If it has every function the interface lists, with the same inputs and answer, it fits, and Jamo turns it into one wherever an `Animal` is wanted: in a list, a variable, or a function's input. It's still the same struct underneath, so `pet.update(dt)` changes the real dog.
+
+If something's missing, Jamo says what:
+
+```text
+Square can't be a Shape, because it has no grow function.
+Shape needs grow to be func(float).
+```
+
 ## What Jamo can't do yet
 
 Jamo is young, so it's better to know this up front:

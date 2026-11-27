@@ -1,0 +1,4 @@
+interface_wrong_function_type.jamo line 15: Square can't be a Shape, because its area is func(): int.
+        var a: Shape = Square{side: 2.0}
+                       ^^^^^^^^^^^^^^^^^
+Shape needs area to be func(): float.

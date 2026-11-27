@@ -1194,7 +1194,10 @@ private:
 
     // An empty [ ] only has a type if where it's going says what type that is
     Type check_wanting(Expr& expr, Type wanted) {
-        if (expr.kind != ExprKind::ArrayLiteral) return check_expression(expr);
+        if (expr.kind != ExprKind::ArrayLiteral) {
+            const Type got = check_expression(expr);
+            return to_interface(expr, got, wanted);
+        }
         expr.type = check_array_literal(expr, wanted);
         return expr.type;
     }
@@ -1934,6 +1937,49 @@ private:
         errors.add(spot, "nothing has this name: " + name, close.empty() ? fallback : "Did you mean " + close + "?");
     }
 
+    // --- Interfaces ---
+    bool is_interface(Type type) const {
+        return program.types.is_struct(type) && std::find(program.interfaces.begin(), program.interfaces.end(), type_name(type)) != program.interfaces.end();
+    }
+
+    // A struct given where an interface is wanted becomes one, through the interface's maker, if it has every function
+    Type to_interface(Expr& expr, Type got, Type wanted) {
+        if (got == wanted || !is_interface(wanted) || !program.types.is_struct(got) || is_interface(got)) return got;
+        const std::string struct_name = type_name(got);
+        const std::string interface_name = type_name(wanted);
+        for (const StructField& field : program.types.fields_of(wanted)) {
+            const auto found = functions.find(struct_name + "." + field.name);
+            if (found == functions.end()) {
+                errors.add(expr.spot, struct_name + " can't be " + with_article(wanted) + ", because it has no " + field.name + " function.",
+                           interface_name + " needs " + field.name + " to be " + type_name(field.type) + ".");
+                return Type::Unknown;
+            }
+            std::vector<Type> inputs;
+            for (size_t i = 1; i < found->second->inputs.size(); i++) inputs.push_back(found->second->inputs[i].type);
+            const Type has = program.types.function_of(inputs, found->second->return_type);
+            if (has != field.type) {
+                errors.add(expr.spot, struct_name + " can't be " + with_article(wanted) + ", because its " + field.name + " is " + type_name(has) + ".",
+                           interface_name + " needs " + field.name + " to be " + type_name(field.type) + ".");
+                return Type::Unknown;
+            }
+        }
+        const auto maker = generic_functions.find("(making " + interface_name + ")");
+        if (maker == generic_functions.end()) return got;
+        const std::vector<Type> args{got};
+        const std::string name = generic_name(maker->second->name, args);
+        if (!make_generic_copy(*maker->second, args, name, expr.spot)) return Type::Unknown;
+        auto inner = std::make_unique<Expr>(std::move(expr));
+        expr = Expr{};
+        expr.kind = ExprKind::Call;
+        expr.spot = inner->spot;
+        expr.depth = inner->depth + 1;
+        expr.name = name;
+        expr.type = wanted;
+        expr.inputs.push_back(std::move(inner));
+        note_call(name);
+        return wanted;
+    }
+
     // --- use ... as ---
     bool has_top_level(const std::string& name) const {
         return functions.count(name) || generic_functions.count(name) || constants.count(name) || global_order.count(name);
@@ -1972,7 +2018,7 @@ private:
 
     // A name made with private can only be used in the file it's made in
     void check_private(const std::string& name, Spot spot) {
-        if (spot.file < 0) return;
+        if (spot.file < 0 || errors.name_of_file(spot.file).find(" (built in)") != std::string::npos) return;
         for (const auto& [made, file] : program.private_names) {
             if (made != name) continue;
             if (file != spot.file) errors.add(spot, name.substr(0, name.find(" (in ")) + " is private to " + program.file_names[static_cast<size_t>(file)] + ", so only that file can use it.", "To share it, take away private where it's made.");

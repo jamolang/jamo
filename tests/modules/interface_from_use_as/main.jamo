@@ -1,0 +1,9 @@
+use "shapes.jamo" as sh
+
+func main()
+    var a = sh.make_box(3.0)
+    var b: Shape = Box{w: 2.0}
+    print(a.bigger(b))
+    print(b.bigger(a))
+    print(a.area())
+end

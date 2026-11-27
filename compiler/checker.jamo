@@ -1960,7 +1960,8 @@ end
 func Checker.check_wanting(place: int, wanted: int): int
     var e = self.ex(place)
     if e.kind != EX_ARRAY_LITERAL
-        return self.check_expression(place)
+        var got = self.check_expression(place)
+        return self.to_interface(place, got, wanted)
     end
     e.type = self.check_array_literal(place, wanted)
     return e.type
@@ -3083,6 +3084,67 @@ func Checker.report_unknown_name(name: string, line: int, column: int, length: i
     self.add(line, column, length, file, "nothing has this name: " + name, did_you_mean(close, fallback))
 end
 
+# --- Interfaces ---
+func Checker.is_interface(type: int): bool
+    if not self.is_struct(type)
+        return false
+    end
+    var name = self.type_name(type)
+    for interface in self.program.interfaces
+        if interface == name
+            return true
+        end
+    end
+    return false
+end
+
+# A struct given where an interface is wanted becomes one, through the interface's maker, if it has every function
+func Checker.to_interface(place: int, got: int, wanted: int): int
+    if got == wanted or not self.is_interface(wanted) or not self.is_struct(got) or self.is_interface(got)
+        return got
+    end
+    var e = self.ex(place)
+    var struct_name = self.type_name(got)
+    var interface_name = self.type_name(wanted)
+    for field in self.fields_of(wanted)
+        if not self.has_function(struct_name + "." + field.name)
+            self.add_at(e, struct_name + " can't be " + self.with_article(wanted) + ", because it has no " + field.name + " function.", interface_name + " needs " + field.name + " to be " + self.type_name(field.type) + ".")
+            return TYPE_UNKNOWN
+        end
+        var method = self.function_named(struct_name + "." + field.name)
+        var inputs: [int] = []
+        for i in 1..len(method.inputs)
+            inputs.add(method.inputs[i].type)
+        end
+        var has = self.program.types.function_of(inputs, method.return_type)
+        if has != field.type
+            self.add_at(e, struct_name + " can't be " + self.with_article(wanted) + ", because its " + field.name + " is " + self.type_name(has) + ".", interface_name + " needs " + field.name + " to be " + self.type_name(field.type) + ".")
+            return TYPE_UNKNOWN
+        end
+    end
+    var maker_name = "(making " + interface_name + ")"
+    if not self.generic_functions.has(maker_name)
+        return got
+    end
+    var args = [got]
+    var name = self.generic_name(maker_name, args)
+    var made = self.make_generic_copy(self.generic_functions.get(maker_name), args, name, e.line, e.column, e.length, e.file)
+    if made.name == ""
+        return TYPE_UNKNOWN
+    end
+    var inner = self.program.new_expr(EX_CALL, e.line, e.column, e.length)
+    var call = self.program.exprs[inner]
+    self.program.exprs[inner] = e
+    self.program.exprs[place] = call
+    call.file = e.file
+    call.depth = e.depth + 1
+    call.name = name
+    call.type = wanted
+    call.inputs = [inner]
+    self.note_call(name)
+    return wanted
+end
+
 # --- use ... as ---
 func Checker.has_top_level(name: string): bool
     return self.has_function(name) or self.generic_functions.has(name) or self.constants.has(name) or self.global_order.has(name)
@@ -3137,7 +3199,7 @@ end
 
 # A name made with private can only be used in the file it's made in
 func Checker.check_private(name: string, line: int, column: int, length: int, file: int)
-    if file < 0
+    if file < 0 or ends_with(self.program.file_names[file], " (built in)")
         return
     end
     for i in 0..len(self.program.private_names)

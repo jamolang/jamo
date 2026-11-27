@@ -1,0 +1,16 @@
+interface Shape
+    func area(): float
+    func grow(by: float)
+end
+
+struct Square
+    side: float
+end
+
+func Square.area(): int
+    return 1
+end
+
+func main()
+    var a: Shape = Square{side: 2.0}
+end

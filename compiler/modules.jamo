@@ -423,6 +423,52 @@ func Loader.note_alias(use_line: UseLine, target: int)
     self.program.alias_targets.add(target)
 end
 
+# Each interface's maker, as Jamo: a generic function that wraps a struct's methods in functions written in place
+func interface_makers(program: Program): string
+    var out = ""
+    for name in program.interfaces
+        var found = -1
+        for i in 0..len(program.structs)
+            if program.structs[i].name == name
+                found = i
+            end
+        end
+        if found < 0
+            continue
+        end
+        out += "func jamo_make_" + name + "<Made>(value: Made): " + name + "\n"
+        var fields = ""
+        for field in program.structs[found].fields
+            var inputs = program.types.entry(field.type).args
+            var answer = program.types.entry(field.type).element
+            var given = ""
+            var passed = ""
+            for i in 0..len(inputs)
+                if i > 0
+                    given += ", "
+                    passed += ", "
+                end
+                given += "a" + string(i + 1) + ": " + program.types.name(inputs[i])
+                passed += "a" + string(i + 1)
+            end
+            var gives_back = ""
+            var returning = ""
+            if answer != TYPE_NOTHING
+                gives_back = ": " + program.types.name(answer)
+                returning = "return "
+            end
+            out += "    func jamo_method_" + field.name + "(" + given + ")" + gives_back + "\n"
+            out += "        " + returning + "value." + field.name + "(" + passed + ")\n    end\n"
+            if fields != ""
+                fields += ", "
+            end
+            fields += field.name + ": jamo_method_" + field.name
+        end
+        out += "    return " + name + "{" + fields + "}\nend\n\n"
+    end
+    return out
+end
+
 # Loads the main file and every file it uses. Answers false when the main file can't be read
 func load_program(main_file: string, errors: Errors, program: Program): bool
     var full = canonical_path(main_file)
@@ -436,6 +482,15 @@ func load_program(main_file: string, errors: Errors, program: Program): bool
     end
     if not errors.any()
         program.setup_order = loader.setup_order()
+    end
+    if not errors.any() and len(program.interfaces) > 0
+        load_extra_file("(interfaces) (built in)", interface_makers(program), errors, program)
+        var file = len(program.file_names) - 1
+        for function in program.functions
+            if function.file == file and starts_with(function.name, "jamo_make_")
+                function.name = "(making " + slice(function.name, len("jamo_make_"), len(function.name)) + ")"
+            end
+        end
     end
     errors.current = 0
     return true

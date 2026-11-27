@@ -311,5 +311,6 @@ struct Program {
     std::vector<std::pair<std::string, int>> private_names;  // Made with private: the name, and the file it can be used in
     std::vector<int> own_files;    // Files used with as, whose functions, constants and variables are their own
     std::vector<Alias> aliases;
+    std::vector<std::string> interfaces;  // Structs made with interface: their fields are the functions they need
     std::string own_label;         // While a file used with as is read: its name, so its names become "spawn (in enemies.jamo)"
 };

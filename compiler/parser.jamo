@@ -294,6 +294,8 @@ func Parser.parse_top_level()
     if self.next_is(TK_NAME) and self.peek().text == "private" and self.at + 1 < len(self.tokens) and starts_top_level(self.tokens[self.at + 1].kind)
         self.take()
         self.parse_private()
+    elif self.next_is(TK_NAME) and self.peek().text == "interface" and self.at + 1 < len(self.tokens) and self.tokens[self.at + 1].kind == TK_NAME
+        self.parse_interface()
     elif self.next_is(TK_USE)
         self.parse_use()
     elif self.next_is(TK_STRUCT)
@@ -480,6 +482,85 @@ func Parser.parse_struct()
     if self.stopped
         return
     end
+    self.program.structs.add(decl)
+end
+
+# interface Drawable, a func line for each function a struct needs, then end. It becomes a struct whose fields are
+# those functions, filled in from the struct a Drawable is made from
+func Parser.parse_interface()
+    var keyword = self.take()
+    var name = self.expect_name("an interface name")
+    if self.stopped
+        return
+    end
+    var decl = StructDecl{name: name.text, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(name.text), fields: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: []}
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    while not self.next_is(TK_END_WORD)
+        if self.next_is(TK_END)
+            self.fail_at(keyword.line, keyword.column, keyword.length, "This interface never gets its end.", "Add a line with end to finish it.")
+            return
+        end
+        self.expect(TK_FUNC, "An interface lists the functions a struct needs, one on each line.", "Like this: func draw(screen: Gfx)")
+        if self.stopped
+            return
+        end
+        var method = self.expect_name("a function name")
+        if self.stopped
+            return
+        end
+        self.expect(TK_LEFT_PAREN, "A function name needs ( after it.", "Like this: func " + method.text + "()")
+        if self.stopped
+            return
+        end
+        var inputs: [int] = []
+        if not self.next_is(TK_RIGHT_PAREN)
+            while true
+                var input_name = self.expect_name("an input name")
+                if self.stopped
+                    return
+                end
+                self.expect(TK_COLON, "Inputs need a type.", "Like this: " + input_name.text + ": int")
+                if self.stopped
+                    return
+                end
+                var type = self.parse_type()
+                if self.stopped
+                    return
+                end
+                inputs.add(type)
+                if not self.next_is(TK_COMMA)
+                    break
+                end
+                self.take()
+            end
+        end
+        self.expect(TK_RIGHT_PAREN, "The inputs need a closing ).", "")
+        if self.stopped
+            return
+        end
+        var answer = TYPE_NOTHING
+        if self.next_is(TK_COLON)
+            self.take()
+            answer = self.parse_type()
+            if self.stopped
+                return
+            end
+        end
+        self.expect_line_end()
+        if self.stopped
+            return
+        end
+        decl.fields.add(StructField{name: method.text, line: method.line, column: method.column, length: method.length, type: self.program.types.function_of(inputs, answer)})
+    end
+    self.take()
+    self.expect_line_end()
+    if self.stopped
+        return
+    end
+    self.program.interfaces.add(decl.name)
     self.program.structs.add(decl)
 end
 

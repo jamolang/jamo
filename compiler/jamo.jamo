@@ -1021,11 +1021,14 @@ func tidy_source(text: string): string
         out.add(repeat("    ", level) + line)
         if open == 0 and not carried
             var depth_before = len(stack)
+            var in_interface = len(stack) > 0 and stack[len(stack) - 1] == "interface"
             if first == "if" or first == "while" or first == "for" or first == "struct" or first == "enum" or first == "try"
                 stack.add("block")
+            elif first == "interface"
+                stack.add("interface")
             elif first == "match"
                 stack.add("match")
-            elif first == "func" and not contains(code, "=>")
+            elif first == "func" and not in_interface and not contains(code, "=>")
                 stack.add("block")
             elif first != "func" and tidy_starts_function_value(code)
                 stack.add("block")

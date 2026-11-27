@@ -1,0 +1,4 @@
+interface_bad_line.jamo line 2: An interface lists the functions a struct needs, one on each line.
+        var x = 1
+        ^^^
+Like this: func draw(screen: Gfx)

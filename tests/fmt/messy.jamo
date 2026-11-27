@@ -63,4 +63,9 @@ if n > 0
 return 0
     end
 
+interface Tidy_shape
+func area(): float
+      func grow(by: float)
+  end
+
 

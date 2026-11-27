@@ -197,6 +197,35 @@ private:
 
 }  // namespace
 
+// Each interface's maker, as Jamo: a generic function that wraps a struct's methods in functions written in place
+std::string interface_makers(const Program& program) {
+    std::string out;
+    for (const std::string& name : program.interfaces) {
+        const StructDecl* decl = nullptr;
+        for (const StructDecl& candidate : program.structs) {
+            if (candidate.name == name) decl = &candidate;
+        }
+        if (!decl) continue;
+        out += "func jamo_make_" + name + "<Made>(value: Made): " + name + "\n";
+        std::string fields;
+        for (const StructField& field : decl->fields) {
+            const std::vector<Type>& inputs = program.types.inputs_of(field.type);
+            const Type answer = program.types.answer_of(field.type);
+            std::string given;
+            std::string passed;
+            for (size_t i = 0; i < inputs.size(); i++) {
+                given += (i > 0 ? ", " : "") + std::string("a") + std::to_string(i + 1) + ": " + program.types.name(inputs[i]);
+                passed += (i > 0 ? ", " : "") + std::string("a") + std::to_string(i + 1);
+            }
+            out += "    func jamo_method_" + field.name + "(" + given + ")" + (answer == Type::Nothing ? "" : ": " + program.types.name(answer)) + "\n";
+            out += std::string("        ") + (answer == Type::Nothing ? "" : "return ") + "value." + field.name + "(" + passed + ")\n    end\n";
+            fields += (fields.empty() ? "" : ", ") + field.name + ": jamo_method_" + field.name;
+        }
+        out += "    return " + name + "{" + fields + "}\nend\n\n";
+    }
+    return out;
+}
+
 bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
     std::error_code problem;
     const fs::path full_path = fs::canonical(main_file, problem);
@@ -206,6 +235,13 @@ bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
     loader.add_file(full_path, Spot{});
     if (!loader.load_all()) return false;
     if (!errors.any()) program.setup_order = loader.setup_order();
+    if (!errors.any() && !program.interfaces.empty()) {
+        load_extra_file("(interfaces) (built in)", interface_makers(program), errors, program);
+        const int file = static_cast<int>(program.file_names.size()) - 1;
+        for (auto& function : program.functions) {
+            if (function->spot.file == file && function->name.rfind("jamo_make_", 0) == 0) function->name = "(making " + function->name.substr(10) + ")";
+        }
+    }
     errors.use_file(0);
     return true;
 }

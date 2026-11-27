@@ -1,0 +1,69 @@
+interface Thing
+    func update(dt: float)
+    func describe(): string
+    func score(times: int): int
+end
+
+struct Coin
+    value: int
+    spin: float
+end
+
+func Coin.update(dt: float)
+    self.spin += dt
+end
+
+func Coin.describe(): string
+    return f"coin worth {self.value}"
+end
+
+func Coin.score(times: int): int
+    return self.value * times
+end
+
+struct Ghost
+    scared: bool
+end
+
+func Ghost.update(dt: float)
+    self.scared = not self.scared
+end
+
+func Ghost.describe(): string
+    if self.scared
+        return "scared ghost"
+    end
+    return "ghost"
+end
+
+func Ghost.score(times: int): int
+    return 200
+end
+
+func total(things: [Thing]): int
+    var sum = 0
+    for t in things
+        sum += t.score(2)
+    end
+    return sum
+end
+
+func best(): Thing
+    return Ghost{scared: false}
+end
+
+func main()
+    var coin = Coin{value: 5, spin: 0.0}
+    var things: [Thing] = [coin, Ghost{scared: false}]
+    things.add(Coin{value: 1, spin: 0.0})
+    for t in things
+        t.update(0.5)
+        print(t.describe())
+    end
+    print(coin.spin)
+    print(total(things))
+    var one: Thing = coin
+    one.update(1.0)
+    print(coin.spin)
+    print(best().describe())
+end

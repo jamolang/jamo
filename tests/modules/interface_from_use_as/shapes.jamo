@@ -1,0 +1,20 @@
+interface Shape
+    func area(): float
+    func bigger(other: Shape): bool
+end
+
+struct Box
+    w: float
+end
+
+func Box.area(): float
+    return self.w * self.w
+end
+
+func Box.bigger(other: Shape): bool
+    return self.area() > other.area()
+end
+
+func make_box(w: float): Shape
+    return Box{w: w}
+end

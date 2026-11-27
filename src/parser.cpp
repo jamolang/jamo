@@ -38,6 +38,8 @@ private:
             if (next_is(TokenKind::Name) && peek().text == "private" && at + 1 < tokens.size() && starts_top_level(tokens[at + 1].kind)) {
                 take();
                 parse_private();
+            } else if (next_is(TokenKind::Name) && peek().text == "interface" && at + 1 < tokens.size() && tokens[at + 1].kind == TokenKind::Name) {
+                parse_interface();
             } else if (next_is(TokenKind::Use)) {
                 parse_use();
             } else if (next_is(TokenKind::Struct)) {
@@ -321,6 +323,50 @@ private:
         }
         take();
         expect_line_end();
+        program.structs.push_back(std::move(decl));
+    }
+
+    // interface Drawable, a func line for each function a struct needs, then end. It becomes a struct whose fields
+    // are those functions, filled in from the struct a Drawable is made from
+    void parse_interface() {
+        const Token& keyword = take();
+        StructDecl decl;
+        const Token& name = expect_name("an interface name");
+        decl.name = name.text;
+        decl.spot = name.spot;
+        decl.type = program.types.named(name.text);
+        expect_line_end();
+        while (!next_is(TokenKind::EndWord)) {
+            if (next_is(TokenKind::End)) fail_at(keyword.spot, "This interface never gets its end.", "Add a line with end to finish it.");
+            expect(TokenKind::Func, "An interface lists the functions a struct needs, one on each line.", "Like this: func draw(screen: Gfx)");
+            StructField field;
+            const Token& method = expect_name("a function name");
+            field.name = method.text;
+            field.spot = method.spot;
+            expect(TokenKind::LeftParen, "A function name needs ( after it.", "Like this: func " + method.text + "()");
+            std::vector<Type> inputs;
+            if (!next_is(TokenKind::RightParen)) {
+                while (true) {
+                    const Token& input_name = expect_name("an input name");
+                    expect(TokenKind::Colon, "Inputs need a type.", "Like this: " + input_name.text + ": int");
+                    inputs.push_back(parse_type());
+                    if (!next_is(TokenKind::Comma)) break;
+                    take();
+                }
+            }
+            expect(TokenKind::RightParen, "The inputs need a closing ).");
+            Type answer = Type::Nothing;
+            if (next_is(TokenKind::Colon)) {
+                take();
+                answer = parse_type();
+            }
+            expect_line_end();
+            field.type = program.types.function_of(inputs, answer);
+            decl.fields.push_back(field);
+        }
+        take();
+        expect_line_end();
+        program.interfaces.push_back(decl.name);
         program.structs.push_back(std::move(decl));
     }
 

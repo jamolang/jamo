@@ -1,0 +1,6 @@
+interface Broken
+    var x = 1
+end
+
+func main()
+end

@@ -1,0 +1,4 @@
+interface_missing_function.jamo line 18: Dot can't be a Shape, because it has no grow function.
+        show(Dot{x: 1})
+             ^^^^^^^^^
+Shape needs grow to be func(float).

@@ -112,6 +112,19 @@ print(change(4))
 - Without `=>`, a function written in place has lines after it and then `end`, like any function's body
 - `func name(x: int): int` inside a function, with `=> expression` or lines and `end`, is the same as `var name = func(x: int): int ...`. It can't call itself, and it can't change the variables it captured, which are copies
 
+## Interfaces
+```
+interface Drawable
+    func update(dt: float)
+    func draw(screen: Gfx)
+end
+```
+- An interface lists functions, each with its inputs and answer. It's a type: `var things: [Drawable] = []`
+- A struct with every one of those functions, as methods with the same input and answer types, becomes the interface wherever the interface is wanted: a declared variable, an assignment, a function's input or answer, a struct field, `add`, or an array whose type is known. Nothing in the struct says so
+- The interface's functions call the struct's methods, on the same struct, so changes through it are changes to the struct
+- A struct missing one of the functions, or with one of the wrong type, is a compile error that names the function and the type it needs
+- `interface` means this only at the start of a line outside functions, followed by a name
+
 ## Generics
 ```
 func first<T>(items: [T]): T

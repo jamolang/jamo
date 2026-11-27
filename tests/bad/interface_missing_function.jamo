@@ -1,0 +1,19 @@
+interface Shape
+    func area(): float
+    func grow(by: float)
+end
+
+struct Dot
+    x: int
+end
+
+func Dot.area(): float
+    return 0.0
+end
+
+func show(s: Shape)
+end
+
+func main()
+    show(Dot{x: 1})
+end

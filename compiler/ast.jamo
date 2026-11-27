@@ -265,11 +265,12 @@ struct Program
     alias_files: [int]         # use ... as: in alias_files[i], alias_names[i] means the file alias_targets[i]
     alias_names: [string]
     alias_targets: [int]
+    interfaces: [string]       # Structs made with interface: their fields are the functions they need
     own_label: string          # While a file used with as is read: its name, so its names become "spawn (in enemies.jamo)"
 end
 
 func new_program(): Program
-    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: [], lambda_bodies: [], private_names: [], private_files: [], own_files: [], alias_files: [], alias_names: [], alias_targets: [], own_label: ""}
+    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: [], lambda_bodies: [], private_names: [], private_files: [], own_files: [], alias_files: [], alias_names: [], alias_targets: [], interfaces: [], own_label: ""}
 end
 
 # Variables outside functions get slots from -2 down (-1 means no slot), and their values are set up by a

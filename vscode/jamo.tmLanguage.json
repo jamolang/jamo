@@ -48,7 +48,7 @@
                     }
                 },
                 {
-                    "match": "\\b(struct|enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    "match": "\\b(struct|enum|interface)\\s+([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
                         "1": { "name": "keyword.declaration.jamo" },
                         "2": { "name": "entity.name.type.jamo" }
@@ -59,7 +59,7 @@
         "keyword": {
             "patterns": [
                 { "name": "keyword.control.jamo", "match": "\\b(if|elif|else|while|for|in|match|case|break|continue|return|end|use|try|catch)\\b" },
-                { "name": "keyword.declaration.jamo", "match": "\\b(var|const|func|struct|enum|extern|private)\\b" },
+                { "name": "keyword.declaration.jamo", "match": "\\b(var|const|func|struct|enum|extern|private|interface)\\b" },
                 { "name": "keyword.operator.word.jamo", "match": "\\b(and|or|not)\\b" },
                 { "name": "constant.language.jamo", "match": "\\b(true|false)\\b" },
                 { "name": "variable.language.jamo", "match": "\\bself\\b" },
