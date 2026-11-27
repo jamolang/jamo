@@ -1,0 +1,12 @@
+main.jamo line 4: There's no type called Enem (in enemies.jamo).
+        var a: foes.Enem = foes.spawn()
+            ^
+main.jamo line 4: a is declared as an Enem (in enemies.jamo), but this value is an Enemy (in enemies.jamo).
+        var a: foes.Enem = foes.spawn()
+                           ^^^^^^^^^^^^
+main.jamo line 5: b is declared as an int, but this value is an Enemy (in enemies.jamo).
+        var b: int = foes.spawn()
+                     ^^^^^^^^^^^^
+main.jamo line 6: Enemy (in enemies.jamo) needs every field, but this leaves out mood.
+        var c = foes.Enemy{hp: 1}
+                ^^^^^^^^^^^^^^^^^

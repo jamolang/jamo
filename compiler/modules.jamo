@@ -28,6 +28,7 @@ struct Loader
     use_to: [int]
     using_file: int
     with_as: [int]     # 0 not used yet, 1 used without as, 2 used with as
+    reading_folder: string   # The folder of the file being read, or "" for a built-in library
 end
 
 # --- Paths ---
@@ -215,7 +216,7 @@ end
 # --- Loading ---
 
 func new_loader(root: string, errors: Errors, program: Program): Loader
-    return Loader{root: root, errors: errors, program: program, files: [], from_lines: [], from_columns: [], from_lengths: [], from_files: [], seen: [], use_from: [], use_to: [], using_file: 0, with_as: []}
+    return Loader{root: root, errors: errors, program: program, files: [], from_lines: [], from_columns: [], from_lengths: [], from_files: [], seen: [], use_from: [], use_to: [], using_file: 0, with_as: [], reading_folder: ""}
 end
 
 func Loader.add_file(path: string, line: int, column: int, length: int, file: int)
@@ -286,6 +287,7 @@ func Loader.read(name: string, source: string): bool
     if self.errors.any()
         return false
     end
+    self.prepare_names(lexer.tokens)
     self.program.uses = []
     self.program.current_file = file
     var parser = new_parser(lexer.tokens, lexer.errors, self.program)
@@ -305,6 +307,7 @@ func Loader.load_all(): bool
         if starts_with(path, BUILT_IN)
             var name = slice(path, len(BUILT_IN), len(path))
             self.program.own_label = ""
+            self.reading_folder = ""
             if not self.read(name + BUILT_IN_LABEL, builtin_library(name))
                 return true
             end
@@ -328,6 +331,7 @@ func Loader.load_all(): bool
                 self.program.own_label = name
                 self.program.own_files.add(i)
             end
+            self.reading_folder = parent_path(path)
             if not self.read(name, read_file(path))
                 return true
             end
@@ -390,6 +394,48 @@ func Loader.add_use(use_line: UseLine, folder: string)
     end
 end
 
+# Before a file is parsed: the file each of its aliases means, and, for a file used with as, its struct and enum names
+func Loader.prepare_names(tokens: [Token])
+    self.program.alias_words = []
+    self.program.alias_labels = []
+    self.program.own_types = []
+    if self.reading_folder == ""
+        return
+    end
+    for k in 0..len(tokens) - 3
+        if tokens[k].kind == TK_USE and tokens[k + 1].kind == TK_STRING and tokens[k + 2].kind == TK_NAME and tokens[k + 2].text == "as" and tokens[k + 3].kind == TK_NAME
+            var label = self.label_of(tokens[k + 1].value, self.reading_folder)
+            if label != ""
+                self.program.alias_words.add(tokens[k + 3].text)
+                self.program.alias_labels.add(label)
+            end
+        end
+    end
+    if self.program.own_label == ""
+        return
+    end
+    for k in 0..len(tokens) - 1
+        if (tokens[k].kind == TK_STRUCT or tokens[k].kind == TK_ENUM) and tokens[k + 1].kind == TK_NAME
+            self.program.own_types.add(tokens[k + 1].text)
+        end
+    end
+end
+
+# The name a use line's file has in the program, or "" if it isn't one of the program's own files
+func Loader.label_of(path: string, folder: string): string
+    if builtin_library(path) != ""
+        return ""
+    end
+    if path_root(path) != ""
+        return ""
+    end
+    var found = canonical_path(normal_path(join_path(folder, path)))
+    if found == "" or not is_inside(found, self.root)
+        return ""
+    end
+    return relative_path(found, self.root)
+end
+
 # use ... as: a file is used with as everywhere or nowhere, since its names are read one way or the other
 func Loader.note_alias(use_line: UseLine, target: int)
     var how = 2
@@ -423,6 +469,35 @@ func Loader.note_alias(use_line: UseLine, target: int)
     self.program.alias_targets.add(target)
 end
 
+# A type as the makers write it: a struct or enum of a file used with as goes in quotes
+func maker_type(program: Program, type: int): string
+    if type_is_custom(type)
+        var entry = program.types.entry(type)
+        if entry.is_array
+            return "[" + maker_type(program, entry.element) + "]"
+        end
+        if entry.is_function
+            var words = "func("
+            for i in 0..len(entry.args)
+                if i > 0
+                    words += ", "
+                end
+                words += maker_type(program, entry.args[i])
+            end
+            words += ")"
+            if entry.element != TYPE_NOTHING
+                words += ": " + maker_type(program, entry.element)
+            end
+            return words
+        end
+    end
+    var name = program.types.name(type)
+    if contains(name, " (in ")
+        return "\"" + name + "\""
+    end
+    return name
+end
+
 # Each interface's maker, as Jamo: a generic function that wraps a struct's methods in functions written in place
 func interface_makers(program: Program): string
     var out = ""
@@ -448,13 +523,13 @@ func interface_makers(program: Program): string
                     given += ", "
                     passed += ", "
                 end
-                given += "a" + string(i + 1) + ": " + program.types.name(inputs[i])
+                given += "a" + string(i + 1) + ": " + maker_type(program, inputs[i])
                 passed += "a" + string(i + 1)
             end
             var gives_back = ""
             var returning = ""
             if answer != TYPE_NOTHING
-                gives_back = ": " + program.types.name(answer)
+                gives_back = ": " + maker_type(program, answer)
                 returning = "return "
             end
             out += "    func jamo_method_" + field.name + "(" + given + ")" + gives_back + "\n"
@@ -484,7 +559,9 @@ func load_program(main_file: string, errors: Errors, program: Program): bool
         program.setup_order = loader.setup_order()
     end
     if not errors.any() and len(program.interfaces) > 0
+        program.raw_type_names = true
         load_extra_file("(interfaces) (built in)", interface_makers(program), errors, program)
+        program.raw_type_names = false
         var file = len(program.file_names) - 1
         for function in program.functions
             if function.file == file and starts_with(function.name, "jamo_make_")
@@ -499,6 +576,9 @@ end
 # Reads one more file from text, like the main that jamo test makes. It uses nothing
 func load_extra_file(name: string, source: string, errors: Errors, program: Program)
     program.own_label = ""
+    program.own_types = []
+    program.alias_words = []
+    program.alias_labels = []
     var loader = new_loader("", errors, program)
     loader.read(name, source)
     errors.current = 0

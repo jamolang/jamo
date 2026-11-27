@@ -14,6 +14,6 @@ func main()
     foes.count += 1
     print(foes.count)
     print(spawn())
-    var e = Enemy{hp: 7}
+    var e = foes.Enemy{hp: 7}
     print(e.hurt())
 end

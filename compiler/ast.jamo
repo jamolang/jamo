@@ -266,11 +266,15 @@ struct Program
     alias_names: [string]
     alias_targets: [int]
     interfaces: [string]       # Structs made with interface: their fields are the functions they need
+    own_types: [string]        # While a file used with as is read: its struct and enum names
+    alias_words: [string]      # While a file is read: each alias, and the name of its file
+    alias_labels: [string]
+    raw_type_names: bool       # While the hidden interface makers are read: a type can be written as "Enemy (in enemies.jamo)"
     own_label: string          # While a file used with as is read: its name, so its names become "spawn (in enemies.jamo)"
 end
 
 func new_program(): Program
-    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: [], lambda_bodies: [], private_names: [], private_files: [], own_files: [], alias_files: [], alias_names: [], alias_targets: [], interfaces: [], own_label: ""}
+    return Program{types: TypeTable{entries: []}, file_names: [], current_file: -1, uses: [], structs: [], enums: [], consts: [], functions: [], exprs: [], stmts: [], globals: [], setup_order: [], lambda_bodies: [], private_names: [], private_files: [], own_files: [], alias_files: [], alias_names: [], alias_targets: [], interfaces: [], own_types: [], alias_words: [], alias_labels: [], raw_type_names: false, own_label: ""}
 end
 
 # Variables outside functions get slots from -2 down (-1 means no slot), and their values are set up by a

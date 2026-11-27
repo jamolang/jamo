@@ -192,10 +192,19 @@ func Parser.parse_type(): int
         end
         return self.program.types.array_of(element)
     end
+    if self.program.raw_type_names and self.next_is(TK_STRING)
+        return self.program.types.named(self.take().value)
+    end
     if self.next_is(TK_NAME)
         var name = self.take()
+        var type_name = self.own_type(name.text)
+        # foes.Enemy, a struct of a file used with as
+        if self.next_is(TK_DOT) and self.at + 1 < len(self.tokens) and self.tokens[self.at + 1].kind == TK_NAME and self.alias_label(name.text) != ""
+            self.take()
+            type_name = self.take().text + " (in " + self.alias_label(name.text) + ")"
+        end
         if not self.next_is(TK_LESS)
-            return self.program.types.named(name.text)
+            return self.program.types.named(type_name)
         end
         self.nesting += 1
         if self.nesting > DEEPEST_NESTING
@@ -207,7 +216,7 @@ func Parser.parse_type(): int
             return TYPE_NOTHING
         end
         self.nesting -= 1
-        return self.program.types.generic(name.text, args)
+        return self.program.types.generic(type_name, args)
     end
     self.fail("This needs a type here.", "Jamo's types are int, float, bool and string, and [int] is an array of ints.")
     return TYPE_NOTHING
@@ -333,6 +342,29 @@ func starts_top_level(kind: int): bool
     return kind == TK_FUNC or kind == TK_CONST or kind == TK_VAR or kind == TK_STRUCT or kind == TK_ENUM or kind == TK_EXTERN or kind == TK_USE
 end
 
+# In a file used with as, its structs and enums are its own: Enemy there means Enemy (in enemies.jamo)
+func Parser.own_type(name: string): string
+    if self.program.own_label == ""
+        return name
+    end
+    for own in self.program.own_types
+        if own == name
+            return name + " (in " + self.program.own_label + ")"
+        end
+    end
+    return name
+end
+
+# The file an alias means in the file being read, or ""
+func Parser.alias_label(alias: string): string
+    for i in 0..len(self.program.alias_words)
+        if self.program.alias_words[i] == alias
+            return self.program.alias_labels[i]
+        end
+    end
+    return ""
+end
+
 # In a file used with as, its functions, constants and variables get names of their own: spawn (in enemies.jamo).
 # A method keeps its name, since its struct is shared
 func Parser.own_name(name: string): string
@@ -443,7 +475,8 @@ func Parser.parse_struct()
     if self.stopped
         return
     end
-    var decl = StructDecl{name: name.text, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(name.text), fields: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: []}
+    var own = self.own_type(name.text)
+    var decl = StructDecl{name: own, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(own), fields: [], type_params: [], type_param_lines: [], type_param_columns: [], type_param_lengths: []}
     if self.next_is(TK_LESS)
         self.parse_type_params(decl.type_params, decl.type_param_lines, decl.type_param_columns, decl.type_param_lengths)
         if self.stopped
@@ -570,7 +603,8 @@ func Parser.parse_enum()
     if self.stopped
         return
     end
-    var decl = EnumDecl{name: name.text, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(name.text), members: [], member_lines: [], member_columns: [], member_lengths: []}
+    var own = self.own_type(name.text)
+    var decl = EnumDecl{name: own, line: name.line, column: name.column, length: name.length, file: self.program.current_file, type: self.program.types.named(own), members: [], member_lines: [], member_columns: [], member_lengths: []}
     self.expect_line_end()
     if self.stopped
         return
@@ -738,15 +772,16 @@ func Parser.parse_function()
             self.fail("A method can't have types of its own.", "Give its struct the types instead, like func Box<T>.get(): T")
             return
         end
+        var owner = self.own_type(name.text)
         if len(function.type_params) == 0
-            function.owner = self.program.types.named(name.text)
+            function.owner = self.program.types.named(owner)
         else
-            function.owner = self.program.types.generic(name.text, function.type_params)
+            function.owner = self.program.types.generic(owner, function.type_params)
         end
         function.owner_line = name.line
         function.owner_column = name.column
         function.owner_length = name.length
-        function.name = name.text + "." + method.text
+        function.name = owner + "." + method.text
         function.line = method.line
         function.column = method.column
         function.length = method.length
@@ -1900,6 +1935,13 @@ func Parser.parse_primary(): int
     elif kind == TK_NAME
         self.take()
         e.name = token.text
+        # foes.Enemy{...}, a struct of a file used with as. In such a file, its own struct or enum
+        if self.next_is(TK_DOT) and self.at + 2 < len(self.tokens) and self.tokens[self.at + 1].kind == TK_NAME and self.tokens[self.at + 2].kind == TK_LEFT_BRACE and self.alias_label(token.text) != ""
+            self.take()
+            e.name = self.take().text + " (in " + self.alias_label(token.text) + ")"
+        elif self.next_is(TK_DOT) or self.next_is(TK_LEFT_BRACE) or self.next_is(TK_LESS)
+            e.name = self.own_type(token.text)
+        end
         if self.next_is(TK_LESS) and self.looks_like_type_args()
             e.type_args = self.parse_type_args()
             if self.stopped

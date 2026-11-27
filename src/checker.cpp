@@ -774,7 +774,8 @@ private:
         for (const auto& item : structs) options.push_back(item.first);
         for (const auto& item : enums) options.push_back(item.first);
         for (const auto& item : generic_structs) options.push_back(item.first);
-        const std::string close = closest(type_name(named), options);
+        const std::string through = alias_type_hint(type_name(named), spot.file);
+        const std::string close = through.empty() ? closest(type_name(named), options) : through;
         errors.add(spot, "There's no type called " + type_name(named) + ".", close.empty() ? "" : "Did you mean " + close + "?");
     }
 
@@ -1393,6 +1394,15 @@ private:
     }
 
     Type check_field(Expr& expr) {
+        // foes.Mood.CALM, a member of an enum of a file used with as
+        if (expr.left->kind == ExprKind::Field && expr.left->left->kind == ExprKind::Name && !find_variable(expr.left->left->name)) {
+            const int target = alias_target(expr.left->left->name, expr.spot.file);
+            if (target >= 0 && enums.count(expr.left->name + " (in " + program.file_names[static_cast<size_t>(target)] + ")")) {
+                expr.left->name += " (in " + program.file_names[static_cast<size_t>(target)] + ")";
+                expr.left->kind = ExprKind::Name;
+                expr.left->left.reset();
+            }
+        }
         // foes.MAX, for a constant or variable of a file used with as
         if (expr.left->kind == ExprKind::Name && !find_variable(expr.left->name)) {
             const int target = alias_target(expr.left->name, expr.spot.file);
@@ -1535,7 +1545,8 @@ private:
             for (const auto& item : structs) options.push_back(item.first);
             for (const auto& item : generic_structs) options.push_back(item.first);
             std::sort(options.begin(), options.end());
-            const std::string close = closest(expr.name, options);
+            const std::string through = alias_type_hint(expr.name, expr.spot.file);
+            const std::string close = through.empty() ? closest(expr.name, options) : through;
             errors.add(expr.spot, "There's no struct called " + expr.name + ".", close.empty() ? "" : "Did you mean " + close + "?");
             return Type::Unknown;
         }
@@ -1981,6 +1992,18 @@ private:
     }
 
     // --- use ... as ---
+    // A name as the program wrote it: Enemy.hit for "Enemy (in enemies.jamo).hit"
+    static std::string without_file(std::string name) {
+        size_t at = name.find(" (in ");
+        while (at != std::string::npos) {
+            const size_t close = name.find(')', at);
+            if (close == std::string::npos) break;
+            name.erase(at, close + 1 - at);
+            at = name.find(" (in ");
+        }
+        return name;
+    }
+
     bool has_top_level(const std::string& name) const {
         return functions.count(name) || generic_functions.count(name) || constants.count(name) || global_order.count(name);
     }
@@ -2000,6 +2023,15 @@ private:
         return "";
     }
 
+    // For a struct or enum this file doesn't have but a file it uses with as does: foes.Enemy
+    std::string alias_type_hint(const std::string& name, int file) const {
+        for (const Alias& alias : program.aliases) {
+            const std::string key = name + " (in " + program.file_names[static_cast<size_t>(alias.target)] + ")";
+            if (alias.file == file && (structs.count(key) || enums.count(key) || generic_structs.count(key))) return alias.name + "." + name;
+        }
+        return "";
+    }
+
     // The file an alias means in a file, or -1
     int alias_target(const std::string& name, int file) const {
         for (const Alias& alias : program.aliases) {
@@ -2012,7 +2044,7 @@ private:
     std::string shared_name(const std::string& name, int target, Spot spot) {
         const std::string key = name + " (in " + program.file_names[static_cast<size_t>(target)] + ")";
         if (has_top_level(key)) return key;
-        errors.add(spot, program.file_names[static_cast<size_t>(target)] + " has nothing called " + name + ".", "A file used with as shares its functions, constants and variables. Its structs and enums are used without the file's name.");
+        errors.add(spot, program.file_names[static_cast<size_t>(target)] + " has nothing called " + name + ".", "It has to be a function, constant, variable, struct or enum made in that file.");
         return "";
     }
 
@@ -2021,7 +2053,7 @@ private:
         if (spot.file < 0 || errors.name_of_file(spot.file).find(" (built in)") != std::string::npos) return;
         for (const auto& [made, file] : program.private_names) {
             if (made != name) continue;
-            if (file != spot.file) errors.add(spot, name.substr(0, name.find(" (in ")) + " is private to " + program.file_names[static_cast<size_t>(file)] + ", so only that file can use it.", "To share it, take away private where it's made.");
+            if (file != spot.file) errors.add(spot, without_file(name) + " is private to " + program.file_names[static_cast<size_t>(file)] + ", so only that file can use it.", "To share it, take away private where it's made.");
             return;
         }
     }

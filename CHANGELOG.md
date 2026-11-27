@@ -2,6 +2,10 @@
 
 What changed in each version of Jamo.
 
+## Not released yet
+
+- A file used with `as` owns its structs and enums too, so two files can each have an `Enemy`. Other files write `foes.Enemy` as a type, `foes.Enemy{hp: 3}` to make one, and `foes.Mood.CALM`.
+
 ## 0.6.0
 
 - `jamo doc file.jamo` writes a web page of every function, struct, interface, enum and constant in the program's own files, with the `#` comments above them, code examples shown as code, and a search box. `private` things are left out. `jamo doc gfx.jamo` makes one for any built-in library.

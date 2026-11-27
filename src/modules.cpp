@@ -80,6 +80,8 @@ public:
                 const std::string name = built_in_name(files[i]);
                 source = builtin_library(name);
                 program.own_label.clear();
+                program.own_types.clear();
+                program.type_aliases.clear();
                 errors.add_file(name + BUILT_IN_LABEL, source);
                 program.file_names.push_back(name + BUILT_IN_LABEL);
                 const std::vector<Token> tokens = read_tokens(source, errors);
@@ -103,6 +105,7 @@ public:
             if (with_as[i] == 2) program.own_files.push_back(static_cast<int>(i));
             const std::vector<Token> tokens = read_tokens(source, errors);
             if (errors.any()) return true;
+            prepare_names(tokens, files[i].parent_path());
             program.uses.clear();
             parse_into(tokens, errors, program);
             if (errors.any()) return true;
@@ -162,6 +165,33 @@ private:
         note_alias(use, seen.at(same_file_key(found)));
     }
 
+    // Before a file is parsed: the file each of its aliases means, and, for a file used with as, its struct and enum names
+    void prepare_names(const std::vector<Token>& tokens, const fs::path& folder) {
+        program.type_aliases.clear();
+        program.own_types.clear();
+        for (size_t k = 0; k + 3 < tokens.size(); k++) {
+            if (tokens[k].kind == TokenKind::Use && tokens[k + 1].kind == TokenKind::String && tokens[k + 2].kind == TokenKind::Name && tokens[k + 2].text == "as" &&
+                tokens[k + 3].kind == TokenKind::Name) {
+                const std::string label = label_of(tokens[k + 1].value, folder);
+                if (!label.empty()) program.type_aliases.push_back({tokens[k + 3].text, label});
+            }
+        }
+        if (program.own_label.empty()) return;
+        for (size_t k = 0; k + 1 < tokens.size(); k++) {
+            if ((tokens[k].kind == TokenKind::Struct || tokens[k].kind == TokenKind::Enum) && tokens[k + 1].kind == TokenKind::Name) program.own_types.push_back(tokens[k + 1].text);
+        }
+    }
+
+    // The name a use line's file has in the program, or "" if it isn't one of the program's own files
+    std::string label_of(const std::string& path, const fs::path& folder) const {
+        if (builtin_library(path)) return "";
+        const fs::path written(std::u8string(path.begin(), path.end()));
+        std::error_code problem;
+        const fs::path found = fs::canonical((folder / written).lexically_normal(), problem);
+        if (problem || written.has_root_path() || !is_inside(found, root)) return "";
+        return as_text(found.lexically_relative(root));
+    }
+
     // use ... as: a file is used with as everywhere or nowhere, since its names are read one way or the other
     void note_alias(const UseLine& use, size_t target) {
         const int how = use.alias.empty() ? 1 : 2;
@@ -197,6 +227,21 @@ private:
 
 }  // namespace
 
+// A type as the makers write it: a struct or enum of a file used with as goes in quotes
+std::string maker_type(const Program& program, Type type) {
+    if (program.types.is_array(type)) return "[" + maker_type(program, program.types.element_of(type)) + "]";
+    if (program.types.is_function(type)) {
+        std::string words = "func(";
+        const std::vector<Type>& inputs = program.types.inputs_of(type);
+        for (size_t i = 0; i < inputs.size(); i++) words += (i > 0 ? ", " : "") + maker_type(program, inputs[i]);
+        words += ")";
+        if (program.types.answer_of(type) != Type::Nothing) words += ": " + maker_type(program, program.types.answer_of(type));
+        return words;
+    }
+    const std::string name = program.types.name(type);
+    return name.find(" (in ") == std::string::npos ? name : "\"" + name + "\"";
+}
+
 // Each interface's maker, as Jamo: a generic function that wraps a struct's methods in functions written in place
 std::string interface_makers(const Program& program) {
     std::string out;
@@ -214,10 +259,10 @@ std::string interface_makers(const Program& program) {
             std::string given;
             std::string passed;
             for (size_t i = 0; i < inputs.size(); i++) {
-                given += (i > 0 ? ", " : "") + std::string("a") + std::to_string(i + 1) + ": " + program.types.name(inputs[i]);
+                given += (i > 0 ? ", " : "") + std::string("a") + std::to_string(i + 1) + ": " + maker_type(program, inputs[i]);
                 passed += (i > 0 ? ", " : "") + std::string("a") + std::to_string(i + 1);
             }
-            out += "    func jamo_method_" + field.name + "(" + given + ")" + (answer == Type::Nothing ? "" : ": " + program.types.name(answer)) + "\n";
+            out += "    func jamo_method_" + field.name + "(" + given + ")" + (answer == Type::Nothing ? "" : ": " + maker_type(program, answer)) + "\n";
             out += std::string("        ") + (answer == Type::Nothing ? "" : "return ") + "value." + field.name + "(" + passed + ")\n    end\n";
             fields += (fields.empty() ? "" : ", ") + field.name + ": jamo_method_" + field.name;
         }
@@ -236,7 +281,9 @@ bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
     if (!loader.load_all()) return false;
     if (!errors.any()) program.setup_order = loader.setup_order();
     if (!errors.any() && !program.interfaces.empty()) {
+        program.raw_type_names = true;
         load_extra_file("(interfaces) (built in)", interface_makers(program), errors, program);
+        program.raw_type_names = false;
         const int file = static_cast<int>(program.file_names.size()) - 1;
         for (auto& function : program.functions) {
             if (function->spot.file == file && function->name.rfind("jamo_make_", 0) == 0) function->name = "(making " + function->name.substr(10) + ")";
@@ -248,6 +295,8 @@ bool load_program(const fs::path& main_file, Errors& errors, Program& program) {
 
 void load_extra_file(const std::string& name, const std::string& source, Errors& errors, Program& program) {
     program.own_label.clear();
+    program.own_types.clear();
+    program.type_aliases.clear();
     errors.add_file(name, source);
     program.file_names.push_back(name);
     const std::vector<Token> tokens = read_tokens(source, errors);

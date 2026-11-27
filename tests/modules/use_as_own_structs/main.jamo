@@ -1,0 +1,33 @@
+use "enemies.jamo" as foes
+use "items.jamo" as loot
+
+struct Enemy
+    x: int
+end
+
+interface Hittable
+    func hit(): int
+end
+
+func hurt_all(things: [Hittable])
+    for t in things
+        print(t.hit())
+    end
+end
+
+func main()
+    var mine = Enemy{x: 7}
+    var orc: foes.Enemy = foes.spawn()
+    var goblin = foes.Enemy{hp: 5, mood: foes.Mood.CALM}
+    var slime = loot.spawn()
+    print(mine.x)
+    print(slime.name)
+    print(orc.hit())
+    print(foes.describe(orc))
+    print(orc.hit())
+    print(foes.describe(orc))
+    print(orc.mood == foes.Mood.ANGRY)
+    hurt_all([goblin, orc])
+    var many: [foes.Enemy] = [goblin]
+    print(len(many))
+end

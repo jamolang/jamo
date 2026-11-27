@@ -312,5 +312,8 @@ struct Program {
     std::vector<int> own_files;    // Files used with as, whose functions, constants and variables are their own
     std::vector<Alias> aliases;
     std::vector<std::string> interfaces;  // Structs made with interface: their fields are the functions they need
+    std::vector<std::string> own_types;  // While a file used with as is read: its struct and enum names
+    std::vector<std::pair<std::string, std::string>> type_aliases;  // While a file is read: each alias, and its file's name
+    bool raw_type_names = false;   // While the hidden interface makers are read: a type can be written as "Enemy (in enemies.jamo)"
     std::string own_label;         // While a file used with as is read: its name, so its names become "spawn (in enemies.jamo)"
 };

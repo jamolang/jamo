@@ -1,0 +1,7 @@
+use "enemies.jamo" as foes
+
+func main()
+    var a: foes.Enem = foes.spawn()
+    var b: int = foes.spawn()
+    var c = foes.Enemy{hp: 1}
+end

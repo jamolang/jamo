@@ -1338,7 +1338,10 @@ func Checker.check_type_exists(type: int, line: int, column: int, length: int, f
     for name in sorted_keys(self.generic_structs)
         options.add(name)
     end
-    var close = closest(self.type_name(named), options)
+    var close = self.alias_type_hint(self.type_name(named), file)
+    if close == ""
+        close = closest(self.type_name(named), options)
+    end
     self.add(line, column, length, file, "There's no type called " + self.type_name(named) + ".", did_you_mean(close, ""))
 end
 
@@ -2203,6 +2206,16 @@ end
 
 func Checker.check_field(place: int): int
     var e = self.ex(place)
+    # foes.Mood.CALM, a member of an enum of a file used with as
+    var inner = self.ex(e.left)
+    if inner.kind == EX_FIELD and self.ex(inner.left).kind == EX_NAME and self.find_variable(self.ex(inner.left).name).slot == -1
+        var enum_target = self.alias_target(self.ex(inner.left).name, e.file)
+        if enum_target >= 0 and self.enums.has(inner.name + " (in " + self.program.file_names[enum_target] + ")")
+            inner.name = inner.name + " (in " + self.program.file_names[enum_target] + ")"
+            inner.kind = EX_NAME
+            inner.left = -1
+        end
+    end
     # foes.MAX, for a constant or variable of a file used with as
     if self.ex(e.left).kind == EX_NAME and self.find_variable(self.ex(e.left).name).slot == -1
         var target = self.alias_target(self.ex(e.left).name, e.file)
@@ -2372,7 +2385,10 @@ func Checker.check_struct_literal(place: int): int
             options.add(name)
         end
         sort_strings(options)
-        var close = closest(e.name, options)
+        var close = self.alias_type_hint(e.name, e.file)
+        if close == ""
+            close = closest(e.name, options)
+        end
         self.add_at(e, "There's no struct called " + e.name + ".", did_you_mean(close, ""))
         return TYPE_UNKNOWN
     end
@@ -3146,6 +3162,22 @@ func Checker.to_interface(place: int, got: int, wanted: int): int
 end
 
 # --- use ... as ---
+# A name as the program wrote it: Enemy.hit for "Enemy (in enemies.jamo).hit"
+func without_file(name: string): string
+    var out = name
+    var at = find(out, " (in ")
+    while at >= 0
+        var rest = slice(out, at, len(out))
+        var close = find(rest, ")")
+        if close < 0
+            return out
+        end
+        out = slice(out, 0, at) + slice(rest, close + 1, len(rest))
+        at = find(out, " (in ")
+    end
+    return out
+end
+
 func Checker.has_top_level(name: string): bool
     return self.has_function(name) or self.generic_functions.has(name) or self.constants.has(name) or self.global_order.has(name)
 end
@@ -3177,6 +3209,17 @@ func Checker.alias_hint(name: string, file: int): string
     return ""
 end
 
+# For a struct or enum this file doesn't have but a file it uses with as does: foes.Enemy
+func Checker.alias_type_hint(name: string, file: int): string
+    for i in 0..len(self.program.alias_names)
+        var key = name + " (in " + self.program.file_names[self.program.alias_targets[i]] + ")"
+        if self.program.alias_files[i] == file and (self.structs.has(key) or self.enums.has(key) or self.generic_structs.has(key))
+            return self.program.alias_names[i] + "." + name
+        end
+    end
+    return ""
+end
+
 # The file an alias means in a file, or -1
 func Checker.alias_target(name: string, file: int): int
     for i in 0..len(self.program.alias_names)
@@ -3193,7 +3236,7 @@ func Checker.shared_name(name: string, target: int, line: int, column: int, leng
     if self.has_top_level(key)
         return key
     end
-    self.add(line, column, length, file, self.program.file_names[target] + " has nothing called " + name + ".", "A file used with as shares its functions, constants and variables. Its structs and enums are used without the file's name.")
+    self.add(line, column, length, file, self.program.file_names[target] + " has nothing called " + name + ".", "It has to be a function, constant, variable, struct or enum made in that file.")
     return ""
 end
 
@@ -3205,11 +3248,7 @@ func Checker.check_private(name: string, line: int, column: int, length: int, fi
     for i in 0..len(self.program.private_names)
         if self.program.private_names[i] == name
             if self.program.private_files[i] != file
-                var shown = name
-                if find(name, " (in ") > 0
-                    shown = slice(name, 0, find(name, " (in "))
-                end
-                self.add(line, column, length, file, shown + " is private to " + self.program.file_names[self.program.private_files[i]] + ", so only that file can use it.", "To share it, take away private where it's made.")
+                self.add(line, column, length, file, without_file(name) + " is private to " + self.program.file_names[self.program.private_files[i]] + ", so only that file can use it.", "To share it, take away private where it's made.")
             end
             return
         end

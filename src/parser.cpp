@@ -68,6 +68,20 @@ private:
                kind == TokenKind::Extern || kind == TokenKind::Use;
     }
 
+    // In a file used with as, its structs and enums are its own: Enemy there means Enemy (in enemies.jamo)
+    std::string own_type(const std::string& name) const {
+        if (program.own_label.empty() || std::find(program.own_types.begin(), program.own_types.end(), name) == program.own_types.end()) return name;
+        return name + " (in " + program.own_label + ")";
+    }
+
+    // The file an alias means in the file being read, or ""
+    std::string alias_label(const std::string& alias) const {
+        for (const auto& [word, label] : program.type_aliases) {
+            if (word == alias) return label;
+        }
+        return "";
+    }
+
     // In a file used with as, its functions, constants and variables get names of their own: spawn (in enemies.jamo).
     // A method keeps its name, since its struct is shared
     void make_own(std::string& name) const {
@@ -227,13 +241,20 @@ private:
             expect(TokenKind::RightBracket, "This array type needs a closing ].");
             return program.types.array_of(element);
         }
+        if (program.raw_type_names && next_is(TokenKind::String)) return program.types.named(take().value);
         if (next_is(TokenKind::Name)) {
             const Token& name = take();
-            if (!next_is(TokenKind::Less)) return program.types.named(name.text);
+            std::string type_name = own_type(name.text);
+            // foes.Enemy, a struct of a file used with as
+            if (next_is(TokenKind::Dot) && at + 1 < tokens.size() && tokens[at + 1].kind == TokenKind::Name && !alias_label(name.text).empty()) {
+                take();
+                type_name = take().text + " (in " + alias_label(name.text) + ")";
+            }
+            if (!next_is(TokenKind::Less)) return program.types.named(type_name);
             if (++nesting > DEEPEST_NESTING) fail("This type is nested too deeply.");
             std::vector<Type> args = parse_type_args();
             nesting--;
-            return program.types.generic(name.text, args);
+            return program.types.generic(type_name, args);
         }
         fail("This needs a type here.", "Jamo's types are int, float, bool and string, and [int] is an array of ints.");
     }
@@ -305,9 +326,9 @@ private:
         const Token& keyword = take();
         StructDecl decl;
         const Token& name = expect_name("a struct name");
-        decl.name = name.text;
+        decl.name = own_type(name.text);
         decl.spot = name.spot;
-        decl.type = program.types.named(name.text);
+        decl.type = program.types.named(decl.name);
         if (next_is(TokenKind::Less)) parse_type_params(decl.type_params, decl.type_param_spots);
         expect_line_end();
         while (!next_is(TokenKind::EndWord)) {
@@ -374,9 +395,9 @@ private:
         const Token& keyword = take();
         EnumDecl decl;
         const Token& name = expect_name("an enum name");
-        decl.name = name.text;
+        decl.name = own_type(name.text);
         decl.spot = name.spot;
-        decl.type = program.types.named(name.text);
+        decl.type = program.types.named(decl.name);
         expect_line_end();
         while (!next_is(TokenKind::EndWord)) {
             if (next_is(TokenKind::End)) fail_at(keyword.spot, "This enum never gets its end.", "Add a line with end to finish it.");
@@ -466,9 +487,10 @@ private:
             take();
             const Token& method = expect_name("a method name");
             if (next_is(TokenKind::Less)) fail("A method can't have types of its own.", "Give its struct the types instead, like func Box<T>.get(): T");
-            function->owner = function->type_params.empty() ? program.types.named(name.text) : program.types.generic(name.text, function->type_params);
+            const std::string owner = own_type(name.text);
+            function->owner = function->type_params.empty() ? program.types.named(owner) : program.types.generic(owner, function->type_params);
             function->owner_spot = name.spot;
-            function->name = name.text + "." + method.text;
+            function->name = owner + "." + method.text;
             function->spot = method.spot;
             Input self;
             self.name = "self";
@@ -1092,6 +1114,13 @@ private:
             case TokenKind::Name:
                 take();
                 expr->name = token.text;
+                // foes.Enemy{...}, a struct of a file used with as. In such a file, its own struct or enum
+                if (next_is(TokenKind::Dot) && at + 2 < tokens.size() && tokens[at + 1].kind == TokenKind::Name && tokens[at + 2].kind == TokenKind::LeftBrace && !alias_label(token.text).empty()) {
+                    take();
+                    expr->name = take().text + " (in " + alias_label(token.text) + ")";
+                } else if (next_is(TokenKind::Dot) || next_is(TokenKind::LeftBrace) || next_is(TokenKind::Less)) {
+                    expr->name = own_type(token.text);
+                }
                 if (next_is(TokenKind::Less) && looks_like_type_args()) {
                     expr->type_args = parse_type_args();
                     if (next_is(TokenKind::LeftParen)) return parse_call(std::move(expr));

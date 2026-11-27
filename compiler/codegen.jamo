@@ -721,12 +721,19 @@ end
 # --- Jamo code ---
 
 # A function written inside another with func name(...) is hidden as "name (lambda N)": the program sees just name
-func shown_name(name: string): string
-    var cut = find(name, " (lambda ")
-    var inside = find(name, " (in ")
-    if inside > 0 and (cut < 0 or inside < cut)
-        cut = inside
+func shown_name(written: string): string
+    var name = written
+    var at = find(name, " (in ")
+    while at >= 0
+        var rest = slice(name, at, len(name))
+        var close = find(rest, ")")
+        if close < 0
+            break
+        end
+        name = slice(name, 0, at) + slice(rest, close + 1, len(rest))
+        at = find(name, " (in ")
     end
+    var cut = find(name, " (lambda ")
     if cut <= 0
         return name
     end

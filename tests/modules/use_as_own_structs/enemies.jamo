@@ -1,0 +1,28 @@
+enum Mood
+    CALM
+    ANGRY
+end
+
+struct Enemy
+    hp: int
+    mood: Mood
+end
+
+func Enemy.hit(): int
+    self.hp -= 1
+    if self.hp < 2
+        self.mood = Mood.ANGRY
+    end
+    return self.hp
+end
+
+func spawn(): Enemy
+    return Enemy{hp: 3, mood: Mood.CALM}
+end
+
+func describe(e: Enemy): string
+    if e.mood == Mood.ANGRY
+        return "angry"
+    end
+    return "calm"
+end

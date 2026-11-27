@@ -162,7 +162,7 @@ use "enemy.jamo"
 - `use` goes at the top level. Paths can go into folders, but can't leave the main file's folder
 - Everything in a program shares one set of names, so using a name twice is a compile error, naming both files. The one exception is an `extern` declared again exactly the same. See Calling Windows
 - `private` before `func`, `const` or a `var` outside functions means only that file can use the name. Using it from another file is a compile error. The name still can't be used twice in a program. `private` means this only at the start of a line outside functions, so it still works as an ordinary name
-- `use "enemies.jamo" as foes` gives that file its own functions, constants and variables. Inside it they're used as usual. Other files reach them as `foes.spawn()`, `foes.MAX` and `foes.count`, so two files can each have a `spawn`. Its structs and enums are still shared. A file used with `as` must be used with `as` everywhere, and built-in libraries and the main file can't be
+- `use "enemies.jamo" as foes` gives that file its own functions, constants and variables. Inside it they're used as usual. Other files reach them as `foes.spawn()`, `foes.MAX` and `foes.count`, so two files can each have a `spawn`. Its structs and enums are its own too: `foes.Enemy` as a type, `foes.Enemy{hp: 3}` to make one, and `foes.Mood.CALM`. Interfaces stay shared. A file used with `as` must be used with `as` everywhere, and built-in libraries and the main file can't be
 
 ## Input and files
 - `input()` reads a line, without its line ending. When there's no more input, it gives `""`

@@ -1,0 +1,21 @@
+use "enemies.jamo" as foes
+
+interface Fighter
+    func attack(target: foes.Enemy): int
+end
+
+struct Knight
+    power: int
+end
+
+func Knight.attack(target: foes.Enemy): int
+    target.hp -= self.power
+    return target.hp
+end
+
+func main()
+    var f: Fighter = Knight{power: 2}
+    var orc = foes.spawn()
+    print(f.attack(orc))
+    print(orc.hit())
+end

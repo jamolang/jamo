@@ -615,7 +615,7 @@ boo
 7
 ```
 
-Inside `goblins.jamo` nothing changes: it calls its own `make_noise()` as usual. Other files reach its functions, constants and variables through the name, like `goblins.SPEED`. Its structs and enums are still shared by the whole program. A file used with `as` has to be used with `as` everywhere it's used.
+Inside `goblins.jamo` nothing changes: it calls its own `make_noise()` as usual. Other files reach everything in it through the name: `goblins.SPEED`, `goblins.Goblin` as a type, `goblins.Goblin{hp: 3}` to make one, and `goblins.Mood.ANGRY`. So two files can each have their own `Enemy` struct too. A file used with `as` has to be used with `as` everywhere it's used. Interfaces are the one thing still shared by the whole program.
 
 ## 13. A window
 

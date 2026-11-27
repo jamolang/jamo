@@ -1,0 +1,7 @@
+struct Enemy
+    name: string
+end
+
+func spawn(): Enemy
+    return Enemy{name: "slime"}
+end
